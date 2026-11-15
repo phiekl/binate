@@ -106,7 +106,7 @@ func socketFile(fd int) (*os.File, error) {
 	return os.NewFile(uintptr(fd), "parent"), nil
 }
 
-// policy returns what the child may read (see doc/binate.1.md#landlock).
+// policy returns what the child may read (see doc/manual.md#landlock).
 func (c *child) policy() landlock.Policy {
 	var p landlock.Policy
 	for _, side := range []input{c.in.left, c.in.right} {

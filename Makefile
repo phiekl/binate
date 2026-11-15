@@ -4,8 +4,9 @@
 
 BUILD_DIR := build
 BINARY := $(BUILD_DIR)/binate
-MANPAGES := $(BUILD_DIR)/man/binate.1
-MAN_DATE ?= $(shell git log -1 --format=%cs -- doc/binate.1.md 2>/dev/null)
+MANPAGES := $(BUILD_DIR)/man/binate.1 $(BUILD_DIR)/man/binate-manual.7
+# A man page's date: MAN_DATE if set, or its source's last commit date.
+man_date = $(or $(MAN_DATE),$(shell git log -1 --format=%cs -- $(1) 2>/dev/null))
 GOAMD64 ?= v3
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
 MD2MAN ?= go-md2man
@@ -24,11 +25,29 @@ build:
 
 man: $(MANPAGES)
 
-# doc/scripts/man.sed keeps options typeable in UTF-8 output.
-$(BUILD_DIR)/man/binate.1: doc/binate.1.md doc/scripts/man.sed Makefile
+MAN_SCRIPTS := doc/scripts/md2man.sed doc/scripts/man.sed Makefile
+
+# man_page renders Markdown $(1) as man page $(2) of section $(3), with
+# volume title $(4), and post-processes it with sed scripts $(5) besides
+# doc/scripts/man.sed, which keeps options typeable in UTF-8 output.
+# doc/scripts/md2man.sed turns the Markdown's title and summary into the
+# page's NAME. Links within a page leave their section's name, without the
+# anchor go-md2man puts on the next line.
+define man_page
 	mkdir -p $(@D)
-	$(MD2MAN) -in doc/binate.1.md -out $@
-	sed -E -i -e '/^\.TH /s/""/"$(MAN_DATE)"/' -f doc/scripts/man.sed $@
+	{ printf '%s\n==\n\n# NAME\n\n%s - ' '$(2) $(3) "$(call man_date,$(1))" binate "$(4)"' '$(2)'; \
+		sed -E -f doc/scripts/md2man.sed $(1); } > $@.md
+	$(MD2MAN) -in $@.md -out $@
+	rm $@.md
+	sed -E -i -e '$$!N' -e 's/\n\\\[la\]#([^\\]|\\[^[])*\\\[ra\]//' -e 'P' -e 'D' $@
+	sed -E -i -f doc/scripts/man.sed $(addprefix -f ,$(5)) $@
+endef
+
+$(BUILD_DIR)/man/binate.1: doc/binate.1.md doc/scripts/keys.sed $(MAN_SCRIPTS)
+	$(call man_page,$<,binate,1,User Commands,doc/scripts/keys.sed)
+
+$(BUILD_DIR)/man/binate-manual.7: doc/manual.md $(MAN_SCRIPTS)
+	$(call man_page,$<,binate-manual,7,Miscellaneous Information Manual)
 
 test:
 	CGO_ENABLED=0 go test $(GOTAGS) ./...

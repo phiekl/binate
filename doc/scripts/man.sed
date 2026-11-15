@@ -36,3 +36,7 @@ t span
 
 # A tilde, as for home, stays ASCII: groff draws a plain ~ as a raised one.
 s/~/\\(ti/g
+
+# A caret, as in revisions and patterns, stays ASCII too: groff draws a
+# plain ^ as a modifier circumflex.
+s/\^/\\(ha/g
