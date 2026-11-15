@@ -1,0 +1,345 @@
+// SPDX-FileCopyrightText: 2026 Philip Eklöf
+//
+// SPDX-License-Identifier: MIT
+
+package view
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+
+	"pxy.se/go/binate/internal/colors"
+	"pxy.se/go/binate/internal/display"
+	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/stat"
+	"pxy.se/go/binate/internal/term"
+	"pxy.se/go/binate/internal/tree"
+)
+
+func TestPaneRows(t *testing.T) {
+	for _, tt := range []struct{ h, rows, panel int }{
+		{5, 2, 0},
+		{9, 6, 0},
+		// A panel once the list keeps 5 rows, growing to 11 rows.
+		{10, 5, 1},
+		{19, 5, 10},
+		{20, 5, 11},
+		{30, 15, 11},
+	} {
+		if rows, panel := paneRows(tt.h); rows != tt.rows || panel != tt.panel {
+			t.Errorf("paneRows(%d) = %d, %d, want %d, %d", tt.h, rows, panel, tt.rows, tt.panel)
+		}
+	}
+}
+
+// panelRowsText returns the rows of the panels below the dividers,
+// without the borders, as panes does.
+func panelRowsText(scr *term.Screen) []string {
+	var out []string
+	in := false
+	for _, line := range strings.Split(panes2(scr), "\n") {
+		if in {
+			out = append(out, line)
+		}
+		in = in || strings.HasPrefix(line, "├")
+	}
+	return out
+}
+
+// panes2 is panes, from the top, through the divider rows.
+func panes2(scr *term.Screen) string {
+	p := Layout(scr.W)
+	border := map[int]bool{
+		p.LeftBox: true, p.LeftBox + p.LeftBoxW - 1: true,
+		p.RightBox: true, p.RightBox + p.RightBoxW - 1: true,
+	}
+	var b strings.Builder
+	for y := 1; y < scr.H-1; y++ {
+		if scr.Cell(0, y).R == '├' {
+			b.WriteString("├\n")
+			continue
+		}
+		var line strings.Builder
+		for x := 0; x < scr.W; x++ {
+			if c := scr.Cell(x, y); c.W > 0 && !border[x] {
+				line.WriteRune(c.R)
+			}
+		}
+		b.WriteString(strings.TrimRight(line.String(), " ") + "\n")
+	}
+	return b.String()
+}
+
+// pair joins a left and right pane's row as panes does, on a screen 80
+// columns wide.
+func pair(l, r string) string {
+	if r == "" {
+		return l
+	}
+	return l + strings.Repeat(" ", 39-len([]rune(l))) + r
+}
+
+// marked is pair with mark between the panes.
+func marked(l string, mark rune, r string) string {
+	line := []rune(pair(l, r))
+	line[37] = mark
+	return string(line)
+}
+
+func local(t *testing.T, s string) time.Time {
+	t.Helper()
+	tm, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tm
+}
+
+func file(t *testing.T, size int64, perm uint32, mtime string) *stat.Stat {
+	tm := local(t, mtime)
+	return &stat.Stat{
+		Mode: unix.S_IFREG | perm, Size: size, Uid: 1000, Gid: 50, Nlink: 1, Ino: 7,
+		Mtime: tm, Ctime: tm, Atime: tm,
+	}
+}
+
+// drawPanelsOn draws the panels in boxes on a screen of height h, and
+// returns it, highlighting differences in every attribute.
+func drawPanelsOn(h, rows int, sides [2]StatSide) *term.Screen {
+	return drawPanelsComparing(h, rows, sides, scan.DefaultAttrs|scan.Mtime)
+}
+
+func drawPanelsComparing(h, rows int, sides [2]StatSide, compare scan.Attrs) *term.Screen {
+	scr := term.NewScreen(80, h)
+	p := Layout(80)
+	drawBoxes(scr, p, h, nil, [2][]display.Glyph{}, [2]string{}, colors.Default())
+	drawPanels(scr, p, 1, rows, sides, compare, "", colors.Default())
+	return scr
+}
+
+func TestPanels(t *testing.T) {
+	st := colors.Default()
+	l := StatSide{Stat: file(t, 10, 0o644, "2026-11-02 14:10:00"), User: "al", Group: "st", Entries: -1}
+	r := StatSide{Stat: file(t, 4300, 0o4755, "2026-11-03 09:00:00"), Entries: -1}
+	r.Stat.Ino = 8
+	scr := drawPanelsOn(13, 10, [2]StatSide{l, r})
+	want := []string{
+		pair(" type │ file", " type │ file"),
+		marked(" size │ 10", '|', " size │ 4300 (4.2 KiB)"),
+		marked(" mode │ 0644", '~', " mode │ 4755"),
+		marked("owner │ al:st (1000:50)", '~', "owner │ 1000:50"),
+		pair("links │ 1", "links │ 1"),
+		pair("inode │ 7", "inode │ 8"),
+		marked("mtime │ 2026-11-02 14:10:00", '#', "mtime │ 2026-11-03 09:00:00 (newer)"),
+		pair("ctime │ 2026-11-02 14:10:00", "ctime │ 2026-11-03 09:00:00"),
+		pair("atime │ 2026-11-02 14:10:00", "atime │ 2026-11-03 09:00:00"),
+		pair("btime │ —", "btime │ —"),
+		"",
+	}
+	if got := panelRowsText(scr); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("panels:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if line := strings.Split(scr.String(), "\n")[1]; !strings.HasPrefix(line, "├──") || !strings.HasSuffix(line, "──┤") {
+		t.Errorf("divider %q", line)
+	}
+	// Differences that matter are highlighted on both sides, and marked
+	// between them, in their mark's colour, bright for a file; the inode
+	// and the other times differ between any two trees, and are not.
+	p := Layout(80)
+	for y, wantStyle := range map[int]term.Style{
+		2: st.Plain, 3: brighten(st.Changed), 4: brighten(st.Attrs), 5: brighten(st.Attrs),
+		7: st.Plain, 8: st.Mtime, 9: st.Plain,
+	} {
+		for _, x := range []int{9, p.Mark, 50} {
+			if x == p.Mark && wantStyle == st.Plain {
+				continue
+			}
+			if c := scr.Cell(x, y); c.Style != wantStyle {
+				t.Errorf("row %d column %d %q %+v, want %+v", y, x, c.R, c.Style, wantStyle)
+			}
+		}
+	}
+
+	// Only the attributes compared are highlighted; the type always is.
+	scr = drawPanelsComparing(13, 10, [2]StatSide{l, r}, scan.Owner)
+	for y, wantStyle := range map[int]term.Style{3: st.Plain, 4: st.Plain, 5: brighten(st.Attrs), 8: st.Plain} {
+		if c := scr.Cell(9, y); c.Style != wantStyle {
+			t.Errorf("comparing the owner only: row %d %q %+v, want %+v", y, c.R, c.Style, wantStyle)
+		}
+	}
+
+	// Times within a second of each other, which the tree tells apart to
+	// the nanosecond, show as much of the fraction as differs.
+	r.Stat.Mtime = l.Stat.Mtime.Add(500 * time.Millisecond)
+	if got, want := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6],
+		marked("mtime │ 2026-11-02 14:10:00.0", '#', "mtime │ 2026-11-02 14:10:00.5 (newer)"); got != want {
+		t.Errorf("mtime %q, want %q", got, want)
+	}
+	r.Stat.Mtime = l.Stat.Mtime
+	if got := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6]; strings.Contains(got, "newer") || strings.Contains(got, "#") {
+		t.Errorf("equal mtime %q", got)
+	}
+
+	// A short panel keeps the first rows.
+	got := panelRowsText(drawPanelsOn(13, 3, [2]StatSide{l, r}))
+	if !strings.HasPrefix(got[2], " mode │") || got[3] != "" || len(got) != 11 {
+		t.Errorf("short panels:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+func TestPanelNotes(t *testing.T) {
+	st := colors.Default()
+	dir := &stat.Stat{Mode: unix.S_IFDIR | 0o755}
+	link := &stat.Stat{Mode: unix.S_IFLNK | 0o777, Target: "evil\x1b[31m"}
+	for _, tt := range []struct {
+		name  string
+		sides [2]StatSide
+		want  [2]string
+	}{
+		{"missing and reading", [2]StatSide{{Missing: true}, {Entries: -1}}, [2]string{"missing", "…"}},
+		{"read error", [2]StatSide{{Err: errors.New("permission denied")}, {Missing: true}}, [2]string{"failed reading (permission denied)", "missing"}},
+		{"scan error first", [2]StatSide{{Stat: dir, ScanErr: errors.New("permission denied"), Entries: 0}, {Stat: dir, Entries: 1}}, [2]string{"error │ permission denied", ""}},
+		{"entries", [2]StatSide{{Stat: dir, Entries: 12}, {Stat: dir, Entries: 1}}, [2]string{" type │ dir", " type │ dir"}},
+		{"link target escaped", [2]StatSide{{Stat: link, Entries: -1}, {Missing: true}}, [2]string{` type │ link → evil\x1b[31m`, "missing"}},
+	} {
+		scr := drawPanelsOn(13, 10, tt.sides)
+		if got, want := panelRowsText(scr)[0], pair(tt.want[0], tt.want[1]); got != want {
+			t.Errorf("%s: first row %q, want %q", tt.name, got, want)
+		}
+	}
+	scr := drawPanelsOn(13, 10, [2]StatSide{{Stat: dir, Entries: 12}, {Stat: dir, Entries: 1}})
+	// A directory's number of entries is not marked.
+	if rows := panelRowsText(scr); rows[1] != pair(" size │ 12 entries", " size │ 1 entry") {
+		t.Errorf("entries %q", rows[1])
+	}
+	// The other side's rows are pushed down past an error, so that the
+	// fields and their marks line up.
+	scr = drawPanelsOn(13, 10, [2]StatSide{{Stat: dir, Entries: 1}, {Stat: dir, ScanErr: errors.New("permission denied"), Entries: 0}})
+	if rows := panelRowsText(scr); rows[1] != pair(" type │ dir", " type │ dir") || rows[2] != pair(" size │ 1 entry", " size │ 0 entries") {
+		t.Errorf("aligned rows:\n%s", strings.Join(rows, "\n"))
+	}
+	// A type opposite another is marked as in the tree.
+	file := &stat.Stat{Mode: unix.S_IFREG | 0o755}
+	scr = drawPanelsOn(13, 10, [2]StatSide{{Stat: dir, Entries: 0}, {Stat: file, Entries: -1}})
+	if rows := panelRowsText(scr); rows[0] != marked(" type │ dir", '!', " type │ file") {
+		t.Errorf("types %q", rows[0])
+	}
+	if c := scr.Cell(Layout(80).Mark, 2); c.Style != brighten(st.Type) {
+		t.Errorf("type mark style %+v", c.Style)
+	}
+	// Symlinks' targets are marked where the targets are compared.
+	other := &stat.Stat{Mode: unix.S_IFLNK | 0o777, Target: "elsewhere"}
+	links := [2]StatSide{{Stat: link, Entries: -1}, {Stat: other, Entries: -1}}
+	if rows := panelRowsText(drawPanelsOn(13, 10, links)); []rune(rows[0])[37] != '|' {
+		t.Errorf("targets %q", rows[0])
+	}
+	if rows := panelRowsText(drawPanelsComparing(13, 10, links, scan.Mode)); []rune(rows[0])[37] != ' ' {
+		t.Errorf("targets not compared %q", rows[0])
+	}
+	// A symlink's size, its target's length, is not compared as a file's:
+	// with the targets left out, neither is marked.
+	sized := [2]StatSide{{Stat: &stat.Stat{Mode: unix.S_IFLNK | 0o777, Target: "old", Size: 3}, Entries: -1},
+		{Stat: &stat.Stat{Mode: unix.S_IFLNK | 0o777, Target: "long-target", Size: 11}, Entries: -1}}
+	for _, row := range panelRowsText(drawPanelsComparing(13, 10, sized, scan.DefaultAttrs&^scan.Target)) {
+		if r := []rune(row); len(r) > 37 && r[37] != ' ' {
+			t.Errorf("symlinks, targets not compared: %q", row)
+		}
+	}
+	// Nor is a file's size opposite another type's: the type is marked.
+	sized[1] = StatSide{Stat: &stat.Stat{Mode: unix.S_IFREG | 0o777, Size: 11}, Entries: -1}
+	if rows := panelRowsText(drawPanelsOn(13, 10, sized)); []rune(rows[1])[37] != ' ' {
+		t.Errorf("size opposite another type %q", rows[1])
+	}
+	scr = drawPanelsOn(13, 10, [2]StatSide{{Err: errors.New("permission denied")}, {Missing: true}})
+	if c := scr.Cell(1, 2); c.Style != st.Type {
+		t.Errorf("error style %+v", c.Style)
+	}
+	scr = drawPanelsOn(13, 10, [2]StatSide{{Stat: link, Entries: -1}, {Missing: true}})
+	x := strings.Index(panelRowsText(scr)[0], `\x1b`)
+	if c := scr.Cell(1+len([]rune(panelRowsText(scr)[0][:x])), 2); c.Style != st.Escape {
+		t.Errorf("escape style %+v", c)
+	}
+}
+
+// TestTreePanels draws the panels of the selected entry, and without room
+// for them, shows what could not be read in the status bar.
+func TestTreePanels(t *testing.T) {
+	left := writeTree(t, map[string]string{"f": "x"})
+	right := writeTree(t, map[string]string{"f": "y"})
+	s := scanned(t, left, right)
+	m := tree.New(s.Root)
+	m.Root.Find("f").L.Err = errors.New("permission denied")
+	v := &TreeView{Styles: colors.Default(), Left: "/l", Right: "/r"}
+	var asked *scan.Node
+	stats := func(n *scan.Node) [2]StatSide {
+		asked = n
+		return [2]StatSide{{Missing: true}, {Missing: true}}
+	}
+	scr := term.NewScreen(80, 24)
+	v.Draw(scr, m, TreeStatus{Stats: stats})
+	if asked != m.Root.Find("f") || !strings.Contains(scr.String(), "missing") {
+		t.Errorf("asked about %v:\n%s", asked, scr.String())
+	}
+	if status := lastLine(scr); strings.Contains(status, "permission denied") {
+		t.Errorf("status %q", status)
+	}
+
+	asked = nil
+	scr = term.NewScreen(80, 8)
+	v.Draw(scr, m, TreeStatus{Stats: stats})
+	if asked != nil || strings.Contains(scr.String(), "├") {
+		t.Errorf("panels without room:\n%s", scr.String())
+	}
+	if status := lastLine(scr); status != " failed reading the left side (permission denied)" {
+		t.Errorf("status %q", status)
+	}
+}
+
+func TestPanelPath(t *testing.T) {
+	st := colors.Default()
+	long := "/home/u/a/" + strings.Repeat("x", 40) + "/end"
+	sides := [2]StatSide{
+		{Stat: file(t, 1, 0o644, "2026-11-02 14:10:00"), Entries: -1, Path: long},
+		{Missing: true, Path: "/r/only\x1bhere"},
+	}
+	scr := term.NewScreen(80, 15)
+	p := Layout(80)
+	drawBoxes(scr, p, 15, nil, [2][]display.Glyph{}, [2]string{}, st)
+	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs|scan.Mtime, "/home/u", st)
+	got := panelRowsText(scr)
+	// The path comes first, with ~ for home and shortened in the middle,
+	// and the side's other rows follow.
+	l, r := []rune(got[0])[:38], strings.TrimSpace(string([]rune(got[0])[39:]))
+	if s := strings.TrimSpace(string(l)); !strings.HasPrefix(s, "path │ ~/a/xx") || !strings.HasSuffix(s, "xx/end") || !strings.Contains(s, "…") || scr.Cell(36, 2).R != 'd' {
+		t.Errorf("left path %q", s)
+	}
+	if r != `path │ /r/only\x1bhere` {
+		t.Errorf("right path %q", r)
+	}
+	if !strings.HasPrefix(got[1], " type │ file") || !strings.Contains(got[1], "missing") {
+		t.Errorf("rows after the path %q", got[1])
+	}
+	// It links to the full path, not to its label; a missing side's path
+	// is dimmed and not linked, and its escapes are highlighted.
+	if c := scr.Cell(9, 2); c.R != '~' || c.Style.Link != display.ShellQuote(long) || c.Style.SGR != st.Plain.SGR {
+		t.Errorf("left path start %+v", c)
+	}
+	if c := scr.Cell(2, 2); c.Style.Link != "" {
+		t.Errorf("label linked %+v", c)
+	}
+	if c := scr.Cell(50, 2); c.R != '/' || c.Style.Link != "" || c.Style.Attr&term.Dim == 0 {
+		t.Errorf("missing side's path %+v", c)
+	}
+	if c := scr.Cell(57, 2); c.R != '\\' || c.Style == st.Plain.With(term.Dim) {
+		t.Errorf("escape in the path %+v", c)
+	}
+	// Without a path, the panel starts with the type, as before.
+	sides[0].Path, sides[1].Path = "", ""
+	if got := panelRowsText(drawPanelsOn(15, 11, sides)); !strings.HasPrefix(got[0], " type │") {
+		t.Errorf("panel without a path starts %q", got[0])
+	}
+}
