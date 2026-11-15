@@ -385,6 +385,19 @@ func TestSearchKeys(t *testing.T) {
 	if m.Search != "" {
 		t.Errorf("an empty search left %q", m.Search)
 	}
+	// While a filter is applied, * switches it to diffs-only and back.
+	typeKeys("F")
+	ts.Key(enter)
+	rows := func() int { return len(m.Rows()) }
+	all := rows()
+	ts.Key(term.Rune('*'))
+	if !m.DiffsOnly || rows() != all-1 || !m.ShowSame {
+		t.Errorf("* in a filter: diffs-only %v, %d rows of %d, show same %v", m.DiffsOnly, rows(), all, m.ShowSame)
+	}
+	ts.Key(term.Rune('*'))
+	if m.DiffsOnly || rows() != all {
+		t.Errorf("* again in a filter: diffs-only %v, %d rows of %d", m.DiffsOnly, rows(), all)
+	}
 }
 
 func TestCompareKeys(t *testing.T) {

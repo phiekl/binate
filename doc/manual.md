@@ -248,6 +248,8 @@ the box again and keeps the selection and expansion by path.
 
 - **\***: Show or hide identical entries. A hidden selection moves to its
   nearest shown parent, and returns when shown again unless the selection moved.
+  While a filter is applied, it switches the filter between all and diffs-only
+  mode instead (see Filter).
 
 - **n**, **Shift+Down** / **N**, **Shift+Up**: Select the next or previous
   difference in tree order, expanding the directories above it, and wrapping
@@ -436,9 +438,9 @@ was swapped while it was opened, nor one that failed or was stopped. Up to
 rows it matches are listed flat, each as **parent › name**: every entry of the
 whole tree whose name matches the query, ignoring case, including hidden
 identical entries. In diffs-only mode, entries found identical are left out,
-while unverified entries remain shown. An empty query lists every remaining
-entry. While a filter is applied, the status bar names it, as **[filter (diffs):
-name]**.
+while unverified entries remain shown. **\*** switches the applied filter
+between the two modes. An empty query lists every remaining entry. While a
+filter is applied, the status bar names it, as **[filter (diffs): name]**.
 
 The query is a regular expression in Go's RE2 syntax, matched anywhere in the
 name unless anchored with **^** or **$**. **Ctrl+r** switches to literal text,

@@ -73,7 +73,8 @@ The column between the sides marks each pair:
 - **-**: Collapse every directory.
 - **n**: Go to the next difference.
 - **N**: Go to the previous difference.
-- **\***: Show or hide identical entries.
+- **\***: Show or hide identical entries; while a filter is applied, switch it
+  between all and diffs-only mode.
 - **Enter**: Open a pair of files in the diff view.
 - **F**: Filter by name.
 - **/**: Search names.

@@ -55,7 +55,7 @@ var TreeHelp = []HelpLine{
 	key("collapse the directory's whole tree", "H", "Shift+Left"),
 	key("expand all", "+", "="),
 	key("collapse all", "-"),
-	key("show or hide identical entries", "*"),
+	key("show or hide identical entries, in a filter too", "*"),
 	key("next difference", "n", "Shift+Down"),
 	key("previous difference", "N", "Shift+Up"),
 	key("compare the files, or expand a directory", "Enter"),

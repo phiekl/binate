@@ -434,6 +434,15 @@ func (t *TreeScreen) treeKey(k term.Key) bool {
 		} else {
 			m.CollapseAll()
 		}
+	case k == term.Rune('*') && m.Filtered:
+		// The filter lists hidden identical entries too, unless in
+		// diffs-only mode: switch the applied filter's mode instead.
+		m.DiffsOnly = !m.DiffsOnly
+		if m.DiffsOnly {
+			t.message = "hiding identical entries from the filter"
+		} else {
+			t.message = "showing identical entries in the filter"
+		}
 	case k == term.Rune('*'):
 		m.ShowSame = !m.ShowSame
 		if m.ShowSame {
