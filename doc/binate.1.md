@@ -40,7 +40,7 @@ See [**binate-manual**(7)](manual.md) for the full reference.
 - **-x**, **--exclude** *pattern*: Skip entries whose name matches the
   shell-style *pattern*. Repeatable.
 - **-q**, **--quick**: Compare files by size and modification time instead of
-  contents.
+  contents. Not with **-g**.
 - **-g**, **--git**: Compare *left* and *right* as revisions of the git
   repository of the current directory, such as **main**, **HEAD~2** or
   **v1.0:src**.

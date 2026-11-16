@@ -45,12 +45,16 @@ const firstCompareRow = 2
 // different types, checked if shown; the contents may be compared quickly.
 type ComparePopup struct {
 	*Help
+	// unrecorded are the attributes the sides don't record, as a git
+	// revision has no owners or times: shown as such, and never compared.
+	unrecorded scan.Attrs
 }
 
 // NewComparePopup returns the popup for the attributes compare and quick
-// mode, with the first row selected.
-func NewComparePopup(compare scan.Attrs, quick bool) *ComparePopup {
-	c := &ComparePopup{&Help{Plain: true}}
+// mode, with the first row selected, of sides that don't record the
+// attributes unrecorded.
+func NewComparePopup(compare scan.Attrs, quick bool, unrecorded scan.Attrs) *ComparePopup {
+	c := &ComparePopup{&Help{Plain: true}, unrecorded}
 	c.Set(compare, quick)
 	c.Selected = firstCompareRow
 	return c
@@ -65,6 +69,10 @@ func (c *ComparePopup) Set(compare scan.Attrs, quick bool) {
 			box = "[x]"
 		}
 		l := HelpLine{Keys: []string{box}, Text: fmt.Sprintf("%-9s %s", r.name, r.what), Hot: strings.IndexRune(r.name, r.key) + 1}
+		if r.attr&c.unrecorded != 0 {
+			l.Keys[0] = "[-]"
+			l.Text = fmt.Sprintf("%-9s %s", r.name, "not recorded in git revisions")
+		}
 		if r.attr == scan.Content && compare&scan.Content != 0 && quick {
 			l.Keys[0] = "[q]"
 			l.Text = fmt.Sprintf("%-9s %s", r.name, "files' size and mtime only (quick)")

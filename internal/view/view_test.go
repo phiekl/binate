@@ -1116,7 +1116,7 @@ func TestDiffMarkStyles(t *testing.T) {
 }
 
 func TestComparePopup(t *testing.T) {
-	c := NewComparePopup(scan.DefaultAttrs, false)
+	c := NewComparePopup(scan.DefaultAttrs, false, 0)
 	scr := term.NewScreen(80, 24)
 	c.Draw(scr, colors.Default())
 	text := scr.String()
@@ -1137,6 +1137,19 @@ func TestComparePopup(t *testing.T) {
 	}
 	if c.Attr() != scan.Left {
 		t.Errorf("selected %v", c.Attr())
+	}
+	// Attributes the sides don't record are shown as such.
+	git := NewComparePopup(scan.DefaultAttrs&^scan.Owner, false, scan.Owner|scan.Mtime)
+	gitScr := term.NewScreen(80, 24)
+	git.Draw(gitScr, colors.Default())
+	for _, want := range []string{
+		"[x]  mode      permission bits",
+		"[-]  owner     not recorded in git revisions",
+		"[-]  mtime     not recorded in git revisions",
+	} {
+		if !strings.Contains(gitScr.String(), want) {
+			t.Errorf("popup without %q:\n%s", want, gitScr.String())
+		}
 	}
 	// Each row's letter is highlighted, as the quit prompt's x: l in
 	// left, y in type, a in target, t in mtime.

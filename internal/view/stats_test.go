@@ -343,3 +343,33 @@ func TestPanelPath(t *testing.T) {
 		t.Errorf("panel without a path starts %q", got[0])
 	}
 }
+
+// A side in a git revision shows only what git records, and its path,
+// which names no file, unlinked but not dimmed.
+func TestPanelInRevision(t *testing.T) {
+	st := colors.Default()
+	sides := [2]StatSide{
+		{Stat: &stat.Stat{Mode: unix.S_IFREG | 0o755, Size: 3}, Entries: -1, Path: "main:dir/f", InRevision: true},
+		{Stat: &stat.Stat{Mode: unix.S_IFLNK | 0o777, Size: 1, Target: "f"}, Entries: -1, Path: "HEAD~:dir/f", InRevision: true},
+	}
+	scr := term.NewScreen(80, 15)
+	p := Layout(80)
+	drawBoxes(scr, p, 15, nil, [2][]display.Glyph{}, [2]string{}, st)
+	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", st)
+	got := panelRowsText(scr)
+	var labels []string
+	for _, row := range got {
+		if f := strings.Fields(row); len(f) > 1 && f[1] == "│" {
+			labels = append(labels, f[0])
+		}
+	}
+	if strings.Join(labels, " ") != "path type size mode" {
+		t.Errorf("rows %q", got)
+	}
+	if !strings.Contains(got[1], "link → f") {
+		t.Errorf("no target: %q", got[1])
+	}
+	if c := scr.Cell(9, 2); c.R != 'm' || c.Style.Link != "" || c.Style.Attr&term.Dim != 0 {
+		t.Errorf("path %+v", c)
+	}
+}

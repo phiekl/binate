@@ -86,8 +86,12 @@ type StatSide struct {
 	// Entries is a directory's number of entries found by the scan, or -1.
 	Entries int
 	// Path, if set, is the side's full path, shown first, and linked to
-	// unless the side is missing.
+	// unless the side is missing or in a revision.
 	Path string
+	// InRevision is set for a side in a git revision, which records only
+	// an entry's type, target, size and mode: the rest is left out, and
+	// the path, which names no file, is not linked.
+	InRevision bool
 }
 
 // statRow is a row of a panel: a field, or, without a label, a note.
@@ -102,10 +106,11 @@ type statRow struct {
 	key string
 	// failed is set for an error.
 	failed bool
-	// path is set for the path row, shortened in the middle and linked to
-	// link, or dimmed if link is empty.
+	// path is set for the path row, shortened in the middle, linked to
+	// link if set, and dimmed if dim is.
 	path bool
 	link string
+	dim  bool
 }
 
 // statLabelWidth is the width of the widest label.
@@ -116,8 +121,8 @@ const statLabelWidth = 5
 func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	var rows []statRow
 	if sd.Path != "" {
-		row := statRow{label: "path", value: display.Name(HomePath(sd.Path, home)), path: true}
-		if !sd.Missing {
+		row := statRow{label: "path", value: display.Name(HomePath(sd.Path, home)), path: true, dim: sd.Missing}
+		if !sd.Missing && !sd.InRevision {
 			// Quoted, to paste into a command line, which also keeps
 			// controls out of the link.
 			row.link = display.ShellQuote(sd.Path)
@@ -164,6 +169,9 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	}
 	plain("size", sizeValue(st, sd.Entries), sizeAttr, '|')
 	plain("mode", fmt.Sprintf("%04o", st.Mode&0o7777), scan.Mode, '~')
+	if sd.InRevision {
+		return rows
+	}
 	field("owner", ownerValue(st, sd.User, sd.Group), scan.Owner, '~')
 	plain("links", fmt.Sprint(st.Nlink), 0, 0)
 	plain("inode", fmt.Sprint(st.Ino), 0, 0)
@@ -400,7 +408,7 @@ func drawStatRow(s *term.Screen, x, y, w int, row statRow, highlight term.Style,
 		// The ends of a path tell the most; the link has it in full.
 		room := max(w-used, 0)
 		style := st.Plain
-		if row.link == "" {
+		if row.dim {
 			style = style.With(term.Dim)
 		}
 		esc := rowEscape(st.Escape, style)

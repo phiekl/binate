@@ -379,6 +379,7 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 			sides[i] = statSide(got[i], done, d.app.Names)
 		}
 		sides[i].Path = d.abs[i]
+		sides[i].InRevision = !onDisk(src.Root)
 	}
 	return sides
 }

@@ -54,8 +54,10 @@ type TreeScreen struct {
 	context int
 
 	edit *editor
-	// roots are the sides.
-	roots [2]source.Root
+	// roots are the sides, and unrecorded the attributes they don't
+	// record, which are not compared.
+	roots      [2]source.Root
+	unrecorded scan.Attrs
 	// rechecks are paths to compare again, after an edit, once the
 	// recheck running in the background, which recheckDone closes, is done.
 	rechecks    []string
@@ -97,8 +99,12 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 	if t.opts.Compare == 0 {
 		t.opts.Compare = scan.DefaultAttrs
 	}
-	t.view.Compare = t.opts.Compare
 	t.roots = [2]source.Root{cfg.Left, cfg.Right}
+	if !onDisk(cfg.Left) || !onDisk(cfg.Right) {
+		t.unrecorded = scan.Owner | scan.Mtime
+	}
+	t.opts.Compare = recorded(t.opts.Compare, t.unrecorded)
+	t.view.Compare = t.opts.Compare
 	t.stats.app, t.previews.app = a, a
 	t.start()
 	t.model = tree.New(t.scan.Root)
@@ -206,6 +212,7 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 			}
 		}
 		sides[i].Path = panelPath(t.roots[i], n.Path())
+		sides[i].InRevision = !onDisk(t.roots[i])
 	}
 	return sides
 }
@@ -307,7 +314,7 @@ func (t *TreeScreen) Key(k term.Key) bool {
 		return true
 	}
 	if k == term.Rune('c') {
-		t.compare = view.NewComparePopup(t.opts.Compare, t.opts.Quick)
+		t.compare = view.NewComparePopup(t.opts.Compare, t.opts.Quick, t.unrecorded)
 		return true
 	}
 	t.scan.Lock()
@@ -325,16 +332,19 @@ func (t *TreeScreen) compareKey(k term.Key) {
 	case listKey(c.Help, t.last, k):
 	case k == term.Rune('*'):
 		// All on, or all off if they are.
-		compare := t.opts.Compare | scan.AllAttrs
-		if t.opts.Compare&scan.AllAttrs == scan.AllAttrs {
+		all := scan.AllAttrs &^ t.unrecorded
+		compare := t.opts.Compare | all
+		if t.opts.Compare&all == all {
 			compare = 0
 		}
 		t.setCompare(compare, t.opts.Quick)
 		c.Set(t.opts.Compare, t.opts.Quick)
 	case k == term.Rune(' ') || k.Code == term.KeyEnter || k == term.Rune(k.Rune) && c.SelectKey(k.Rune):
 		compare, quick := t.opts.Compare, t.opts.Quick
-		switch attr := c.Attr(); attr {
-		case scan.Content:
+		switch attr := c.Attr(); {
+		case attr&t.unrecorded != 0:
+			// Not recorded, so never compared.
+		case attr == scan.Content:
 			// The contents go on and off, compared in full; quick mode, from
 			// -q, only saves reading at startup, so it is only left.
 			switch {
@@ -359,9 +369,7 @@ func (t *TreeScreen) compareKey(k term.Key) {
 // quick mode: at once from what the scan read, or with a new scan if it
 // is still running, or contents must be read that it didn't read.
 func (t *TreeScreen) setCompare(compare scan.Attrs, quick bool) {
-	if compare &^= scan.None; compare == 0 {
-		compare = scan.None
-	}
+	compare = recorded(compare&^scan.None, t.unrecorded)
 	t.opts.Compare, t.opts.Quick = compare, quick && compare&scan.Content != 0
 	t.view.Compare = t.opts.Compare
 	switch {
@@ -372,6 +380,15 @@ func (t *TreeScreen) setCompare(compare scan.Attrs, quick bool) {
 		t.Rescan()
 		t.message = "scanning again to compare contents"
 	}
+}
+
+// recorded returns compare without the attributes unrecorded, or None if
+// that leaves nothing.
+func recorded(compare, unrecorded scan.Attrs) scan.Attrs {
+	if compare &^= unrecorded; compare == 0 {
+		return scan.None
+	}
+	return compare
 }
 
 // page is the distance PgUp and PgDn move: a page of the tree as last

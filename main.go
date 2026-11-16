@@ -87,6 +87,9 @@ func parseOptions(argv []string) (*args.Set, options, error) {
 	if err != nil {
 		return s, o, err
 	}
+	if o.git && o.quick {
+		return s, o, errors.New("--quick with --git: files in revisions are compared by their object names, without reading them")
+	}
 	n, err := strconv.Atoi(contextLines)
 	if err != nil || n < 0 {
 		return s, o, fmt.Errorf("invalid context lines: %s", contextLines)

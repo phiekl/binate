@@ -133,6 +133,7 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"--compare", "-owner,mtime", dir, dir}, `invalid --compare: "mtime": give every attribute a + or -, or none`},
 		{[]string{dir + "/missing", dir}, "missing: no such file or directory"},
 		{[]string{"--bogus", dir, dir}, "unknown flag: --bogus"},
+		{[]string{"-g", "-q", "HEAD~", "HEAD"}, "--quick with --git"},
 	} {
 		cmd := binate(t, tt.args...)
 		out, _ := cmd.CombinedOutput()
@@ -1145,6 +1146,19 @@ func TestGitTrees(t *testing.T) {
 	if !regexp.MustCompile(`│ path │ HEAD~:dir/changed *│   │ path │ main:dir/changed *│`).MatchString(scr) {
 		t.Errorf("panels without the paths:\n%s", scr)
 	}
+	// They show only what git records, and link to no file.
+	scr = screen("mode │ 0644")
+	for _, label := range []string{"owner │", "inode │", "mtime │"} {
+		if strings.Contains(scr, label) {
+			t.Errorf("panels with %q:\n%s", label, scr)
+		}
+	}
+	if strings.Contains(pt.Output(), "\x1b]8;;'HEAD~") {
+		t.Error("a revision's path is linked")
+	}
+	pt.Write("c")
+	screen("[-]  owner     not recorded in git revisions")
+	pressEsc(pt)
 	pt.Write("e")
 	screen("Files in git revisions can't be edited.")
 	pt.Write("j")

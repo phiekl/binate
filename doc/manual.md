@@ -90,7 +90,8 @@ next arguments are *left* and *right* even if they start with a dash.
   path. Repeatable.
 
 - **-q**, **--quick**: In the tree view, compare files by size and modification
-  time instead of by contents.
+  time instead of by contents. Not with **-g**, which compares files without
+  reading them.
 
 - **-g**, **--git**: Take *left* and *right* as revisions of the git repository
   of the current directory, such as **main**, **HEAD~2** or **v1.0:src**, and
@@ -152,12 +153,14 @@ supported.
 
 A tree's entries have the modes git records: a file is **0644** or, if
 executable, **0755**; a directory **0755**; a symlink **0777**. They have no
-times or owners, so these compare equal. Files are compared by their blob's
-object name, without being read: two files are the same exactly when their blobs
-are. Symlinks are compared by their targets, and not followed. A submodule is
-not read, and shows as an entry that couldn't be. An object missing from the
-repository, as one a partial clone left out, is an error on its entry. Files in
-a revision can't be edited.
+times or owners, which are never compared, whatever **--compare** asks:
+[Compare](#compare) shows them as not recorded. The panels show only what is
+recorded, and paths as git names them, as **main:src/a.c**. Files are compared
+by their blob's object name, without being read: two files are the same exactly
+when their blobs are. Symlinks are compared by their targets, and not followed.
+A submodule is not read, and shows as an entry that couldn't be. An object
+missing from the repository, as one a partial clone left out, is an error on its
+entry. Files in a revision can't be edited.
 
 An error resolving a revision is written before the screen is taken.
 
@@ -353,7 +356,8 @@ per row:
   the full path, for terminals that support them, quoted for the shell (see
   [Showing text safely](#showing-text-safely)) rather than as a **file://** URL,
   as **'/home/al/it'\''s here'**, to paste into a command line. A side without
-  the entry has its path dimmed, and no link.
+  the entry has its path dimmed, and no link. A side in a git revision has the
+  path git names it by, as **main:src/a.c**, and no link.
 - **type**: as in the tree, with a symlink's target after **→** and a device's
   major and minor number.
 - **size**: in bytes, from 1 KiB also in binary units, as **4300 (4.2 KiB)**.
@@ -365,6 +369,9 @@ per row:
 - **mtime**, **ctime**, **atime**, **btime**: the times of the last
   modification, status change and access, and of creation, in local time to the
   second, or **—** where the file system doesn't record one.
+
+A side in a git revision shows only the path, type, size and mode, which is all
+git records.
 
 Fields that differ between two sides that could be read are marked between the
 panels with the tree's marks, and their values take the mark's colour on both

@@ -629,3 +629,40 @@ func TestDiffEditRefreshesTreePanels(t *testing.T) {
 		t.Errorf("size %d after the edit in the diff view, want 25", got)
 	}
 }
+
+// Sides not in the file system, as git revisions, record no owners or
+// times: those are never compared, whatever is asked.
+func TestCompareUnrecorded(t *testing.T) {
+	left := writeTestFiles(t, map[string]string{"f": "1"})
+	right := writeTestFiles(t, map[string]string{"f": "1"})
+	a := testApp(80, 24)
+	ts := NewTreeScreen(a, TreeConfig{
+		Styles: colors.Default(), Left: otherRoot{source.Disk(left)}, Right: otherRoot{source.Disk(right)},
+		Options: scan.Options{Compare: scan.AllAttrs},
+	})
+	a.Main = ts
+	ts.scan.Wait()
+	all := scan.AllAttrs &^ (scan.Owner | scan.Mtime)
+	if ts.opts.Compare != all || ts.view.Compare != all {
+		t.Errorf("compare %v, view %v", ts.opts.Compare, ts.view.Compare)
+	}
+	ts.Key(term.Rune('c'))
+	for _, k := range "ot" {
+		ts.Key(term.Rune(k))
+		if ts.opts.Compare != all {
+			t.Errorf("%c: compare %v", k, ts.opts.Compare)
+		}
+		if line := ts.compare.Lines[ts.compare.Selected]; line.Keys[0] != "[-]" {
+			t.Errorf("%c: row %+v", k, line)
+		}
+	}
+	// * turns all off, and on again, but those.
+	ts.Key(term.Rune('*'))
+	if ts.opts.Compare != scan.None {
+		t.Errorf("* off: compare %v", ts.opts.Compare)
+	}
+	ts.Key(term.Rune('*'))
+	if ts.opts.Compare != all {
+		t.Errorf("* on: compare %v", ts.opts.Compare)
+	}
+}
