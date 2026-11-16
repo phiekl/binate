@@ -1081,6 +1081,25 @@ func TestInputsEncode(t *testing.T) {
 
 // gitRepo makes a repository with two commits, in a temporary directory,
 // running git, or skips the test if git is not installed.
+// The times of gitRepo's commits: when each was authored, and committed.
+var (
+	gitAuthored  = [2]time.Time{time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)}
+	gitCommitted = time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+)
+
+// gitRev returns the commit rev names in the repository dir.
+func gitRev(t *testing.T, dir, rev string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "--verify", rev)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s: %v", rev, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func gitRepo(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -1092,7 +1111,8 @@ func gitRepo(t *testing.T) string {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
-			"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@example.org", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@example.org")
+			"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@example.org", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@example.org",
+			"GIT_COMMITTER_DATE="+gitCommitted.Format(time.RFC3339))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -1112,13 +1132,13 @@ func gitRepo(t *testing.T) string {
 	run("init", "-q", "-b", "main")
 	write(map[string]string{"dir/changed": "one\ntwo\n", "same": "x\n", "gone": "g\n"})
 	run("add", "-A")
-	run("commit", "-q", "-m", "first")
+	run("commit", "-q", "-m", "first", "--date="+gitAuthored[0].Format(time.RFC3339))
 	if err := os.Remove(filepath.Join(dir, "gone")); err != nil {
 		t.Fatal(err)
 	}
 	write(map[string]string{"dir/changed": "one\nTWO\n", "new": "n\n"})
 	run("add", "-A")
-	run("commit", "-q", "-m", "second")
+	run("commit", "-q", "-m", "second", "--date="+gitAuthored[1].Format(time.RFC3339))
 	run("repack", "-adq")
 	return dir
 }
@@ -1143,7 +1163,7 @@ func TestGitTrees(t *testing.T) {
 	// The panels show the revisions' paths, as git names them.
 	pt.Write("n")
 	scr := screen("main:dir/changed")
-	if !regexp.MustCompile(`│ path │ HEAD~:dir/changed *│   │ path │ main:dir/changed *│`).MatchString(scr) {
+	if !regexp.MustCompile(`│ +path │ HEAD~:dir/changed *│   │ +path │ main:dir/changed *│`).MatchString(scr) {
 		t.Errorf("panels without the paths:\n%s", scr)
 	}
 	// They show only what git records, and link to no file.
@@ -1155,6 +1175,19 @@ func TestGitTrees(t *testing.T) {
 	}
 	if strings.Contains(pt.Output(), "\x1b]8;;'HEAD~") {
 		t.Error("a revision's path is linked")
+	}
+	// And the commit that last changed each side, from git's history.
+	scr = screen("committed │")
+	local := func(t time.Time) string { return t.Local().Format("2006-01-02 15:04:05") }
+	for _, re := range []string{
+		`│ +commit │ ` + gitRev(t, repo, "HEAD~")[:12] + `[0-9a-f]*…?│   │ +commit │ ` + gitRev(t, repo, "HEAD")[:12],
+		`│ +author │ a <a@example\.org> *│   │ +author │ a <a@example\.org> *│`,
+		`│ +authored │ ` + local(gitAuthored[0]) + ` *│   │ +authored │ ` + local(gitAuthored[1]),
+		`│ *committed │ ` + local(gitCommitted) + ` *│   │ *committed │ ` + local(gitCommitted),
+	} {
+		if !regexp.MustCompile(re).MatchString(scr) {
+			t.Errorf("panels without %q:\n%s", re, scr)
+		}
 	}
 	pt.Write("c")
 	screen("[-]  owner     not recorded in git revisions")
@@ -1182,8 +1215,9 @@ func TestGitFiles(t *testing.T) {
 	repo := gitRepo(t)
 	pt := startIn(t, filepath.Join(repo, "dir"), "--git", "HEAD~:./changed", "HEAD:dir/changed")
 	offset := pt.Wait(0, enterScreen)
-	scr := pt.WaitScreen(100, 30, offset, "1 changed")
-	if !strings.Contains(scr, "| │2 TWO") || !regexp.MustCompile(`│ path │ HEAD~:\./changed *│   │ path │ HEAD:dir/changed *│`).MatchString(scr) {
+	// The files have the history of their commits.
+	scr := pt.WaitScreen(100, 30, offset, "committed │")
+	if !strings.Contains(scr, "| │2 TWO") || !regexp.MustCompile(`│ +path │ HEAD~:\./changed *│   │ +path │ HEAD:dir/changed *│`).MatchString(scr) {
 		t.Errorf("screen:\n%s", scr)
 	}
 	quit(t, pt, offset, "x")

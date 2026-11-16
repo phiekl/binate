@@ -5,6 +5,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -55,11 +56,103 @@ func TestStatReader(t *testing.T) {
 	// A result for an earlier request is dropped.
 	other := statKey{sides: [2]sideKey{{}, {source.Disk(filepath.Join(dir, "missing")), ""}}}
 	r.read(other)
+	r.mu.Lock()
 	r.fetch(key)
+	r.mu.Unlock()
 	if got, done := r.read(other); done && got[0].st != nil {
 		t.Errorf("an earlier request's result kept: %+v", got)
 	}
 	if got := waitRead(t, &r, other); got[1].err == nil {
 		t.Errorf("missing file read %+v", got)
+	}
+}
+
+// blockingKey is a request that blocks until canceled, unless quick.
+type blockingKey struct {
+	quick    bool
+	canceled chan bool
+}
+
+func (k blockingKey) load(ctx context.Context) bool {
+	if k.quick {
+		return true
+	}
+	<-ctx.Done()
+	k.canceled <- true
+	return false
+}
+
+func TestReaderCancels(t *testing.T) {
+	var r reader[blockingKey, bool]
+	slow := blockingKey{canceled: make(chan bool, 1)}
+	if _, done := r.read(slow); done {
+		t.Fatal("slow request done")
+	}
+	quick := blockingKey{quick: true}
+	r.read(quick)
+	select {
+	case <-slow.canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request no longer wanted not canceled")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got, done := r.read(quick); done {
+			if !got {
+				t.Error("the canceled result kept")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the request wanted not read")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// returningKey holds a canceled lookup until the same key is wanted again.
+type returningKey struct {
+	state *returningLoad
+	other bool
+}
+type returningLoad struct {
+	started chan struct{}
+	release chan struct{}
+	calls   int
+}
+
+func (k returningKey) load(ctx context.Context) bool {
+	if k.other {
+		return true
+	}
+	k.state.calls++
+	if k.state.calls == 1 {
+		close(k.state.started)
+		<-k.state.release
+		return ctx.Err() == nil
+	}
+	return true
+}
+func TestReaderReturnsToCanceledKey(t *testing.T) {
+	state := &returningLoad{started: make(chan struct{}), release: make(chan struct{})}
+	var r reader[returningKey, bool]
+	a := returningKey{state: state}
+	r.read(a)
+	<-state.started
+	r.read(returningKey{state: state, other: true})
+	r.read(a)
+	close(state.release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got, done := r.read(a); done {
+			if !got {
+				t.Fatal("kept result from canceled lookup")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("lookup did not restart")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

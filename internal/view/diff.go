@@ -332,7 +332,12 @@ func (v *DiffView) Draw(s *term.Screen) {
 	if compare == 0 {
 		compare = scan.DefaultAttrs
 	}
-	drawPanels(s, p, 1+h, panel, v.Stats, compare, v.Home, v.Styles)
+	// The files are the item: changed if their texts differ.
+	item := v.Styles.Plain
+	if v.HasChanges() {
+		item = brighten(v.Styles.Changed)
+	}
+	drawPanels(s, p, 1+h, panel, v.Stats, compare, v.Home, item, v.Styles)
 	if v.Message != "" {
 		drawNote(s, p.LeftX, 1, p.LeftW, h, v.Message, v.Styles)
 		v.drawStatus(s, s.H-1)

@@ -5,6 +5,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -29,10 +30,17 @@ type Root struct {
 	// file is set for a file compared on its own, at "".
 	file *TreeEntry
 	name string
+	// commit, unless zero, is the commit whose tree has the root at
+	// prefix, "" for the tree itself: where the history of its entries
+	// starts.
+	commit ID
+	prefix string
 
 	mu sync.Mutex
 	// dirs are the directories read, by path.
 	dirs map[string]*dir
+	// changes are the last changes found, by path.
+	changes map[string]source.Change
 }
 
 // dir is a tree's entries.
@@ -51,9 +59,10 @@ func NewRoot(repo *Repo, id ID, name string) (*Root, error) {
 	return &Root{repo: repo, tree: tree, name: name, dirs: map[string]*dir{}}, nil
 }
 
-// NewTargetRoot returns the tree or file t in repo, shown as name.
+// NewTargetRoot returns the tree or file t in repo, shown as name, with
+// the history of t's commit, if any.
 func NewTargetRoot(repo *Repo, t Target, name string) *Root {
-	r := &Root{repo: repo, name: name, dirs: map[string]*dir{}}
+	r := &Root{repo: repo, name: name, dirs: map[string]*dir{}, commit: t.Commit, prefix: t.Path}
 	if t.IsTree() {
 		r.tree = t.ID
 	} else {
@@ -265,6 +274,42 @@ func (r *Root) ContentID(rel string) (source.ContentID, bool) {
 	return source.ContentID{Scheme: "git-" + r.repo.format.name, Sum: string(e.ID.Bytes())}, true
 }
 
+// HasHistory reports whether the root is of a commit.
+func (r *Root) HasHistory() bool { return !r.commit.IsZero() }
+
+// LastChange returns the commit that last changed the entry at rel, as
+// "git log -1" finds it.
+func (r *Root) LastChange(ctx context.Context, rel string) (source.Change, error) {
+	if r.commit.IsZero() {
+		return source.Change{}, errors.New("no history")
+	}
+	full := r.prefix
+	if rel != "" {
+		full = path.Join(r.prefix, rel)
+	}
+	r.mu.Lock()
+	ch, ok := r.changes[full]
+	r.mu.Unlock()
+	if ok {
+		return ch, nil
+	}
+	id, c, err := r.repo.LastChange(ctx, r.commit, full)
+	if err != nil {
+		return source.Change{}, r.pathError("log", rel, err)
+	}
+	ch = source.Change{
+		ID: id.String(), AuthorName: c.AuthorName, AuthorEmail: c.AuthorEmail,
+		Authored: c.Author, Committed: c.Committer,
+	}
+	r.mu.Lock()
+	if r.changes == nil {
+		r.changes = map[string]source.Change{}
+	}
+	r.changes[full] = ch
+	r.mu.Unlock()
+	return ch, nil
+}
+
 // file is a blob open for reading.
 type file struct {
 	Object
@@ -289,5 +334,6 @@ func (fi fileInfo) Sys() any           { return nil }
 
 var (
 	_ source.ContentIDs = (*Root)(nil)
+	_ source.History    = (*Root)(nil)
 	_ io.ReadCloser     = (*file)(nil)
 )

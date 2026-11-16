@@ -92,6 +92,20 @@ type StatSide struct {
 	// an entry's type, target, size and mode: the rest is left out, and
 	// the path, which names no file, is not linked.
 	InRevision bool
+	// Change, if set, is the commit that last changed the entry, of a
+	// side with a history.
+	Change *Change
+}
+
+// Change is the commit that last changed an entry, or why it isn't known.
+type Change struct {
+	// ID names the commit; none is known yet if empty and Err is nil.
+	ID string
+	// AuthorName and AuthorEmail are who made the change.
+	AuthorName, AuthorEmail string
+	// Authored and Committed are its author's and committer's times.
+	Authored, Committed time.Time
+	Err                 error
 }
 
 // statRow is a row of a panel: a field, or, without a label, a note.
@@ -111,9 +125,14 @@ type statRow struct {
 	path bool
 	link string
 	dim  bool
+	// item is set for a row of the commit that last changed the entry,
+	// whose value takes the item's style in the tree where it differs from
+	// the other side's; pending, for one still looked for.
+	item, pending bool
 }
 
-// statLabelWidth is the width of the widest label.
+// statLabelWidth is the width of the widest label but a commit's, which
+// widen the labels of the panels showing one.
 const statLabelWidth = 5
 
 // statRows returns the rows of a side's panel, most important first,
@@ -170,7 +189,7 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	plain("size", sizeValue(st, sd.Entries), sizeAttr, '|')
 	plain("mode", fmt.Sprintf("%04o", st.Mode&0o7777), scan.Mode, '~')
 	if sd.InRevision {
-		return rows
+		return append(rows, changeRows(sd.Change)...)
 	}
 	field("owner", ownerValue(st, sd.User, sd.Group), scan.Owner, '~')
 	plain("links", fmt.Sprint(st.Nlink), 0, 0)
@@ -182,6 +201,64 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	plain("atime", formatStatTime(st.Atime, 0), 0, 0)
 	plain("btime", formatStatTime(st.Btime, 0), 0, 0)
 	return rows
+}
+
+// changeRows returns the rows of the commit that last changed an entry:
+// none without one, "…" while it is found.
+func changeRows(c *Change) []statRow {
+	plain := func(label, value string) statRow {
+		return statRow{label: label, value: display.Plain(value)}
+	}
+	switch {
+	case c == nil:
+		return nil
+	case c.Err != nil:
+		return []statRow{{label: "commit", value: display.Name(c.Err.Error()), failed: true}}
+	case c.ID == "":
+		return []statRow{{label: "commit", value: display.Plain("…"), pending: true}}
+	}
+	rows := []statRow{
+		plain("commit", c.ID),
+		// As git shows it; both are any text the commit holds, shown
+		// escaped as names are.
+		{label: "author", value: display.Name(c.AuthorName + " <" + c.AuthorEmail + ">")},
+		plain("authored", formatStatTime(c.Authored, 0)),
+		plain("committed", formatStatTime(c.Committed, 0)),
+	}
+	// Compared to the second, as shown, and in any zone.
+	rows[2].key = fmt.Sprint(c.Authored.Unix())
+	rows[3].key = fmt.Sprint(c.Committed.Unix())
+	for i := range rows {
+		rows[i].item = true
+	}
+	return rows
+}
+
+// itemDiffers reports whether a row of the last change has another value,
+// or none, on the other side's rows, unless that change is still looked
+// for.
+func itemDiffers(r statRow, other []statRow) bool {
+	if !r.item || slices.ContainsFunc(other, func(o statRow) bool { return o.pending }) {
+		return false
+	}
+	for _, o := range other {
+		if o.label == r.label {
+			return o.compareKey() != r.compareKey()
+		}
+	}
+	return true
+}
+
+// labelWidth returns the width of the labels of both panels' rows: that
+// of the widest, at least statLabelWidth.
+func labelWidth(all [2][]statRow) int {
+	w := statLabelWidth
+	for _, rows := range all {
+		for _, row := range rows {
+			w = max(w, display.Width(display.Plain(row.label)))
+		}
+	}
+	return w
 }
 
 // typeValue names the type, with a symlink's target or a device's number.
@@ -290,8 +367,10 @@ func (r statRow) compareKey() string {
 // drawPanels draws each pane's panel: a divider joined to the box at row
 // y, then up to rows rows below it. Fields worth comparing that differ are
 // marked between the panels, as in the tree, and take their mark's colour,
-// when both sides were read; the newer mtime is marked too.
-func drawPanels(s *term.Screen, p Panes, y, rows int, sides [2]StatSide, compare scan.Attrs, home string, st colors.Styles) {
+// when both sides were read; the newer mtime is marked too. The commit that
+// last changed the entry, where it differs, takes the style of the item,
+// as the tree shows it.
+func drawPanels(s *term.Screen, p Panes, y, rows int, sides [2]StatSide, compare scan.Attrs, home string, item term.Style, st colors.Styles) {
 	if rows <= 0 {
 		return
 	}
@@ -334,6 +413,7 @@ func drawPanels(s *term.Screen, p Panes, y, rows int, sides [2]StatSide, compare
 		newer = [2]bool{l.Mtime.After(r.Mtime), r.Mtime.After(l.Mtime)}
 	}
 	drawDividers(s, p, y, st)
+	lw := labelWidth(all)
 	for i := range 2 {
 		x, w := p.LeftX, p.LeftW
 		if i == 1 {
@@ -344,13 +424,16 @@ func drawPanels(s *term.Screen, p Panes, y, rows int, sides [2]StatSide, compare
 				break
 			}
 			var highlight term.Style
-			if both && differs(row, all[1-i]) {
+			switch {
+			case both && differs(row, all[1-i]):
 				highlight = panelMarkStyle(row.mark, bright, st)
 				if i == 0 {
 					s.Set(p.Mark, y+1+j, row.mark, 1, highlight)
 				}
+			case itemDiffers(row, all[1-i]):
+				highlight = item
 			}
-			drawStatRow(s, x, y+1+j, w, row, highlight, newer[i], st)
+			drawStatRow(s, x, y+1+j, w, lw, row, highlight, newer[i], st)
 		}
 	}
 }
@@ -386,8 +469,9 @@ func panelMarkStyle(mark rune, bright bool, st colors.Styles) term.Style {
 	return style
 }
 
-// drawStatRow draws a row, its value in highlight if set.
-func drawStatRow(s *term.Screen, x, y, w int, row statRow, highlight term.Style, newer bool, st colors.Styles) {
+// drawStatRow draws a row, its label right-aligned in labelW columns, its
+// value in highlight if set.
+func drawStatRow(s *term.Screen, x, y, w, labelW int, row statRow, highlight term.Style, newer bool, st colors.Styles) {
 	value := st.Plain
 	switch {
 	case row.failed:
@@ -402,7 +486,7 @@ func drawStatRow(s *term.Screen, x, y, w int, row statRow, highlight term.Style,
 		s.Text(x, y, w, ShortenEnd(row.value, w), value, st.Escape)
 		return
 	}
-	label := fmt.Sprintf("%*s │ ", statLabelWidth, row.label)
+	label := fmt.Sprintf("%*s │ ", labelW, row.label)
 	used := s.Label(x, y, w, label, st.Border)
 	if row.path {
 		// The ends of a path tell the most; the link has it in full.

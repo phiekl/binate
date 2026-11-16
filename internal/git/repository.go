@@ -398,6 +398,20 @@ func Open(l *Location) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
+	data, err := readLimited(filepath.Join(l.CommonDir, "shallow"), maxPackedRefs)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		repo.Close()
+		return nil, err
+	}
+	repo.shallow = map[ID]bool{}
+	for line := range strings.Lines(data) {
+		id, err := ParseID(format, strings.TrimSuffix(line, "\n"))
+		if err != nil {
+			repo.Close()
+			return nil, fmt.Errorf("shallow: %w", err)
+		}
+		repo.shallow[id] = true
+	}
 	return &Repository{Repo: repo, loc: l, packed: &packedRefs{path: filepath.Join(l.CommonDir, "packed-refs"), format: format}}, nil
 }
 

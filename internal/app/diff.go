@@ -117,6 +117,9 @@ type DiffScreen struct {
 	// each time they are loaded.
 	stats   statReader
 	statGen int
+	// changes reads the commits that last changed the files, of sides
+	// with a history.
+	changes changeReader
 }
 
 // DiffConfig configures the diff view.
@@ -144,12 +147,13 @@ func NewDiffScreen(a *App, cfg DiffConfig) *DiffScreen {
 			Styles: cfg.Styles, Home: cfg.Home, Context: cfg.Context,
 			Left: cfg.Left.Path(), Right: cfg.Right.Path(), Compare: cfg.Compare,
 		},
-		left:   cfg.Left,
-		right:  cfg.Right,
-		back:   cfg.Back,
-		edited: cfg.Edited,
-		home:   cfg.Home,
-		stats:  statReader{app: a},
+		left:    cfg.Left,
+		right:   cfg.Right,
+		back:    cfg.Back,
+		edited:  cfg.Edited,
+		home:    cfg.Home,
+		stats:   statReader{app: a},
+		changes: changeReader{app: a},
 	}
 }
 
@@ -368,6 +372,17 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 		}
 	}
 	got, done := d.stats.read(key)
+	var ckey changeKey
+	for i, src := range srcs {
+		if !src.Missing && !src.Stream {
+			ckey.sides[i] = historyKey(src.Root, src.Rel)
+		}
+	}
+	var changes [2]changeResult
+	changesDone := true
+	if ckey != (changeKey{}) {
+		changes, changesDone = d.changes.read(ckey)
+	}
 	var sides [2]view.StatSide
 	for i, src := range srcs {
 		switch {
@@ -380,6 +395,7 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 		}
 		sides[i].Path = d.abs[i]
 		sides[i].InRevision = !onDisk(src.Root)
+		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 	}
 	return sides
 }

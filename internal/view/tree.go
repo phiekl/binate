@@ -153,7 +153,7 @@ func (v *TreeView) Draw(s *term.Screen, m *tree.Model, st TreeStatus) {
 			drawDividers(s, p, panelY, v.Styles)
 			v.drawAction(s, p, panelY+1, panel, st.Action)
 		case panel > 0 && st.Stats != nil:
-			drawPanels(s, p, panelY, panel, st.Stats(selNode), v.Compare, v.Home, v.Styles)
+			drawPanels(s, p, panelY, panel, st.Stats(selNode), v.Compare, v.Home, v.rowStyle(selNode), v.Styles)
 		}
 	}
 	if st.Action != nil && panel == 0 && st.Message == "" {

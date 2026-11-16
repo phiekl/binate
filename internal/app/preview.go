@@ -5,6 +5,8 @@
 package app
 
 import (
+	"context"
+
 	"pxy.se/go/binate/internal/diff"
 	"pxy.se/go/binate/internal/scan"
 	"pxy.se/go/binate/internal/view"
@@ -23,7 +25,7 @@ type previewKey struct {
 
 // load reads and compares both sides, or says why each that can't be
 // shown can't.
-func (key previewKey) load() *view.DiffView {
+func (key previewKey) load(context.Context) *view.DiffView {
 	var texts [2]diff.Text
 	var errs [2]error
 	for i, sk := range key.sides {

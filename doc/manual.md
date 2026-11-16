@@ -155,12 +155,17 @@ A tree's entries have the modes git records: a file is **0644** or, if
 executable, **0755**; a directory **0755**; a symlink **0777**. They have no
 times or owners, which are never compared, whatever **--compare** asks:
 [Compare](#compare) shows them as not recorded. The panels show only what is
-recorded, and paths as git names them, as **main:src/a.c**. Files are compared
-by their blob's object name, without being read: two files are the same exactly
-when their blobs are. Symlinks are compared by their targets, and not followed.
-A submodule is not read, and shows as an entry that couldn't be. An object
-missing from the repository, as one a partial clone left out, is an error on its
-entry. Files in a revision can't be edited.
+recorded, and paths as git names them, as **main:src/a.c**, and the commit that
+last changed an entry, as **git log -1 --** _path_ finds it: from the revision's
+commit, a parent with the entry the same is followed, the first such of a merge,
+until a commit has none. That commit is looked for in at most 100000 commits,
+which may take a second in a large repository. A revision naming a tree or a
+blob, not through a commit, has no history to show. Files are compared by their
+blob's object name, without being read: two files are the same exactly when
+their blobs are. Symlinks are compared by their targets, and not followed. A
+submodule is not read, and shows as an entry that couldn't be. An object missing
+from the repository, as one a partial clone left out, is an error on its entry.
+Files in a revision can't be edited.
 
 An error resolving a revision is written before the screen is taken.
 
@@ -371,7 +376,17 @@ per row:
   second, or **—** where the file system doesn't record one.
 
 A side in a git revision shows only the path, type, size and mode, which is all
-git records.
+git records, and then, if the revision names a commit, the commit that last
+changed the entry, found in the background:
+
+- **commit**: its object name.
+- **author**: who made the change, by name and email, as **git show** shows it.
+- **authored**, **committed**: when its author made the change, and when it was
+  committed, in local time to the second.
+
+Where they differ from the other side's, or the other side has none, they take
+the colour of the entry in the tree, as **|** for a file whose contents differ,
+or **<** for one on the left only.
 
 Fields that differ between two sides that could be read are marked between the
 panels with the tree's marks, and their values take the mark's colour on both

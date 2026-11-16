@@ -117,7 +117,7 @@ func drawPanelsComparing(h, rows int, sides [2]StatSide, compare scan.Attrs) *te
 	scr := term.NewScreen(80, h)
 	p := Layout(80)
 	drawBoxes(scr, p, h, nil, [2][]display.Glyph{}, [2]string{}, colors.Default())
-	drawPanels(scr, p, 1, rows, sides, compare, "", colors.Default())
+	drawPanels(scr, p, 1, rows, sides, compare, "", term.Style{}, colors.Default())
 	return scr
 }
 
@@ -309,7 +309,7 @@ func TestPanelPath(t *testing.T) {
 	scr := term.NewScreen(80, 15)
 	p := Layout(80)
 	drawBoxes(scr, p, 15, nil, [2][]display.Glyph{}, [2]string{}, st)
-	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs|scan.Mtime, "/home/u", st)
+	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs|scan.Mtime, "/home/u", term.Style{}, st)
 	got := panelRowsText(scr)
 	// The path comes first, with ~ for home and shortened in the middle,
 	// and the side's other rows follow.
@@ -355,7 +355,7 @@ func TestPanelInRevision(t *testing.T) {
 	scr := term.NewScreen(80, 15)
 	p := Layout(80)
 	drawBoxes(scr, p, 15, nil, [2][]display.Glyph{}, [2]string{}, st)
-	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", st)
+	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", term.Style{}, st)
 	got := panelRowsText(scr)
 	var labels []string
 	for _, row := range got {
@@ -371,5 +371,108 @@ func TestPanelInRevision(t *testing.T) {
 	}
 	if c := scr.Cell(9, 2); c.R != 'm' || c.Style.Link != "" || c.Style.Attr&term.Dim != 0 {
 		t.Errorf("path %+v", c)
+	}
+}
+
+func TestPanelChange(t *testing.T) {
+	st := colors.Default()
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.FixedZone("+0130", 90*60))
+	file := &stat.Stat{Mode: unix.S_IFREG | 0o644, Size: 3}
+	for _, tc := range []struct {
+		name  string
+		right *Change
+		want  string
+	}{
+		{"reading", &Change{}, "commit │ …"},
+		{"failed", &Change{Err: errors.New("not changed in the last 9 commits")}, "commit │ not changed in the last 9 commits"},
+		{"none", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sides := [2]StatSide{
+				{Stat: file, Entries: -1, Path: "main:f", InRevision: true, Change: &Change{ID: "0123456789abcdef", AuthorName: "A\x1bB", AuthorEmail: "a@b", Authored: at, Committed: at.Add(time.Hour)}},
+				{Stat: file, Entries: -1, Path: "HEAD~:f", InRevision: true, Change: tc.right},
+			}
+			scr := term.NewScreen(100, 15)
+			p := Layout(100)
+			drawBoxes(scr, p, 15, nil, [2][]display.Glyph{}, [2]string{}, st)
+			drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", term.Style{}, st)
+			got := panelRowsText(scr)
+			local := func(t time.Time) string { return t.Local().Format("2006-01-02 15:04:05") }
+			for i, want := range []string{
+				"commit │ 0123456789abcdef",
+				`author │ A\x1bB <a@b>`,
+				"authored │ " + local(at),
+				"committed │ " + local(at.Add(time.Hour)),
+			} {
+				if !strings.Contains(got[4+i], want) {
+					t.Errorf("row %d: %q, want %q", 4+i, got[4+i], want)
+				}
+			}
+			// The labels of both panels are as wide as the widest.
+			if !strings.Contains(got[0], "     path │") {
+				t.Errorf("labels not widened: %q", got[0])
+			}
+			right := strings.Join(got[4:], "\n")
+			if tc.want == "" {
+				if strings.Count(right, "commit │") != 1 {
+					t.Errorf("rows %q", got)
+				}
+			} else if !strings.Contains(got[4], tc.want) {
+				t.Errorf("right %q, want %q", got[4], tc.want)
+			}
+		})
+	}
+}
+
+func TestPanelLabelsOnDisk(t *testing.T) {
+	sides := [2]StatSide{{Stat: &stat.Stat{Mode: unix.S_IFREG}, Entries: -1, Path: "/f"}, {Missing: true, Entries: -1}}
+	scr := term.NewScreen(80, 15)
+	p := Layout(80)
+	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", term.Style{}, colors.Default())
+	if got := panelRowsText(scr); !strings.Contains(got[0], " path │") || strings.Contains(got[0], "  path │") {
+		t.Errorf("labels %q", got[0])
+	}
+}
+
+func TestPanelChangeStyle(t *testing.T) {
+	st := colors.Default()
+	item := brighten(st.Changed)
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	file := &stat.Stat{Mode: unix.S_IFREG | 0o644, Size: 3}
+	left := &Change{ID: "aaaa", AuthorName: "A", AuthorEmail: "a@b", Authored: at, Committed: at}
+	for _, tc := range []struct {
+		name  string
+		right *Change
+		// styled is whether the commit, authored and committed rows take
+		// the item's style.
+		styled [4]bool
+	}{
+		{"same", &Change{ID: "aaaa", AuthorName: "A", AuthorEmail: "a@b", Authored: at, Committed: at}, [4]bool{}},
+		{"other commit", &Change{ID: "bbbb", AuthorName: "A", AuthorEmail: "a@b", Authored: at, Committed: at.Add(time.Hour)}, [4]bool{true, false, false, true}},
+		{"other author", &Change{ID: "bbbb", AuthorName: "A", AuthorEmail: "a@c", Authored: at, Committed: at}, [4]bool{true, true, false, false}},
+		// The same time in another zone is the same.
+		{"zone", &Change{ID: "bbbb", AuthorName: "A", AuthorEmail: "a@b", Authored: at.In(time.FixedZone("x", 3600)), Committed: at}, [4]bool{true, false, false, false}},
+		{"looking", &Change{}, [4]bool{}},
+		{"none", nil, [4]bool{true, true, true, true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sides := [2]StatSide{
+				{Stat: file, Entries: -1, Path: "a:f", InRevision: true, Change: left},
+				{Stat: file, Entries: -1, Path: "b:f", InRevision: true, Change: tc.right},
+			}
+			scr := term.NewScreen(100, 15)
+			p := Layout(100)
+			drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", item, st)
+			for i, styled := range tc.styled {
+				// The value starts after "committed │ ".
+				c := scr.Cell(p.LeftX+12, 1+5+i)
+				if got := c.Style == item; got != styled {
+					t.Errorf("row %d: %q styled %v, want %v", i, c.R, got, styled)
+				}
+				if m := scr.Cell(p.Mark, 1+5+i).R; m != ' ' && m != 0 {
+					t.Errorf("row %d marked %q", i, m)
+				}
+			}
+		})
 	}
 }

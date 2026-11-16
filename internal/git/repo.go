@@ -23,6 +23,8 @@ import (
 // Repo reads the objects of a repository. It is safe for concurrent use.
 type Repo struct {
 	format *Format
+	// shallow marks commits whose parents are outside the available history.
+	shallow map[ID]bool
 	// dirs are the objects directories searched, the repository's first.
 	dirs []string
 	// packs are the packs in dirs, as found when opened.

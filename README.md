@@ -57,6 +57,12 @@ tree.
 Use `-g` to compare two revisions or files within them. Data is read directly
 from the repository without running git or checking anything out.
 
+The panels on both sides show the commit that last changed each entry.
+
+<img src="doc/screenshots/git.png"
+     alt="binate comparing Linux git revisions with a file diff preview and each file's last commit details"
+     width="800">
+
 ### Read-only, escaped output and Landlock sandbox
 
 binate never changes files itself. Press `e` to open a file in your editor.

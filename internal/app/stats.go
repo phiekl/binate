@@ -5,6 +5,7 @@
 package app
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 
@@ -17,7 +18,8 @@ import (
 // reader reads in the background what K's load returns, as a file system
 // may take any time to answer. Only the last request's result is kept: one
 // for an entry no longer selected is dropped. One read runs at a time, so
-// moving quickly over a slow file system doesn't pile them up.
+// moving quickly over a slow file system doesn't pile them up; a read
+// that is no longer wanted is canceled, for a loader that heeds that.
 type reader[K loader[V], V any] struct {
 	app  *App
 	mu   sync.Mutex
@@ -26,12 +28,15 @@ type reader[K loader[V], V any] struct {
 	got  V
 	// busy is set while a read runs; it reads want next if that changed.
 	busy bool
+	// cancel cancels the read running.
+	cancel context.CancelFunc
 }
 
-// loader is a request of a reader, which load reads.
+// loader is a request of a reader, which load reads, until ctx is
+// canceled.
 type loader[V any] interface {
 	comparable
-	load() V
+	load(ctx context.Context) V
 }
 
 // statReader reads what the panels show.
@@ -56,7 +61,7 @@ type statResult struct {
 	err error
 }
 
-func (key statKey) load() [2]statResult {
+func (key statKey) load(context.Context) [2]statResult {
 	var got [2]statResult
 	for i, sk := range key.sides {
 		if sk.root == nil {
@@ -67,6 +72,58 @@ func (key statKey) load() [2]statResult {
 	return got
 }
 
+// changeReader reads the changes that last changed what the panels show,
+// apart from statReader, as finding one may take long.
+type changeReader = reader[changeKey, [2]changeResult]
+
+// changeKey is a request: the two sides, the zero sideKey for one with
+// no history.
+type changeKey struct {
+	sides [2]sideKey
+}
+
+type changeResult struct {
+	ch  source.Change
+	err error
+}
+
+func (key changeKey) load(ctx context.Context) [2]changeResult {
+	var got [2]changeResult
+	for i, sk := range key.sides {
+		if h, ok := sk.root.(source.History); ok {
+			got[i].ch, got[i].err = h.LastChange(ctx, sk.rel)
+		}
+	}
+	return got
+}
+
+// historyKey returns the sideKey of the entry at rel in root to read the
+// last change of, the zero sideKey if root has no history.
+func historyKey(root source.Root, rel string) sideKey {
+	if h, ok := root.(source.History); ok && h.HasHistory() {
+		return sideKey{root, rel}
+	}
+	return sideKey{}
+}
+
+// changeSide returns what a panel shows of the last change read as res
+// for the side sk: nothing without a history, and no commit while
+// reading.
+func changeSide(sk sideKey, res changeResult, done bool) *view.Change {
+	switch {
+	case sk.root == nil:
+		return nil
+	case !done:
+		return &view.Change{}
+	case res.err != nil:
+		return &view.Change{Err: files.UnwrapPath(res.err)}
+	}
+	return &view.Change{
+		ID: res.ch.ID, AuthorName: res.ch.AuthorName, AuthorEmail: res.ch.AuthorEmail,
+		Authored: res.ch.Authored, Committed: res.ch.Committed,
+	}
+}
+
 // read returns the result for key, and whether it is read yet. A key not
 // asked for last is read in the background, and the app woken once done.
 func (r *reader[K, V]) read(key K) (V, bool) {
@@ -75,32 +132,38 @@ func (r *reader[K, V]) read(key K) (V, bool) {
 	if key != r.want {
 		var zero V
 		r.want, r.done, r.got = key, false, zero
-		if !r.busy {
+		if r.busy {
+			r.cancel()
+		} else {
 			r.busy = true
-			go r.fetch(key)
+			r.fetch(key)
 		}
 	}
 	return r.got, r.done
 }
 
-// fetch reads key, and then what was asked for meanwhile, until it has
-// read the key asked for last.
+// fetch starts reading key in the background, and then what was asked
+// for meanwhile, until it has read the key asked for last. r.mu must be
+// held.
 func (r *reader[K, V]) fetch(key K) {
-	for {
-		got := key.load()
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
+	go func() {
+		got := key.load(ctx)
 		r.mu.Lock()
-		if key != r.want {
-			key = r.want
+		canceled := ctx.Err() != nil
+		cancel()
+		if key != r.want || canceled {
+			r.fetch(r.want)
 			r.mu.Unlock()
-			continue
+			return
 		}
 		r.got, r.done, r.busy = got, true, false
 		r.mu.Unlock()
 		if r.app != nil {
 			r.app.Wake()
 		}
-		return
-	}
+	}()
 }
 
 // panelPath returns the path a panel shows of the entry at rel in root:

@@ -17,6 +17,11 @@ type Target struct {
 	ID ID
 	// Mode is ModeTree, ModeFile or ModeExecutable.
 	Mode Mode
+	// Commit, unless zero, is the commit the revision names, of whose tree
+	// the target is the entry at Path, "" for the tree itself: where the
+	// target's history starts. A tree or blob named otherwise has none.
+	Commit ID
+	Path   string
 }
 
 // IsTree reports whether t is a tree.
@@ -70,15 +75,24 @@ func (r *Repository) resolve(rev string) (Target, error) {
 	if id, err = r.applySuffixes(id, suffixes); err != nil {
 		return Target{}, err
 	}
-	if hasPath {
-		return r.lookupPath(id, file)
-	}
 	if id, err = r.peelTags(id); err != nil {
 		return Target{}, err
 	}
 	typ, _, err := r.Info(id)
 	if err != nil {
 		return Target{}, err
+	}
+	var commit ID
+	if typ == Commit {
+		commit = id
+	}
+	if hasPath {
+		t, err := r.lookupPath(id, file)
+		if err != nil {
+			return Target{}, err
+		}
+		t.Commit = commit
+		return t, nil
 	}
 	if typ == Blob {
 		return Target{ID: id, Mode: ModeFile}, nil
@@ -87,7 +101,7 @@ func (r *Repository) resolve(rev string) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
-	return Target{ID: tree, Mode: ModeTree}, nil
+	return Target{ID: tree, Mode: ModeTree, Commit: commit}, nil
 }
 
 // object returns the object name names: a full object name, a ref, or an
@@ -192,23 +206,12 @@ func (r *Repository) parent(id ID, n int) (ID, error) {
 	if n == 0 {
 		return id, nil
 	}
-	_, data, err := r.Read(id, maxTree)
+	c, err := r.ReadCommit(id)
 	if err != nil {
 		return ID{}, err
 	}
-	i := 0
-	for line := range headerLines(data) {
-		k, v, _ := strings.Cut(line, " ")
-		if k != "parent" {
-			continue
-		}
-		if i++; i == n {
-			p, err := ParseID(r.format, v)
-			if err != nil {
-				return ID{}, corrupt(id, "%v", err)
-			}
-			return p, nil
-		}
+	if n <= len(c.Parents) {
+		return c.Parents[n-1], nil
 	}
 	return ID{}, fmt.Errorf("commit %s has no parent %d", id, n)
 }
@@ -323,7 +326,8 @@ func (r *Repo) tagTarget(id ID, data []byte) (ID, error) {
 	return next, nil
 }
 
-// lookupPath returns the entry at file in the tree of id.
+// lookupPath returns the entry at file in the tree of id, with its path in
+// the tree.
 func (r *Repository) lookupPath(id ID, file string) (Target, error) {
 	tree, err := r.peelTo(id, Tree)
 	if err != nil {
@@ -344,7 +348,7 @@ func (r *Repository) lookupPath(id ID, file string) (Target, error) {
 	// Otherwise, as git, the path is taken as it is, but for a slash at
 	// its end.
 	file = strings.TrimSuffix(file, "/")
-	t := Target{ID: tree, Mode: ModeTree}
+	t := Target{ID: tree, Mode: ModeTree, Path: file}
 	if file == "" {
 		return t, nil
 	}
@@ -359,7 +363,7 @@ func (r *Repository) lookupPath(id ID, file string) (Target, error) {
 		found := false
 		for _, e := range entries {
 			if e.Name == name {
-				t, found = Target{ID: e.ID, Mode: e.Mode}, true
+				t, found = Target{ID: e.ID, Mode: e.Mode, Path: file}, true
 				break
 			}
 		}

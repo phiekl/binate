@@ -583,7 +583,7 @@ func TestResolveUppercaseHashes(t *testing.T) {
 				for _, n := range []int{7, 8, len(hash)} {
 					rev := strings.ToUpper(hash[:n])
 					got, err := rp.Resolve(rev)
-					if err != nil || got.ID != r.id("HEAD^{tree}") {
+					if err != nil || got.Commit.String() != hash {
 						t.Errorf("%s: %+v, %v", rev, got, err)
 					}
 				}

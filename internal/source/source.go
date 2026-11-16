@@ -9,6 +9,7 @@
 package source
 
 import (
+	"context"
 	"io"
 	"io/fs"
 	"os"
@@ -76,6 +77,29 @@ type ContentIDs interface {
 type ContentID struct {
 	Scheme string
 	Sum    string
+}
+
+// History is a Root with a history of changes, as a git commit's tree.
+type History interface {
+	Root
+	// HasHistory reports whether the root has a history, as a git
+	// commit's tree has but one named otherwise not.
+	HasHistory() bool
+	// LastChange returns the change that last changed the entry at rel,
+	// of a root with a history. It may take long, and is canceled with
+	// ctx.
+	LastChange(ctx context.Context, rel string) (Change, error)
+}
+
+// Change is a change in a History: a commit.
+type Change struct {
+	// ID names the change, as a commit's hash.
+	ID string
+	// AuthorName and AuthorEmail are who made the change.
+	AuthorName, AuthorEmail string
+	// Authored is when the change was made, and Committed when it was
+	// recorded, each in the zone recorded.
+	Authored, Committed time.Time
 }
 
 // Disk is a side in the file system, at the path given. Its errors carry

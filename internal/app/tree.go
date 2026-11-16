@@ -66,6 +66,9 @@ type TreeScreen struct {
 	// raised, as after a rescan or an edit.
 	stats   statReader
 	statGen int
+	// changes reads the commits that last changed the selected entry, of
+	// sides with a history.
+	changes changeReader
 	// previews reads the selected pair's differences, again once statGen
 	// is raised.
 	previews previewReader
@@ -105,7 +108,7 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 	}
 	t.opts.Compare = recorded(t.opts.Compare, t.unrecorded)
 	t.view.Compare = t.opts.Compare
-	t.stats.app, t.previews.app = a, a
+	t.stats.app, t.changes.app, t.previews.app = a, a, a
 	t.start()
 	t.model = tree.New(t.scan.Root)
 	return t
@@ -199,6 +202,17 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 		}
 	}
 	got, done := t.stats.read(key)
+	var ckey changeKey
+	for i := range 2 {
+		if n.Side(i == 1).Kind != scan.Missing {
+			ckey.sides[i] = historyKey(t.roots[i], n.Path())
+		}
+	}
+	var changes [2]changeResult
+	changesDone := true
+	if ckey != (changeKey{}) {
+		changes, changesDone = t.changes.read(ckey)
+	}
 	var sides [2]view.StatSide
 	for i := range 2 {
 		sd := n.Side(i == 1)
@@ -213,6 +227,7 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 		}
 		sides[i].Path = panelPath(t.roots[i], n.Path())
 		sides[i].InRevision = !onDisk(t.roots[i])
+		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 	}
 	return sides
 }

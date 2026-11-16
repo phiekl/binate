@@ -41,6 +41,18 @@ func newTestRepo(t testing.TB, f *Format) *testRepo {
 // git runs git in the repository and returns its output.
 func (r *testRepo) git(args ...string) string {
 	r.t.Helper()
+	cmd := r.command(args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
+	}
+	return string(out)
+}
+
+// command returns the command running git in the repository.
+func (r *testRepo) command(args ...string) *exec.Cmd {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.dir
 	home := r.t.TempDir()
@@ -49,13 +61,7 @@ func (r *testRepo) git(args ...string) string {
 		"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@example.org", "GIT_AUTHOR_DATE=2026-01-01T00:00:00Z",
 		"GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@example.org", "GIT_COMMITTER_DATE=2026-01-01T00:00:00Z",
 	)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
-	}
-	return string(out)
+	return cmd
 }
 
 // write writes files into the work tree, as tree in scan's tests does: a
