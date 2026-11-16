@@ -11,9 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -24,6 +22,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"pxy.se/go/binate/internal/files"
+	"pxy.se/go/binate/internal/source"
 )
 
 // Kind is the type of an entry on one side.
@@ -338,8 +337,8 @@ type Options struct {
 // while Lock is held, as the scan writes it.
 type Scan struct {
 	Root  *Node
-	left  string
-	right string
+	left  source.Root
+	right source.Root
 	opts  Options
 
 	mu      sync.Mutex
@@ -362,7 +361,7 @@ type Scan struct {
 // Start starts scanning the roots left and right in the background, and
 // calls notify, from another goroutine, as it makes progress (done false)
 // and once done (done true).
-func Start(left, right string, opts Options, notify func(done bool)) *Scan {
+func Start(left, right source.Root, opts Options, notify func(done bool)) *Scan {
 	if opts.Workers <= 0 {
 		opts.Workers = 2 * runtime.NumCPU()
 	}
@@ -385,8 +384,8 @@ func Start(left, right string, opts Options, notify func(done bool)) *Scan {
 		notify:  notify,
 	}
 	s.qcond = sync.NewCond(&s.qmu)
-	s.Root.L = statSide(left, true)
-	s.Root.R = statSide(right, true)
+	s.Root.L = statSide(left, "", true)
+	s.Root.R = statSide(right, "", true)
 	s.Root.Own = attrsDiffer(&s.Root.L, &s.Root.R, opts.Compare)
 	s.push(s.Root)
 	go s.run()
@@ -498,16 +497,21 @@ func (s *Scan) work() {
 	}
 }
 
-// sidePath returns the path of n on one side.
-func (s *Scan) sidePath(n *Node, right bool) string {
-	root := s.left
+// root returns the left (false) or right (true) root.
+func (s *Scan) root(right bool) source.Root {
 	if right {
-		root = s.right
+		return s.right
 	}
-	if p := n.Path(); p != "" {
-		return filepath.Join(root, filepath.FromSlash(p))
+	return s.left
+}
+
+// childPath returns the path of the entry name in the directory at dir,
+// both relative to the roots.
+func childPath(dir, name string) string {
+	if dir == "" {
+		return name
 	}
-	return root
+	return dir + "/" + name
 }
 
 // entry is a pair of directory entries while pairing.
@@ -523,19 +527,21 @@ func (s *Scan) list(n *Node) {
 	var emu sync.Mutex
 	var lErr, rErr error
 	var wg sync.WaitGroup
+	dir := n.Path()
 	read := func(right bool, errp *error) {
 		defer wg.Done()
 		side := n.Side(right)
 		if side.Kind != Dir {
 			return
 		}
-		names, err := readDirNames(s.sidePath(n, right))
-		*errp = err
+		root := s.root(right)
+		names, err := root.ReadDir(dir)
+		*errp = files.UnwrapPath(err)
 		for _, name := range names {
 			if s.excluded(name) {
 				continue
 			}
-			sd := statSide(filepath.Join(s.sidePath(n, right), name), false)
+			sd := statSide(root, childPath(dir, name), false)
 			emu.Lock()
 			e := entries[name]
 			if e == nil {
@@ -657,49 +663,32 @@ func sortNodes(nodes []*Node) {
 	})
 }
 
-func readDirNames(dir string) ([]string, error) {
-	f, err := os.Open(dir)
-	if err != nil {
-		return nil, files.UnwrapPath(err)
-	}
-	defer func() { _ = f.Close() }()
-	names, err := f.Readdirnames(-1)
-	return names, files.UnwrapPath(err)
-}
-
-// statSide reads an entry without following a symlink, or following it for
-// a root.
-func statSide(p string, follow bool) Side {
-	var st unix.Stat_t
-	var err error
-	if follow {
-		err = unix.Stat(p, &st)
-	} else {
-		err = unix.Lstat(p, &st)
-	}
-	if errors.Is(err, unix.ENOENT) {
-		return Side{Kind: Missing}
-	}
-	if err != nil {
-		return Side{Kind: Unknown, Err: err}
+// statSide reads the entry at rel in root without following a symlink,
+// or following it for a root.
+func statSide(root source.Root, rel string, follow bool) Side {
+	e, err := root.Entry(rel, follow)
+	if e.Mode == 0 {
+		if errors.Is(err, unix.ENOENT) {
+			return Side{Kind: Missing}
+		}
+		return Side{Kind: Unknown, Err: files.UnwrapPath(err)}
 	}
 	sd := Side{
-		Size:  st.Size,
-		Mtime: time.Unix(st.Mtim.Unix()),
-		Rdev:  st.Rdev,
-		Perm:  st.Mode & 0o7777,
-		Uid:   st.Uid,
-		Gid:   st.Gid,
+		Size:  e.Size,
+		Mtime: e.Mtime,
+		Rdev:  e.Rdev,
+		Perm:  e.Mode & 0o7777,
+		Uid:   e.Uid,
+		Gid:   e.Gid,
 	}
-	switch st.Mode & unix.S_IFMT {
+	switch e.Mode & unix.S_IFMT {
 	case unix.S_IFDIR:
 		sd.Kind, sd.Size = Dir, 0
 	case unix.S_IFREG:
 		sd.Kind = File
 	case unix.S_IFLNK:
 		sd.Kind = Symlink
-		target, err := os.Readlink(p)
-		sd.Target, sd.Err = target, files.UnwrapPath(err)
+		sd.Target, sd.Err = e.Target, files.UnwrapPath(err)
 	case unix.S_IFIFO:
 		sd.Kind = FIFO
 	case unix.S_IFSOCK:
@@ -828,7 +817,7 @@ func settle(n *Node, data State) {
 // compareFiles compares the contents of a pair of regular files of the
 // same size.
 func (s *Scan) compareFiles(n *Node, comparer *contentComparer) {
-	state, lErr, rErr := comparer.compareContents(s.ctx, s.sidePath(n, false), s.sidePath(n, true))
+	state, lErr, rErr := comparer.compareContents(s.ctx, s.left, s.right, n.Path())
 	s.mu.Lock()
 	n.content = state
 	settle(n, state)
@@ -852,12 +841,13 @@ type contentComparer struct {
 	buf []byte
 }
 
-// compareContents reads two files in blocks, stopping at the first
-// difference. Only regular files are read: opening anything else could
-// block or have side effects.
-func (c *contentComparer) compareContents(ctx context.Context, left, right string) (State, error, error) {
-	lf, lErr := files.OpenRegular(left, false)
-	rf, rErr := files.OpenRegular(right, false)
+// compareContents reads the files at rel in left and right in blocks,
+// stopping at the first difference. Only regular files are read: opening
+// anything else could block or have side effects.
+func (c *contentComparer) compareContents(ctx context.Context, left, right source.Root, rel string) (State, error, error) {
+	lf, lErr := left.Open(rel, false)
+	rf, rErr := right.Open(rel, false)
+	lErr, rErr = files.UnwrapPath(lErr), files.UnwrapPath(rErr)
 	defer func() {
 		if lf != nil {
 			_ = lf.Close()
@@ -892,7 +882,7 @@ func (c *contentComparer) compareContents(ctx context.Context, left, right strin
 }
 
 // readFull reads until buf is full or the file ends.
-func readFull(f *os.File, buf []byte) (int, error) {
+func readFull(f io.Reader, buf []byte) (int, error) {
 	n := 0
 	for n < len(buf) {
 		m, err := f.Read(buf[n:])
@@ -998,16 +988,13 @@ func (s *Scan) Recheck(p string) {
 	if n == nil || n.Parent == nil {
 		return
 	}
-	// A node's name and parents never change, so its paths can be read
-	// without the lock.
-	lPath, rPath := s.sidePath(n, false), s.sidePath(n, true)
 	var comparer contentComparer
 	for {
-		probe := &Node{Name: n.Name, Parent: n.Parent, L: statSide(lPath, false), R: statSide(rPath, false)}
+		probe := &Node{Name: n.Name, Parent: n.Parent, L: statSide(s.left, p, false), R: statSide(s.right, p, false)}
 		classify(probe, opts)
 		content, lErr, rErr := Pending, error(nil), error(nil)
 		if probe.State == Pending && !probe.IsDir() {
-			content, lErr, rErr = comparer.compareContents(s.ctx, lPath, rPath)
+			content, lErr, rErr = comparer.compareContents(s.ctx, s.left, s.right, p)
 		}
 
 		s.mu.Lock()

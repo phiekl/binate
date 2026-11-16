@@ -7,11 +7,11 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/view"
 )
@@ -32,10 +32,9 @@ type action struct {
 	// needs names what it accepts, to say why it can't run.
 	accepts func(k scan.Kind) bool
 	needs   string
-	// run returns the action's result on a side's entry at path, which
-	// is rel from its root, reporting to side as it goes. It stops early
-	// once ctx is done.
-	run func(ctx context.Context, path, rel string, side *sideRun) view.ActionSide
+	// run returns the action's result on a side's entry at rel in root,
+	// reporting to side as it goes. It stops early once ctx is done.
+	run func(ctx context.Context, root source.Root, rel string, side *sideRun) view.ActionSide
 	// cache keeps each side's result while the file is unchanged, for
 	// an action whose result depends on the file alone and that reports
 	// the file it reads to sideRun.Read (see actioncache.go).
@@ -47,7 +46,7 @@ type sideRun struct {
 	// progress is told how much is done, as a fraction.
 	progress func(float64)
 	// read, if set, is told of the file the result is computed from.
-	read func(*os.File)
+	read func(source.File)
 }
 
 // Progress reports that the fraction f of the work is done.
@@ -61,7 +60,7 @@ func (s *sideRun) Progress(f float64) {
 // again once read through, so that a cache can tell it is the file it
 // checked, and unchanged while read. A result whose file isn't reported
 // both times is not cached.
-func (s *sideRun) Read(f *os.File) {
+func (s *sideRun) Read(f source.File) {
 	if s.read != nil {
 		s.read(f)
 	}
@@ -102,15 +101,14 @@ type actionRun struct {
 // actionRefresh is how often the screen shows an action's progress.
 const actionRefresh = 100 * time.Millisecond
 
-// runAction starts a on the selected entry n, whose sides are at paths,
-// waking the app as each side is done. The scan's lock must be held.
+// runAction starts a on the selected entry n, waking the app as each side is done. The scan's lock must be held.
 func (t *TreeScreen) runAction(a *action, n *scan.Node) {
 	t.stopAction()
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &actionRun{act: a, path: n.Path(), gen: t.statGen, cancel: cancel}
 	// Both sides are set up before either starts, as a side done at once
 	// would otherwise change run while the other is set up.
-	var paths [2]string
+	var sides [2]sideKey
 	for i := range 2 {
 		kind := n.Side(i == 1).Kind
 		switch {
@@ -121,15 +119,15 @@ func (t *TreeScreen) runAction(a *action, n *scan.Node) {
 		default:
 			run.sides[i].Note = "reading…"
 			run.running++
-			paths[i] = t.sidePath(n, i == 1)
+			sides[i] = t.sideKey(n, i == 1)
 		}
 	}
-	for i, path := range paths {
-		if path == "" {
+	for i, sk := range sides {
+		if sk.root == nil {
 			continue
 		}
 		go func() {
-			res := t.results.run(ctx, a, path, run.path, func(f float64) {
+			res := t.results.run(ctx, a, sk.root, sk.rel, func(f float64) {
 				run.mu.Lock()
 				run.sides[i].Note = fmt.Sprintf("reading… %d%%", int(f*100))
 				run.mu.Unlock()

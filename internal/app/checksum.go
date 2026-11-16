@@ -17,6 +17,7 @@ import (
 
 	"pxy.se/go/binate/internal/files"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/view"
 )
 
@@ -28,8 +29,8 @@ func checksum(key rune, name string, newHash func() hash.Hash) action {
 		accepts: func(k scan.Kind) bool { return k == scan.File },
 		needs:   "a regular file",
 		cache:   true,
-		run: func(ctx context.Context, path, rel string, side *sideRun) view.ActionSide {
-			sum, err := hashFile(ctx, path, newHash(), side)
+		run: func(ctx context.Context, root source.Root, rel string, side *sideRun) view.ActionSide {
+			sum, err := hashFile(ctx, root, rel, newHash(), side)
 			if err != nil {
 				return view.ActionSide{Err: err.Error()}
 			}
@@ -42,10 +43,10 @@ func checksum(key rune, name string, newHash func() hash.Hash) action {
 // cancellation and reporting progress.
 const hashChunk = 1 << 20
 
-// hashFile returns the hex digest of h over the regular file at path,
-// without following a symlink, reporting the file it reads to side.
-func hashFile(ctx context.Context, path string, h hash.Hash, side *sideRun) (string, error) {
-	f, err := files.OpenRegular(path, false)
+// hashFile returns the hex digest of h over the regular file at rel in
+// root, without following a symlink, reporting the file it reads to side.
+func hashFile(ctx context.Context, root source.Root, rel string, h hash.Hash, side *sideRun) (string, error) {
+	f, err := root.Open(rel, false)
 	if err != nil {
 		return "", files.UnwrapPath(err)
 	}

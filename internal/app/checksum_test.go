@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"pxy.se/go/binate/internal/source"
 )
 
 func TestSumLine(t *testing.T) {
@@ -54,14 +56,14 @@ func TestHashFileStops(t *testing.T) {
 	dir := writeTestFiles(t, map[string]string{"f": "x"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := hashFile(ctx, filepath.Join(dir, "f"), sha256.New(), &sideRun{}); err == nil {
+	if _, err := hashFile(ctx, source.Disk(dir), "f", sha256.New(), &sideRun{}); err == nil {
 		t.Error("a cancelled hash finished")
 	}
 	// A symlink is not followed.
 	if err := os.Symlink("f", filepath.Join(dir, "l")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := hashFile(context.Background(), filepath.Join(dir, "l"), sha256.New(), &sideRun{}); err == nil {
+	if _, err := hashFile(context.Background(), source.Disk(dir), "l", sha256.New(), &sideRun{}); err == nil {
 		t.Error("hashed through a symlink")
 	}
 }

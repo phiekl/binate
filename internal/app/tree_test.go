@@ -16,6 +16,7 @@ import (
 
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/tree"
 	"pxy.se/go/binate/internal/view"
@@ -32,7 +33,7 @@ func TestTreeExpandsWhenScanFinishes(t *testing.T) {
 	// Pause after the first directory is listed, before its contents load.
 	ready, resume := make(chan struct{}, 1), make(chan struct{})
 	resumeScan := sync.OnceFunc(func() { close(resume) })
-	s := scan.Start(left, right, scan.Options{Workers: 1}, func(done bool) {
+	s := scan.Start(source.Disk(left), source.Disk(right), scan.Options{Workers: 1}, func(done bool) {
 		if !done {
 			select {
 			case ready <- struct{}{}:
@@ -49,7 +50,8 @@ func TestTreeExpandsWhenScanFinishes(t *testing.T) {
 	}
 	treeScreen := &TreeScreen{
 		scan: s, model: tree.New(s.Root), expandAfterScan: true,
-		view: &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		view:  &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		roots: [2]source.Root{source.Disk(left), source.Disk(right)},
 	}
 	paths := func() string {
 		s.Lock()
@@ -326,11 +328,12 @@ func TestEnterRevealsFilteredDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(left, "sub/x.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s := scan.Start(left, right, scan.Options{}, nil)
+	s := scan.Start(source.Disk(left), source.Disk(right), scan.Options{}, nil)
 	s.Wait()
 	ts := &TreeScreen{
 		app: &App{}, scan: s, model: tree.New(s.Root), expandAfterScan: true,
-		view: &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		view:  &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		roots: [2]source.Root{source.Disk(left), source.Disk(right)},
 	}
 	ts.Draw(term.NewScreen(80, 30))
 	for _, k := range []term.Key{term.Rune('F'), term.Rune('s'), term.Rune('u'), term.Rune('b'),

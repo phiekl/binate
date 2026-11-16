@@ -21,6 +21,7 @@ import (
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/landlock"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/supervise"
 	"pxy.se/go/binate/internal/term"
@@ -160,8 +161,8 @@ func (c *child) run() (code int) {
 		a.Main = app.NewTreeScreen(a, app.TreeConfig{
 			Styles: styles,
 			Home:   os.Getenv("HOME"),
-			Left:   c.in.left.path,
-			Right:  c.in.right.path,
+			Left:   source.Disk(c.in.left.path),
+			Right:  source.Disk(c.in.right.path),
 			Options: scan.Options{
 				Compare:  c.opts.compare,
 				Quick:    c.opts.quick,
@@ -190,7 +191,7 @@ func (c *child) run() (code int) {
 // once, by the diff view, in the background.
 func (c *child) source(i int) app.Source {
 	in := []input{c.in.left, c.in.right}[i]
-	src := app.Source{Path: in.path}
+	src := app.Source{Root: source.Disk(in.path)}
 	if f := c.streams[i]; f != nil {
 		src.Stream, src.Pipe = true, f
 		src.Stat, src.StatErr = stat.ReadFile(f)

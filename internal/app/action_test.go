@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"pxy.se/go/binate/internal/colors"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/term"
 )
 
@@ -21,7 +22,7 @@ func TestActions(t *testing.T) {
 	left := writeTestFiles(t, map[string]string{"dir/x": "1", "diff": "left", "lonly": "only", "same": "same", "tab\tx": "tab", "bad\xff": "bad"})
 	right := writeTestFiles(t, map[string]string{"dir/x": "2", "diff": "right", "same": "same", "tab\tx": "tab", "bad\xff": "bad"})
 	a := testApp(100, 40)
-	ts := NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: left, Right: right})
+	ts := NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: source.Disk(left), Right: source.Disk(right)})
 	a.Main = ts
 	ts.scan.Wait()
 	ts.model.ShowSame = true

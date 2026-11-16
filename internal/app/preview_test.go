@@ -12,6 +12,7 @@ import (
 
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/tree"
 	"pxy.se/go/binate/internal/view"
 )
@@ -26,12 +27,13 @@ func TestPreview(t *testing.T) {
 	if err := os.Symlink("t", filepath.Join(right, "left2")); err != nil {
 		t.Fatal(err)
 	}
-	s := scan.Start(left, right, scan.Options{Compare: scan.DefaultAttrs}, nil)
+	s := scan.Start(source.Disk(left), source.Disk(right), scan.Options{Compare: scan.DefaultAttrs}, nil)
 	s.Wait()
 	a := testApp(80, 40)
 	ts := &TreeScreen{
 		app: a, scan: s, model: tree.New(s.Root), height: 40, styles: colors.Default(),
-		view: &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		view:  &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		roots: [2]source.Root{source.Disk(left), source.Disk(right)},
 	}
 	// wait returns the preview of the entry at path once read.
 	wait := func(path string) (*view.DiffView, bool) {

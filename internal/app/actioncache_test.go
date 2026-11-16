@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"pxy.se/go/binate/internal/files"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/view"
 )
 
@@ -24,7 +25,8 @@ import (
 func countingAction(cache bool, runs *int, also func(path string) view.ActionSide, open func(path string)) *action {
 	return &action{
 		name: "count", cache: cache,
-		run: func(ctx context.Context, path, rel string, side *sideRun) view.ActionSide {
+		run: func(ctx context.Context, root source.Root, rel string, side *sideRun) view.ActionSide {
+			path := root.Path(rel)
 			*runs++
 			if also != nil {
 				if res := also(path); res != (view.ActionSide{}) {
@@ -62,7 +64,7 @@ func TestResultCache(t *testing.T) {
 	ctx := context.Background()
 	get := func() string {
 		t.Helper()
-		return c.run(ctx, a, path, "f", func(float64) {}).Value
+		return c.run(ctx, a, source.Disk(dir), "f", func(float64) {}).Value
 	}
 	// The second run is kept from the first.
 	first, second := get(), get()
@@ -98,7 +100,7 @@ func TestResultCache(t *testing.T) {
 	runs2 := 0
 	b := countingAction(true, &runs2, nil, nil)
 	b.name = "other"
-	c.run(ctx, b, path, "f", func(float64) {})
+	c.run(ctx, b, source.Disk(dir), "f", func(float64) {})
 	if runs2 != 1 {
 		t.Errorf("another action's result was used")
 	}
@@ -108,7 +110,6 @@ func TestResultCacheKeepsOnlyTrustedResults(t *testing.T) {
 	defer func(w time.Duration) { racyWindow = w }(racyWindow)
 	racyWindow = 0
 	dir := writeTestFiles(t, map[string]string{"f": "one"})
-	path := filepath.Join(dir, "f")
 	ctx := context.Background()
 	for _, c := range []struct {
 		name  string
@@ -138,8 +139,8 @@ func TestResultCacheKeepsOnlyTrustedResults(t *testing.T) {
 		if c.ctx != nil {
 			runCtx = c.ctx()
 		}
-		rc.run(runCtx, a, path, "f", func(float64) {})
-		rc.run(runCtx, a, path, "f", func(float64) {})
+		rc.run(runCtx, a, source.Disk(dir), "f", func(float64) {})
+		rc.run(runCtx, a, source.Disk(dir), "f", func(float64) {})
 		if runs != 2 {
 			t.Errorf("%s: run %d times, want 2", c.name, runs)
 		}
@@ -155,7 +156,6 @@ func TestResultCacheSwappedWhileRead(t *testing.T) {
 	racyWindow = 0
 	dir := writeTestFiles(t, map[string]string{"d/f": "one", "e/f": "two"})
 	d, e, aside := filepath.Join(dir, "d"), filepath.Join(dir, "e"), filepath.Join(dir, "x")
-	path := filepath.Join(d, "f")
 	rename := func(from, to string) {
 		if err := os.Rename(from, to); err != nil {
 			t.Fatal(err)
@@ -181,7 +181,7 @@ func TestResultCacheSwappedWhileRead(t *testing.T) {
 	})
 	get := func() string {
 		t.Helper()
-		return c.run(context.Background(), a, path, "d/f", func(float64) {}).Value
+		return c.run(context.Background(), a, source.Disk(dir), "d/f", func(float64) {}).Value
 	}
 	if got := get(); got != "two" {
 		t.Fatalf("swapped read %q, want two", got)
@@ -195,21 +195,42 @@ func TestResultCacheSwappedWhileRead(t *testing.T) {
 	}
 }
 
+// otherRoot is a side not in the file system, as far as the cache can
+// tell: its files have no version to check.
+type otherRoot struct{ source.Disk }
+
+// A result on a side not in the file system is not cached.
+func TestResultCacheOnlyOnDisk(t *testing.T) {
+	defer func(w time.Duration) { racyWindow = w }(racyWindow)
+	racyWindow = 0
+	dir := writeTestFiles(t, map[string]string{"f": "one"})
+	runs := 0
+	a := countingAction(true, &runs, nil, nil)
+	var c resultCache
+	for range 2 {
+		if got := c.run(context.Background(), a, otherRoot{source.Disk(dir)}, "f", func(float64) {}).Value; got != "one" {
+			t.Errorf("read %q", got)
+		}
+	}
+	if runs != 2 {
+		t.Errorf("run %d times, want 2", runs)
+	}
+}
+
 // An action that doesn't report the file it read is not cached, as what
 // it read can't be checked.
 func TestResultCacheNeedsReadReported(t *testing.T) {
 	defer func(w time.Duration) { racyWindow = w }(racyWindow)
 	racyWindow = 0
 	dir := writeTestFiles(t, map[string]string{"f": "one"})
-	path := filepath.Join(dir, "f")
 	runs := 0
-	a := &action{name: "silent", cache: true, run: func(context.Context, string, string, *sideRun) view.ActionSide {
+	a := &action{name: "silent", cache: true, run: func(context.Context, source.Root, string, *sideRun) view.ActionSide {
 		runs++
 		return view.ActionSide{Value: "x"}
 	}}
 	var c resultCache
-	c.run(context.Background(), a, path, "f", func(float64) {})
-	c.run(context.Background(), a, path, "f", func(float64) {})
+	c.run(context.Background(), a, source.Disk(dir), "f", func(float64) {})
+	c.run(context.Background(), a, source.Disk(dir), "f", func(float64) {})
 	if runs != 2 {
 		t.Errorf("run %d times, want 2", runs)
 	}

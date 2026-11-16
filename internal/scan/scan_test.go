@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"pxy.se/go/binate/internal/source"
 )
 
 // tree creates files from a map of path to contents. A trailing "/" makes
@@ -45,7 +47,7 @@ func tree(t *testing.T, files map[string]string) string {
 
 func scanWait(t *testing.T, left, right string, opts Options) *Scan {
 	t.Helper()
-	s := Start(left, right, opts, nil)
+	s := Start(source.Disk(left), source.Disk(right), opts, nil)
 	select {
 	case <-s.done:
 	case <-time.After(10 * time.Second):
@@ -225,7 +227,7 @@ func TestCompareContentsReuse(t *testing.T) {
 			left := tree(t, map[string]string{"file": tc.left})
 			right := tree(t, map[string]string{"file": tc.right})
 			state, lErr, rErr := comparer.compareContents(context.Background(),
-				filepath.Join(left, "file"), filepath.Join(right, "file"))
+				source.Disk(left), source.Disk(right), "file")
 			if state != tc.want || lErr != nil || rErr != nil {
 				t.Fatalf("comparison: %v, %v, %v; want %v", state, lErr, rErr, tc.want)
 			}
@@ -334,12 +336,12 @@ func TestData(t *testing.T) {
 
 func TestDevices(t *testing.T) {
 	// Devices are compared by number, and never opened.
-	n := &Node{L: statSide("/dev/null", false), R: statSide("/dev/zero", false)}
+	n := &Node{L: statSide(source.Disk("/dev/null"), "", false), R: statSide(source.Disk("/dev/zero"), "", false)}
 	classify(n, Options{Compare: DefaultAttrs})
 	if n.L.Kind != CharDev || n.State != Differ {
 		t.Errorf("/dev/null vs /dev/zero: kind %v, state %c", n.L.Kind, n.State.Mark())
 	}
-	n = &Node{L: statSide("/dev/null", false), R: statSide("/dev/null", false)}
+	n = &Node{L: statSide(source.Disk("/dev/null"), "", false), R: statSide(source.Disk("/dev/null"), "", false)}
 	classify(n, Options{Compare: DefaultAttrs})
 	if n.State != Same {
 		t.Errorf("/dev/null vs itself: state %c", n.State.Mark())
@@ -402,7 +404,7 @@ func TestCancel(t *testing.T) {
 	for i := range 200 {
 		files[filepath.Join("d", string(rune('a'+i%26)), strings.Repeat("f", 1+i/26))] = "x"
 	}
-	s := Start(tree(t, files), tree(t, files), Options{}, nil)
+	s := Start(source.Disk(tree(t, files)), source.Disk(tree(t, files)), Options{}, nil)
 	s.Cancel()
 	if !s.Done() {
 		t.Error("not done after Cancel")

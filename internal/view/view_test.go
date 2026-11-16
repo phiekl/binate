@@ -17,6 +17,7 @@ import (
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/display"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/tree"
@@ -77,7 +78,7 @@ func lastLine(scr *term.Screen) string {
 
 func scanned(t *testing.T, left, right string) *scan.Scan {
 	t.Helper()
-	s := scan.Start(left, right, scan.Options{}, nil)
+	s := scan.Start(source.Disk(left), source.Disk(right), scan.Options{}, nil)
 	s.Wait()
 	return s
 }

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"pxy.se/go/binate/internal/files"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/view"
 )
@@ -36,12 +37,18 @@ type loader[V any] interface {
 // statReader reads what the panels show.
 type statReader = reader[statKey, [2]statResult]
 
-// statKey is a request: the two paths, "" for a side not read, and a
-// generation, raised when the entries may have changed, as after an edit,
-// to read the same paths again.
+// statKey is a request: the two sides, the zero sideKey for one not read,
+// and a generation, raised when the entries may have changed, as after an
+// edit, to read the same sides again.
 type statKey struct {
-	paths [2]string
+	sides [2]sideKey
 	gen   int
+}
+
+// sideKey is the entry at rel in root, or none if root is nil.
+type sideKey struct {
+	root source.Root
+	rel  string
 }
 
 type statResult struct {
@@ -51,10 +58,11 @@ type statResult struct {
 
 func (key statKey) load() [2]statResult {
 	var got [2]statResult
-	for i, p := range key.paths {
-		if p != "" {
-			got[i].st, got[i].err = stat.Read(p)
+	for i, sk := range key.sides {
+		if sk.root == nil {
+			continue
 		}
+		got[i].st, got[i].err = sk.root.Stat(sk.rel)
 	}
 	return got
 }

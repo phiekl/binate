@@ -16,6 +16,7 @@ import (
 
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/diff"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/term"
 )
 
@@ -41,13 +42,13 @@ func TestLoadReportsBinarySides(t *testing.T) {
 					source := func(name, content string) Source {
 						if stream {
 							data, err := diff.Read(strings.NewReader(content))
-							return Source{Path: name, Stream: true, Data: data, Err: err}
+							return Source{Root: source.Disk(name), Stream: true, Data: data, Err: err}
 						}
 						path := filepath.Join(dir, name)
 						if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 							t.Fatal(err)
 						}
-						return Source{Path: path}
+						return Source{Root: source.Disk(path)}
 					}
 					d := NewDiffScreen(nil, DiffConfig{
 						Styles: colors.Default(),
@@ -80,8 +81,8 @@ func TestBinaryPipeReplacesReading(t *testing.T) {
 	a := testApp(80, 24)
 	d := NewDiffScreen(a, DiffConfig{
 		Styles: colors.Default(),
-		Left:   Source{Path: "a", Stream: true, Pipe: io.NopCloser(strings.NewReader("\xff"))},
-		Right:  Source{Path: "b", Stream: true, Data: []byte("b\n")},
+		Left:   Source{Root: source.Disk("a"), Stream: true, Pipe: io.NopCloser(strings.NewReader("\xff"))},
+		Right:  Source{Root: source.Disk("b"), Stream: true, Data: []byte("b\n")},
 	})
 	d.Start()
 	if d.view.Message != "reading the input…" {
@@ -107,8 +108,8 @@ func TestLoadReadsASideCreatedSince(t *testing.T) {
 	}
 	d := NewDiffScreen(nil, DiffConfig{
 		Styles: colors.Default(),
-		Left:   Source{Path: left},
-		Right:  Source{Path: right, Missing: true},
+		Left:   Source{Root: source.Disk(left)},
+		Right:  Source{Root: source.Disk(right), Missing: true},
 	})
 	if err := d.Load(); err != nil {
 		t.Fatal(err)
@@ -152,8 +153,8 @@ func TestLoadShowsWhyAMissingSideCantBeTold(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
 	d := NewDiffScreen(nil, DiffConfig{
 		Styles: colors.Default(),
-		Left:   Source{Path: left},
-		Right:  Source{Path: right, Missing: true},
+		Left:   Source{Root: source.Disk(left)},
+		Right:  Source{Root: source.Disk(right), Missing: true},
 	})
 	if err := d.Load(); err == nil || err.Error() != "right: permission denied" {
 		t.Errorf("Load = %v, want right: permission denied", err)
@@ -181,8 +182,8 @@ func TestLoadShowsWhyAMissingSideCantBeTold(t *testing.T) {
 	}
 	d = NewDiffScreen(nil, DiffConfig{
 		Styles: colors.Default(),
-		Left:   Source{Path: left},
-		Right:  Source{Path: right, Missing: true},
+		Left:   Source{Root: source.Disk(left)},
+		Right:  Source{Root: source.Disk(right), Missing: true},
 	})
 	if err := d.Load(); err != nil {
 		t.Errorf("Load = %v", err)

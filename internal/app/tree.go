@@ -13,6 +13,7 @@ import (
 
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/tree"
 	"pxy.se/go/binate/internal/view"
@@ -54,8 +55,10 @@ type TreeScreen struct {
 	context int
 
 	edit *editor
-	// abs is each root made absolute, for the panels' paths.
-	abs [2]string
+	// roots are the sides, and abs each root's path made absolute, for the
+	// panels' paths.
+	roots [2]source.Root
+	abs   [2]string
 	// rechecks are paths to compare again, after an edit, once the
 	// recheck running in the background, which recheckDone closes, is done.
 	rechecks    []string
@@ -73,7 +76,7 @@ type TreeScreen struct {
 type TreeConfig struct {
 	Styles      colors.Styles
 	Home        string
-	Left, Right string
+	Left, Right source.Root
 	Options     scan.Options
 	// Context is the diff view's number of context lines.
 	Context int
@@ -90,7 +93,7 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 		expandAfterScan: true,
 		view: &view.TreeView{
 			Styles: cfg.Styles, Home: cfg.Home,
-			Left: cfg.Left, Right: cfg.Right,
+			Left: cfg.Left.Path(""), Right: cfg.Right.Path(""),
 			Compare: cfg.Options.Compare,
 		},
 	}
@@ -98,8 +101,9 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 		t.opts.Compare = scan.DefaultAttrs
 	}
 	t.view.Compare = t.opts.Compare
-	for i, root := range []string{cfg.Left, cfg.Right} {
-		t.abs[i] = absPath(root)
+	t.roots = [2]source.Root{cfg.Left, cfg.Right}
+	for i, root := range t.roots {
+		t.abs[i] = absPath(root.Path(""))
 	}
 	t.stats.app, t.previews.app = a, a
 	t.start()
@@ -110,7 +114,7 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 func (t *TreeScreen) start() {
 	// The scan reports progress often, and Tick redraws while it runs:
 	// wake only to show the end.
-	t.scan = scan.Start(t.view.Left, t.view.Right, t.opts, func(done bool) {
+	t.scan = scan.Start(t.roots[0], t.roots[1], t.opts, func(done bool) {
 		if done {
 			t.app.Wake()
 		}
@@ -191,7 +195,7 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 	key := statKey{gen: t.statGen}
 	for i := range 2 {
 		if n.Side(i == 1).Kind != scan.Missing {
-			key.paths[i] = t.sidePath(n, i == 1)
+			key.sides[i] = t.sideKey(n, i == 1)
 		}
 	}
 	got, done := t.stats.read(key)
@@ -251,7 +255,7 @@ func (t *TreeScreen) startEdit() {
 		path = n.Path()
 		for i := range 2 {
 			sides[i] = EditSide{
-				Path: t.sidePath(n, i == 1), Rel: path, HasRel: true,
+				Path: t.roots[i].Path(path), Rel: path, HasRel: true,
 				Why: whyNotEditable(n.Side(i == 1).Kind),
 			}
 		}
@@ -635,13 +639,12 @@ func wordForward(q []rune, i int) int {
 	return i
 }
 
-// sidePath returns the path of n on one side, as given plus its path.
-func (t *TreeScreen) sidePath(n *scan.Node, right bool) string {
-	root := t.view.Left
+// sideKey returns n on one side, to read.
+func (t *TreeScreen) sideKey(n *scan.Node, right bool) sideKey {
 	if right {
-		root = t.view.Right
+		return sideKey{t.roots[1], n.Path()}
 	}
-	return filepath.Join(root, filepath.FromSlash(n.Path()))
+	return sideKey{t.roots[0], n.Path()}
 }
 
 // openFile opens the diff view on a pair of files, or on a file present on one
@@ -649,15 +652,16 @@ func (t *TreeScreen) sidePath(n *scan.Node, right bool) string {
 // UTF-8 or too large, keeps the tree and says why.
 func (t *TreeScreen) openFile(n *scan.Node) {
 	path := n.Path()
-	source := func(right bool) Source {
+	side := func(right bool) Source {
+		sk := t.sideKey(n, right)
 		return Source{
-			Path: t.sidePath(n, right), Rel: path, HasRel: true,
+			Root: sk.root, Rel: path, HasRel: true,
 			Missing: n.Side(right).Kind == scan.Missing,
 		}
 	}
 	d := NewDiffScreen(t.app, DiffConfig{
 		Styles: t.styles, Home: t.home, Context: t.context,
-		Left: source(false), Right: source(true),
+		Left: side(false), Right: side(true),
 		Back: func() { t.app.Main = t },
 		// Edited in the diff view, the entry's panels are read again too, as
 		// after editing in the tree.

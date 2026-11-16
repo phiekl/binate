@@ -7,12 +7,13 @@ package app
 import (
 	"container/list"
 	"context"
-	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
 
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/view"
 )
 
@@ -68,9 +69,14 @@ func versionOf(path string) (fileVersion, bool) {
 }
 
 // versionOfFile returns the version of the open file f, or the zero
-// version, which matches no file, if it can't be read.
-func versionOfFile(f *os.File) fileVersion {
-	conn, err := f.SyscallConn()
+// version, which matches no file, if it can't be read or isn't one in the
+// file system.
+func versionOfFile(f source.File) fileVersion {
+	sc, ok := f.(syscall.Conn)
+	if !ok {
+		return fileVersion{}
+	}
+	conn, err := sc.SyscallConn()
 	if err != nil {
 		return fileVersion{}
 	}
@@ -88,20 +94,22 @@ func versionOfStat(st *unix.Stat_t) fileVersion {
 	}
 }
 
-// run returns a's result on the side at path, rel from its root: the one
-// kept from before if the file is unchanged since, or else a new one, kept
-// if a caches its results. Only a finished result is kept, of a file that
+// run returns a's result on the entry at rel in root: the one kept from
+// before if the file is unchanged since, or else a new one, kept if a
+// caches its results and the file is on disk. Only a finished result is kept, of a file that
 // didn't change shortly before it was read, and was read unchanged: the
 // file a reports reading must be the one found at path before, at the same
 // version both once opened and once read. While it is open its inode can't
 // be reused, so neither another file put in its place, as by swapping a
 // directory above it, nor a change while it is read can be mistaken for
 // it, even if the path is as it was once the read ends.
-func (c *resultCache) run(ctx context.Context, a *action, path, rel string, progress func(float64)) view.ActionSide {
+func (c *resultCache) run(ctx context.Context, a *action, root source.Root, rel string, progress func(float64)) view.ActionSide {
 	side := &sideRun{progress: progress}
-	if !a.cache {
-		return a.run(ctx, path, rel, side)
+	disk, onDisk := root.(source.Disk)
+	if !a.cache || !onDisk {
+		return a.run(ctx, root, rel, side)
 	}
+	path := disk.Path(rel)
 	key := cacheKey{a.name, path}
 	start := time.Now()
 	before, ok := versionOf(path)
@@ -111,8 +119,8 @@ func (c *resultCache) run(ctx context.Context, a *action, path, rel string, prog
 		}
 	}
 	var read []fileVersion
-	side.read = func(f *os.File) { read = append(read, versionOfFile(f)) }
-	res := a.run(ctx, path, rel, side)
+	side.read = func(f source.File) { read = append(read, versionOfFile(f)) }
+	res := a.run(ctx, root, rel, side)
 	if !ok || res.Err != "" || ctx.Err() != nil || racy(before, start) {
 		return res
 	}

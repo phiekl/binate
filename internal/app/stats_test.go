@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"pxy.se/go/binate/internal/source"
 )
 
 // waitRead asks r for key until it is read.
@@ -32,7 +34,7 @@ func TestStatReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r statReader
-	key := statKey{paths: [2]string{f, ""}}
+	key := statKey{sides: [2]sideKey{{source.Disk(f), ""}, {}}}
 	got := waitRead(t, &r, key)
 	if got[0].st == nil || got[0].st.Size != 4 || got[1].st != nil || got[1].err != nil {
 		t.Errorf("read %+v", got)
@@ -51,7 +53,7 @@ func TestStatReader(t *testing.T) {
 	}
 
 	// A result for an earlier request is dropped.
-	other := statKey{paths: [2]string{"", filepath.Join(dir, "missing")}}
+	other := statKey{sides: [2]sideKey{{}, {source.Disk(filepath.Join(dir, "missing")), ""}}}
 	r.read(other)
 	r.fetch(key)
 	if got, done := r.read(other); done && got[0].st != nil {

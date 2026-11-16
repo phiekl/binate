@@ -117,6 +117,10 @@ pseudo-terminals and skip without them.
   difference, directories marked by their own attributes alone, including after
   a re-check, cancelling, the path last read, and re-checking an entry after it
   is edited, replaced by rename, or deleted on one or both sides.
+- **source:** reading through `source.Disk`: paths joined to the root, listing,
+  symlinks followed only when asked, missing entries, and opening files, and the
+  action cache keeping results only of files on disk, whose versions it can
+  check.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,

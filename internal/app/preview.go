@@ -14,10 +14,10 @@ import (
 // tree view's preview.
 type previewReader = reader[previewKey, *view.DiffView]
 
-// previewKey is a request: the two paths, "" for a side missing, and a
-// generation, as statKey's.
+// previewKey is a request: the two sides, the zero sideKey for one
+// missing, and a generation, as statKey's.
 type previewKey struct {
-	paths [2]string
+	sides [2]sideKey
 	gen   int
 }
 
@@ -26,8 +26,8 @@ type previewKey struct {
 func (key previewKey) load() *view.DiffView {
 	var texts [2]diff.Text
 	var errs [2]error
-	for i, p := range key.paths {
-		texts[i], errs[i] = Source{Path: p, Missing: p == ""}.Load()
+	for i, sk := range key.sides {
+		texts[i], errs[i] = Source{Root: sk.root, Rel: sk.rel, Missing: sk.root == nil}.Load()
 	}
 	if why, ok := sideTexts(loadError(errs[0], errs[1])); ok {
 		return &view.DiffView{SideErrors: why}
@@ -58,7 +58,7 @@ func (t *TreeScreen) preview(n *scan.Node) (*view.DiffView, bool) {
 	key := previewKey{gen: t.statGen}
 	for i := range 2 {
 		if n.Side(i == 1).Kind != scan.Missing {
-			key.paths[i] = t.sidePath(n, i == 1)
+			key.sides[i] = t.sideKey(n, i == 1)
 		}
 	}
 	pv, done := t.previews.read(key)

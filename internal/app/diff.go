@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	"pxy.se/go/binate/internal/diff"
 	"pxy.se/go/binate/internal/files"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/view"
@@ -25,8 +25,10 @@ import (
 
 // Source is a side of the diff view.
 type Source struct {
-	// Path is shown, and read unless the side is a stream or missing.
-	Path string
+	// Root and Rel are where the side is: the entry at Rel in Root, read
+	// unless the side is a stream or missing. Its path is shown.
+	Root source.Root
+	Rel  string
 	// Stream is set for a side read once at startup, such as a pipe or
 	// /dev/null, whose contents are in Data, or whose error is in Err.
 	Stream bool
@@ -41,16 +43,20 @@ type Source struct {
 	StatErr error
 	// Missing is set for the absent side of a one-sided file: empty.
 	Missing bool
-	// Rel is the path relative to the side's root, in directory mode,
-	// where HasRel is set.
-	Rel    string
+	// HasRel is set in directory mode, where Rel is the entry's path from
+	// the root of the tree.
 	HasRel bool
+}
+
+// Path returns the side's path, as shown.
+func (src Source) Path() string {
+	return src.Root.Path(src.Rel)
 }
 
 // editSide returns the side as e sees it: only a file read by path can
 // be edited.
 func (src Source) editSide() EditSide {
-	es := EditSide{Path: src.Path, Rel: src.Rel, HasRel: src.HasRel}
+	es := EditSide{Path: src.Path(), Rel: src.Rel, HasRel: src.HasRel}
 	switch {
 	case src.Missing:
 		es.Why = "missing"
@@ -73,7 +79,7 @@ func (src Source) Load() (diff.Text, error) {
 		return diff.Split(src.Data), nil
 	}
 	// A side given through a symlink on the command line is followed.
-	f, err := files.OpenRegular(src.Path, true)
+	f, err := src.Root.Open(src.Rel, true)
 	if err != nil {
 		return diff.Text{}, err
 	}
@@ -129,12 +135,12 @@ type DiffConfig struct {
 // NewDiffScreen returns the diff view on two sides, not yet loaded.
 func NewDiffScreen(a *App, cfg DiffConfig) *DiffScreen {
 	return &DiffScreen{
-		abs:    [2]string{absPath(cfg.Left.Path), absPath(cfg.Right.Path)},
+		abs:    [2]string{absPath(cfg.Left.Path()), absPath(cfg.Right.Path())},
 		app:    a,
 		styles: cfg.Styles,
 		view: &view.DiffView{
 			Styles: cfg.Styles, Home: cfg.Home, Context: cfg.Context,
-			Left: cfg.Left.Path, Right: cfg.Right.Path, Compare: cfg.Compare,
+			Left: cfg.Left.Path(), Right: cfg.Right.Path(), Compare: cfg.Compare,
 		},
 		left:   cfg.Left,
 		right:  cfg.Right,
@@ -185,9 +191,10 @@ func (d *DiffScreen) Load() error {
 		if !src.Missing {
 			continue
 		}
-		_, err := os.Lstat(src.Path)
+		// A symlink whose target can't be read is there all the same.
+		e, err := src.Root.Entry(src.Rel, false)
 		switch {
-		case err == nil:
+		case e.Mode != 0:
 			src.Missing = false
 		case !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.ENOTDIR):
 			return &sideError{right: i == 1, err: files.UnwrapPath(err)}
@@ -355,7 +362,7 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 	key := statKey{gen: d.statGen}
 	for i, src := range srcs {
 		if !src.Missing && !src.Stream {
-			key.paths[i] = src.Path
+			key.sides[i] = sideKey{src.Root, src.Rel}
 		}
 	}
 	got, done := d.stats.read(key)

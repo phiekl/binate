@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"pxy.se/go/binate/internal/source"
 )
 
 func BenchmarkCompareContents(b *testing.B) {
@@ -36,12 +38,12 @@ func BenchmarkCompareContents(b *testing.B) {
 				b.ReportAllocs()
 				var comparer contentComparer
 				// Allocate reusable buffers before measuring per-call costs.
-				state, lErr, rErr := comparer.compareContents(context.Background(), left, right)
+				state, lErr, rErr := comparer.compareContents(context.Background(), source.Disk(left), source.Disk(right), "")
 				if state != want || lErr != nil || rErr != nil {
 					b.Fatalf("warm-up comparison: %v, %v, %v", state, lErr, rErr)
 				}
 				for b.Loop() {
-					state, lErr, rErr := comparer.compareContents(context.Background(), left, right)
+					state, lErr, rErr := comparer.compareContents(context.Background(), source.Disk(left), source.Disk(right), "")
 					if state != want || lErr != nil || rErr != nil {
 						b.Fatalf("comparison: %v, %v, %v", state, lErr, rErr)
 					}
@@ -70,7 +72,7 @@ func BenchmarkScanTrees(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		s := Start(left, right, Options{}, nil)
+		s := Start(source.Disk(left), source.Disk(right), Options{}, nil)
 		s.Wait()
 		if s.Root.State == Pending {
 			b.Fatalf("incomplete scan: %v", s.Root.State)

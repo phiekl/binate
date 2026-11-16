@@ -14,6 +14,7 @@ import (
 
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/tree"
 	"pxy.se/go/binate/internal/view"
@@ -116,12 +117,13 @@ func writeTestFiles(t *testing.T, files map[string]string) string {
 func TestTreeKeys(t *testing.T) {
 	left := writeTestFiles(t, map[string]string{"a/x": "1", "b": "1", "c": "1", "d": "same"})
 	right := writeTestFiles(t, map[string]string{"a/x": "2", "b": "2", "c": "2", "d": "same"})
-	s := scan.Start(left, right, scan.Options{}, nil)
+	s := scan.Start(source.Disk(left), source.Disk(right), scan.Options{}, nil)
 	s.Wait()
 	a := testApp(80, 24)
 	ts := &TreeScreen{
 		app: a, scan: s, model: tree.New(s.Root), height: 24,
-		view: &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		view:  &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		roots: [2]source.Root{source.Disk(left), source.Disk(right)},
 	}
 	a.Main = ts
 	selected := func() string { return ts.model.SelectedNode().Path() }
@@ -223,8 +225,8 @@ func TestDiffKeys(t *testing.T) {
 	a := testApp(80, 24)
 	d := NewDiffScreen(a, DiffConfig{
 		Styles: colors.Default(), Context: 3,
-		Left:  Source{Path: filepath.Join(dir, "l")},
-		Right: Source{Path: filepath.Join(dir, "r")},
+		Left:  Source{Root: source.Disk(filepath.Join(dir, "l"))},
+		Right: Source{Root: source.Disk(filepath.Join(dir, "r"))},
 	})
 	if err := d.Load(); err != nil {
 		t.Fatal(err)
@@ -285,12 +287,13 @@ func TestErrorPopup(t *testing.T) {
 func TestSearchKeys(t *testing.T) {
 	left := writeTestFiles(t, map[string]string{"a/x": "1", "b": "1", "c": "1", "d": "same"})
 	right := writeTestFiles(t, map[string]string{"a/x": "2", "b": "2", "c": "2", "d": "same"})
-	s := scan.Start(left, right, scan.Options{}, nil)
+	s := scan.Start(source.Disk(left), source.Disk(right), scan.Options{}, nil)
 	s.Wait()
 	a := testApp(80, 24)
 	ts := &TreeScreen{
 		app: a, scan: s, model: tree.New(s.Root), height: 24,
-		view: &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		view:  &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		roots: [2]source.Root{source.Disk(left), source.Disk(right)},
 	}
 	a.Main = ts
 	m := ts.model
@@ -414,7 +417,7 @@ func TestCompareKeys(t *testing.T) {
 		}
 	}
 	a := testApp(80, 24)
-	ts := NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: left, Right: right})
+	ts := NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: source.Disk(left), Right: source.Disk(right)})
 	a.Main = ts
 	ts.scan.Wait()
 	mark := func(p string) rune {
@@ -518,7 +521,7 @@ func TestCompareKeys(t *testing.T) {
 
 	// Started in quick mode, the contents leave it for good, read by a new
 	// scan: then off, and back on in full.
-	ts = NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: left, Right: right, Options: scan.Options{Quick: true}})
+	ts = NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: source.Disk(left), Right: source.Disk(right), Options: scan.Options{Quick: true}})
 	ts.scan.Wait()
 	if got := mark("content"); got != '=' {
 		t.Errorf("quick: mark %c", got)
@@ -541,7 +544,7 @@ func TestCompareKeys(t *testing.T) {
 	}
 
 	// Contents never read are read by a new scan.
-	ts = NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: left, Right: right, Options: scan.Options{Compare: scan.Mode}})
+	ts = NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: source.Disk(left), Right: source.Disk(right), Options: scan.Options{Compare: scan.Mode}})
 	ts.scan.Wait()
 	scan1 = ts.scan
 	ts.Key(term.Rune('c'))
@@ -566,7 +569,7 @@ func TestCantOpen(t *testing.T) {
 		}
 	}
 	a := testApp(80, 24)
-	ts := NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: left, Right: right})
+	ts := NewTreeScreen(a, TreeConfig{Styles: colors.Default(), Left: source.Disk(left), Right: source.Disk(right)})
 	a.Main = ts
 	ts.scan.Wait()
 	ts.Key(term.Rune('*'))
@@ -585,12 +588,13 @@ func TestCantOpen(t *testing.T) {
 func TestDiffEditRefreshesTreePanels(t *testing.T) {
 	left := writeTestFiles(t, map[string]string{"f": "12345"})
 	right := writeTestFiles(t, map[string]string{"f": "12345"})
-	s := scan.Start(left, right, scan.Options{}, nil)
+	s := scan.Start(source.Disk(left), source.Disk(right), scan.Options{}, nil)
 	s.Wait()
 	a := testApp(80, 40)
 	ts := &TreeScreen{
 		app: a, scan: s, model: tree.New(s.Root), height: 40, stats: statReader{app: a},
-		view: &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		view:  &view.TreeView{Styles: colors.Default(), Left: left, Right: right},
+		roots: [2]source.Root{source.Disk(left), source.Disk(right)},
 	}
 	a.Main = ts
 	n := s.Root.Find("f")
