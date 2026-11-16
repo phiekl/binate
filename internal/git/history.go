@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// CommitInfo is what a commit records of itself, but its message.
+// CommitInfo is what a commit records of itself.
 type CommitInfo struct {
 	Tree    ID
 	Parents []ID
@@ -23,6 +23,22 @@ type CommitInfo struct {
 	// Author is when the change was made, Committer when it was committed,
 	// each in the zone recorded.
 	Author, Committer time.Time
+	// Message is the message, after the header.
+	Message string
+}
+
+// Subject returns the first paragraph of the message, joined into a line,
+// as git's %s.
+func (c *CommitInfo) Subject() string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimLeft(c.Message, "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			break
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, " ")
 }
 
 // ReadCommit reads the commit id.
@@ -44,8 +60,8 @@ func (r *Repo) ReadCommit(id ID) (*CommitInfo, error) {
 	return c, nil
 }
 
-// parseCommit parses a commit's header: its tree, parents, and the times
-// of its author and committer lines.
+// parseCommit parses a commit: its tree, parents, author, the times of its
+// author and committer lines, and its message.
 func parseCommit(f *Format, data []byte) (*CommitInfo, error) {
 	var c CommitInfo
 	var hasTree bool
@@ -53,6 +69,7 @@ func parseCommit(f *Format, data []byte) (*CommitInfo, error) {
 		line, rest, _ := bytes.Cut(data, []byte{'\n'})
 		data = rest
 		if len(line) == 0 {
+			c.Message = string(data)
 			break
 		}
 		k, v, _ := strings.Cut(string(line), " ")

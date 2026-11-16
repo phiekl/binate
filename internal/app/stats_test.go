@@ -156,3 +156,32 @@ func TestReaderReturnsToCanceledKey(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestReaderStop(t *testing.T) {
+	var r reader[blockingKey, bool]
+	key := blockingKey{canceled: make(chan bool, 1)}
+	r.read(key)
+	r.stop()
+	select {
+	case <-key.canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopped reader did not cancel its load")
+	}
+	r.read(blockingKey{quick: true})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		r.mu.Lock()
+		busy, done := r.busy, r.done
+		r.mu.Unlock()
+		if !busy {
+			if done {
+				t.Fatal("stopped reader saved a result")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stopped reader restarted its load")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

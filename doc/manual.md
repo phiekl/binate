@@ -186,6 +186,42 @@ compared. Files in a revision can't be edited.
 
 An error resolving a revision is written before the screen is taken.
 
+### Commits
+
+Two actions of the Actions popup, **a**, act on the commit that last changed the
+selected entry, the one its panel shows: **Commit message**, its key **m**,
+shows it, and **Commit diff**, **d**, compares the trees before and after it.
+The diff view has them too: there, **a** opens a popup listing these two alone.
+If the sides' commits differ, a box like the one of [Editing](#editing), titled
+**Select side's commit to show** or **to compare**, lists each side's commit,
+abbreviated to 12 digits, and its subject: **h** or **Left** takes the left one,
+**l** or **Right** the right one, **Enter** or **Space** the selected one, and
+**Esc** closes it. Going back from the side chosen opens the box again, that
+side selected, to choose the other; closing it, or going back from a commit
+taken at once, opens the Actions popup again, the action selected. If only one
+side has a commit, as when the other is missing, it is taken at once, and the
+status bar says which; with none, a red box says why. While the commits are
+still being found, the status bar says so, and nothing is shown.
+
+**Commit message** shows it as **git show --no-patch** does, in git's medium
+format: **commit** and its object name, **Merge:** and its parents abbreviated
+if it has more than one, **Author:** and **Date:**, the time authored in its own
+zone, then the message, indented by four spaces, tabs expanded and spaces at the
+ends of lines left out. The author is as recorded: a **.mailmap** is not read,
+and signatures are neither shown nor checked. The text is in a box across the
+screen, its lines broken to fit; **j**, **k**, **PgDn**, **PgUp**, **gg**, **G**
+and their alternatives scroll it, and **Esc** goes back.
+
+**Commit diff** opens the tree view on the commit's first parent's tree and its
+own, named by the commit, abbreviated as **git rev-parse --short** does, with a
+**^** for the parent's, as **1a2b3c4^** and **1a2b3c4**. The entry is selected
+in them. A commit without parents is compared with an empty tree, named **(no
+parent)**; for a merge, the status bar says it is compared with the first of its
+parents. The trees are those of any other revisions: their entries have their
+own last changes, and the commit actions and **Enter** work in them too.
+**Esc**, once nothing else is left to close, goes back to the view they were
+opened from, and the comparison is cancelled.
+
 ## Comparing
 
 **binate** walks both directory trees at once in the background, pairs entries
@@ -362,13 +398,14 @@ the box again and keeps the selection and expansion by path.
 
 - **c**: Choose what to compare (see [Compare](#compare)).
 
-- **a**: Run an action on the selected entry, as a checksum (see
-  [Actions](#actions)).
+- **a**: Run an action on the selected entry, as a checksum, or in git mode
+  showing the commit that last changed it (see [Actions](#actions)).
 
 - **r**: Scan again, comparing what is chosen. A running scan is cancelled.
 
 - **Esc**: Close an action's result, or else end a search, or else clear an
-  applied filter.
+  applied filter, or else, in a commit's trees, go back to the view they were
+  opened from.
 
 ### Panels
 
@@ -496,6 +533,12 @@ on the selected entry, each with its key:
     2  SHA-256  checksum of each side
     3  SHA-384  checksum of each side
     5  SHA-512  checksum of each side
+
+In git mode, the commit actions follow (see [Commits](#commits)), dimmed for an
+entry with no commit on either side:
+
+    m  Commit message  commit that last changed it, as git show
+    d  Commit diff     trees before and after that commit
 
 **j**, **k** and the other keys that move through Help move the selection, and
 **Enter** runs the selected action, as does its key at once. **Esc** closes the
@@ -680,6 +723,10 @@ lines, the whole file is shown.
 - **f**: Show the full files, or only the changes with context.
 
 - **e**: Edit a side (see [Editing](#editing)).
+
+- **a**: In git mode, show the commit that last changed a side, or compare the
+  trees before and after it, from a popup like the tree's Actions (see
+  [Commits](#commits)).
 
 - **Esc**: Go back to the tree if the diff view was opened from it. In a session
   started on two files or streams, do nothing.

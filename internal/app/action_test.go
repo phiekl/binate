@@ -41,6 +41,10 @@ func TestActions(t *testing.T) {
 		if ts.actions == nil {
 			t.Fatal("a did not open the Actions popup")
 		}
+		// Outside git mode, without the commit actions.
+		if len(ts.actions.Rows) != len(actions) {
+			t.Errorf("%d actions, want %d", len(ts.actions.Rows), len(actions))
+		}
 		ts.Key(term.Rune(key))
 		if ts.actions != nil {
 			t.Fatalf("%c left the Actions popup open", key)

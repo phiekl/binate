@@ -65,10 +65,10 @@ var TreeHelp = []HelpLine{
 	key("recall earlier queries in the bar", "Up", "Down"),
 	key("next match while searching", "n"),
 	key("previous match while searching", "N"),
-	key("close an action's result, end the search, or clear the filter", "Esc"),
+	key(treeEsc, "Esc"),
 	key("edit the entry in $VISUAL or $EDITOR", "e"),
 	key("choose what to compare", "c"),
-	key("run an action, as a checksum, on the entry", "a"),
+	key("run an action on the entry, as a checksum or showing its commit", "a"),
 	key("rescan", "r"),
 	key("exit binate", "Ctrl+c"),
 	{},
@@ -83,6 +83,41 @@ var TreeHelp = []HelpLine{
 	key("on the left side only", "<"),
 	key("on the right side only", ">"),
 	key("different entry types", "!"),
+}
+
+// treeEsc is what Esc does in the tree, and treeEscBack in one opened
+// from another view, as a commit's trees.
+const (
+	treeEsc     = "close an action's result, end the search, or clear the filter"
+	treeEscBack = "close an action's result, end the search, clear the filter, or go back"
+)
+
+// TreeHelpFor returns the tree view's keys, with Esc going back once
+// nothing else is left to close if back is set.
+func TreeHelpFor(back bool) []HelpLine {
+	lines := append([]HelpLine{}, TreeHelp...)
+	if back {
+		for i, l := range lines {
+			if l.Text == treeEsc {
+				lines[i].Text = treeEscBack
+			}
+		}
+	}
+	return lines
+}
+
+// TextHelp lists the keys of the view of a text, as a commit's message.
+var TextHelp = []HelpLine{
+	{Text: "Keyboard shortcuts"},
+	{},
+	key("scroll down", "j", "Down"),
+	key("scroll up", "k", "Up"),
+	key("scroll down a screen", "Ctrl+f", "PgDn"),
+	key("scroll up a screen", "Ctrl+b", "PgUp"),
+	key("go to the start", "gg", "Home"),
+	key("go to the end", "G", "End"),
+	key("go back", "Esc"),
+	key("exit binate", "Ctrl+c"),
 }
 
 // DiffHelp returns the diff view's keys, with Esc going back to the tree if
@@ -117,6 +152,7 @@ var diffHelp = []HelpLine{
 	key("wrap long lines", "w"),
 	key("full file or changes with context", "f"),
 	key("edit a side in $VISUAL or $EDITOR", "e"),
+	key("show or compare the commit that last changed a side (git)", "a"),
 	key("exit binate", "Ctrl+c"),
 	{},
 	{Text: "Comparison marks"},

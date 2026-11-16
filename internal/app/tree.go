@@ -29,8 +29,10 @@ type TreeScreen struct {
 	scan   *scan.Scan
 	model  *tree.Model
 	view   *view.TreeView
-	// expandAfterScan expands the initial tree once every entry is loaded.
+	// expandAfterScan expands the initial tree once every entry is loaded,
+	// and selects the entry at selectPath, if set and there.
 	expandAfterScan bool
+	selectPath      string
 	// pendingG is set after g, which goes to the first row if repeated.
 	pendingG bool
 
@@ -54,6 +56,11 @@ type TreeScreen struct {
 	context int
 
 	edit *editor
+	// commit is the popup choosing whose commit a commit action shows.
+	commit *commitPicker
+	// back returns to the screen the tree was opened from, if any, as for
+	// a commit's trees.
+	back func()
 	// roots are the sides, and unrecorded the attributes they don't
 	// record, which are not compared.
 	roots      [2]source.Root
@@ -82,6 +89,9 @@ type TreeConfig struct {
 	Options     scan.Options
 	// Context is the diff view's number of context lines.
 	Context int
+	// Back, if set, returns to the screen the tree was opened from, once
+	// Esc has nothing else to close.
+	Back func()
 }
 
 // NewTreeScreen starts scanning and returns the tree view.
@@ -92,6 +102,7 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 		opts:            cfg.Options,
 		home:            cfg.Home,
 		context:         cfg.Context,
+		back:            cfg.Back,
 		expandAfterScan: true,
 		view: &view.TreeView{
 			Styles: cfg.Styles, Home: cfg.Home,
@@ -170,6 +181,11 @@ func (t *TreeScreen) Draw(s *term.Screen) {
 	if !scanning && t.expandAfterScan {
 		t.model.ExpandAll()
 		t.expandAfterScan = false
+		if t.selectPath != "" {
+			if n := t.scan.Root.Find(t.selectPath); n != nil {
+				t.model.Reveal(n)
+			}
+		}
 	}
 	scanned, elapsed := t.scan.Progress()
 	t.view.Draw(s, t.model, view.TreeStatus{
@@ -183,6 +199,9 @@ func (t *TreeScreen) Draw(s *term.Screen) {
 	}
 	if t.edit != nil {
 		t.edit.Draw(s, t.styles)
+	}
+	if t.commit != nil {
+		t.commit.Draw(s, t.styles)
 	}
 	if t.compare != nil {
 		t.compare.Draw(s, t.styles)
@@ -202,12 +221,7 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 		}
 	}
 	got, done := t.stats.read(key)
-	var ckey changeKey
-	for i := range 2 {
-		if n.Side(i == 1).Kind != scan.Missing {
-			ckey.sides[i] = historyKey(t.roots[i], n.Path())
-		}
-	}
+	ckey := t.changeKey(n)
 	var changes [2]changeResult
 	changesDone := true
 	if ckey != (changeKey{}) {
@@ -231,6 +245,32 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 	}
 	return sides
+}
+
+// changeKey returns the request for the commits that last changed n's
+// sides.
+func (t *TreeScreen) changeKey(n *scan.Node) changeKey {
+	var ckey changeKey
+	for i := range 2 {
+		if n.Side(i == 1).Kind != scan.Missing {
+			ckey.sides[i] = historyKey(t.roots[i], n.Path())
+		}
+	}
+	return ckey
+}
+
+// startCommit runs the commit action a on the selected entry n, from the
+// Actions popup menu, opened again on going back. The scan's lock must be
+// held.
+func (t *TreeScreen) startCommit(a commitAction, n *scan.Node, menu *view.ActionPopup) {
+	cv := commitView{
+		app: t.app, styles: t.styles, home: t.home,
+		opts: t.opts, context: t.context,
+		back:   func() { t.app.Main = t },
+		repick: func(p *commitPicker) { t.commit = p },
+		reopen: func() { t.actions = menu },
+	}
+	t.commit, t.message = cv.start(a, t.changeKey(n), &t.changes)
 }
 
 // Recheck compares the entry at path again in the background, once the
@@ -302,6 +342,11 @@ func (t *TreeScreen) Key(k term.Key) bool {
 			t.edit = nil
 		}
 		return true
+	case t.commit != nil:
+		if !t.commit.Key(t.last, k) {
+			t.commit = nil
+		}
+		return true
 	case t.help != nil:
 		return helpKey(&t.help, t.last, k)
 	case t.compare != nil:
@@ -322,7 +367,7 @@ func (t *TreeScreen) Key(k term.Key) bool {
 		return true
 	}
 	if k == term.Rune('?') {
-		t.help = view.NewHelp(view.TreeHelp)
+		t.help = view.NewHelp(view.TreeHelpFor(t.back != nil))
 		return true
 	}
 	if k == term.Rune('e') {
@@ -504,13 +549,22 @@ func (t *TreeScreen) treeKey(k term.Key) bool {
 		t.openActions()
 	case k.Code == term.KeyEsc:
 		// Esc closes an action's result first, then ends a search, then
-		// clears the filter.
-		if t.action != nil {
+		// clears the filter, then goes back.
+		switch {
+		case t.action != nil:
 			t.stopAction()
-		} else if m.Search != "" {
+		case m.Search != "":
 			m.Search = ""
-		} else if m.Filtered {
+		case m.Filtered:
 			m.Filtered, m.Query, m.DiffsOnly = false, "", false
+		case t.back != nil:
+			// Not shown again: a commit's trees are compared anew each
+			// time.
+			t.scan.Cancel()
+			t.changes.stop()
+			t.stats.stop()
+			t.previews.stop()
+			t.back()
 		}
 	default:
 		return false
@@ -696,7 +750,7 @@ func (t *TreeScreen) openFile(n *scan.Node) {
 			t.statGen++
 			t.Recheck(path)
 		},
-		Compare: t.opts.Compare,
+		Compare: t.opts.Compare, Excludes: t.opts.Excludes,
 	})
 	if err := d.Load(); err != nil {
 		t.app.ShowError(unableToOpen, errorTexts(err)...)

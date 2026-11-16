@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/bits"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -148,4 +149,32 @@ func (r *Repo) expand(s string) (ID, error) {
 		return ID{}, fmt.Errorf("short object name %s is %w", s, errAmbiguous)
 	}
 	return found[0], nil
+}
+
+// defaultAbbrev is the shortest abbreviation Abbrev returns, as git's
+// default with few objects.
+const defaultAbbrev = 7
+
+// Abbrev returns the shortest abbreviation of id, of at least as many
+// digits as git uses by default for the number of objects packed, that
+// names only id. Unless a smaller one is set in core.abbrev, git uses the
+// same.
+func (r *Repo) Abbrev(id ID) string {
+	var count int
+	for _, pk := range r.packs {
+		count += pk.idx.n
+	}
+	n := max((bits.Len(uint(count))+1)/2, defaultAbbrev)
+	full := id.String()
+	for ; n < len(full); n++ {
+		p, ok := parsePrefix(full[:n])
+		if !ok {
+			break
+		}
+		found, err := r.findPrefix(p)
+		if err != nil || len(found) <= 1 {
+			break
+		}
+	}
+	return full[:min(n, len(full))]
 }

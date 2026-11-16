@@ -86,10 +86,12 @@ The column between the sides marks each pair:
 - **F**: Filter by name.
 - **/**: Search names.
 - **c**: Choose what to compare.
-- **a**: Run an action, such as a SHA-256 checksum.
+- **a**: Run an action, such as a SHA-256 checksum, or in git mode, showing the
+  commit that last changed an entry.
 - **r**: Scan again.
 - **e**: Edit the selected file.
-- **Esc**: Close an action's result, end a search, or clear a filter.
+- **Esc**: Close an action's result, end a search, clear a filter, or leave a
+  commit's trees.
 
 ### Diff view
 
@@ -100,6 +102,7 @@ The column between the sides marks each pair:
 - **f**: Show the full files, or only the changes.
 - **w**: Wrap long lines, or not.
 - **e**: Edit a side.
+- **a**: In git mode, show the commit that last changed a side.
 - **Esc**: Go back to the tree.
 
 ### Everywhere

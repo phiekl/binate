@@ -117,6 +117,22 @@ type Change struct {
 	// Authored is when the change was made, and Committed when it was
 	// recorded, each in the zone recorded.
 	Authored, Committed time.Time
+	// Subject is the first paragraph of its message, in a line.
+	Subject string
+}
+
+// Changes is a History whose changes can be shown, as a git
+// repository's commits.
+type Changes interface {
+	History
+	RepoPaths
+	// ShowChange returns the change id described as "git show --no-patch"
+	// does.
+	ShowChange(id string) (string, error)
+	// ChangeTrees returns the trees before and after the change id, the
+	// one before as of its first parent, or empty if it has none, and its
+	// number of parents.
+	ChangeTrees(id string) (before, after Root, parents int, err error)
 }
 
 // Disk is a side in the file system, at the path given. Its errors carry

@@ -113,6 +113,11 @@ func (r *Root) dir(rel string) (*dir, error) {
 		return nil, unix.ENOTDIR
 	}
 	id := r.tree
+	if id.IsZero() && rel == "" {
+		// The empty tree before a commit without parents, which needn't
+		// be in the repository.
+		return &dir{byName: map[string]TreeEntry{}}, nil
+	}
 	if rel != "" {
 		e, err := r.lookup(rel)
 		if err != nil {
@@ -332,7 +337,7 @@ func (r *Root) LastChange(ctx context.Context, rel string) (source.Change, error
 	}
 	ch = source.Change{
 		ID: id.String(), AuthorName: c.AuthorName, AuthorEmail: c.AuthorEmail,
-		Authored: c.Author, Committed: c.Committer,
+		Authored: c.Author, Committed: c.Committer, Subject: c.Subject(),
 	}
 	r.mu.Lock()
 	if r.changes == nil {
@@ -341,6 +346,42 @@ func (r *Root) LastChange(ctx context.Context, rel string) (source.Change, error
 	r.changes[full] = ch
 	r.mu.Unlock()
 	return ch, nil
+}
+
+// ShowChange returns the commit id as "git show --no-patch" shows it.
+func (r *Root) ShowChange(id string) (string, error) {
+	cid, err := ParseID(r.repo.format, id)
+	if err != nil {
+		return "", err
+	}
+	return r.repo.Show(cid)
+}
+
+// ChangeTrees returns the trees before and after the commit id: its first
+// parent's, or an empty one named "(no parent)" if it has none, and its
+// own, each with its commit's history, named by the commit abbreviated,
+// with a ^ for the parent. parents is the number of parents.
+func (r *Root) ChangeTrees(id string) (before, after source.Root, parents int, err error) {
+	cid, err := ParseID(r.repo.format, id)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	c, err := r.repo.ReadCommit(cid)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	name := r.repo.Abbrev(cid)
+	after = NewTargetRoot(r.repo, Target{ID: c.Tree, Mode: ModeTree, Commit: cid}, name)
+	if len(c.Parents) == 0 {
+		return &Root{repo: r.repo, name: "(no parent)", dirs: map[string]*dir{}}, after, 0, nil
+	}
+	p := c.Parents[0]
+	pc, err := r.repo.ReadCommit(p)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	before = NewTargetRoot(r.repo, Target{ID: pc.Tree, Mode: ModeTree, Commit: p}, name+"^")
+	return before, after, len(c.Parents), nil
 }
 
 // file is a blob open for reading.

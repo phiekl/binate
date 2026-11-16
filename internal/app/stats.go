@@ -28,6 +28,8 @@ type reader[K loader[V], V any] struct {
 	got  V
 	// busy is set while a read runs; it reads want next if that changed.
 	busy bool
+	// stopped is set when the owning screen is discarded.
+	stopped bool
 	// cancel cancels the read running.
 	cancel context.CancelFunc
 }
@@ -129,6 +131,10 @@ func changeSide(sk sideKey, res changeResult, done bool) *view.Change {
 func (r *reader[K, V]) read(key K) (V, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.stopped {
+		var zero V
+		return zero, false
+	}
 	if key != r.want {
 		var zero V
 		r.want, r.done, r.got = key, false, zero
@@ -153,6 +159,11 @@ func (r *reader[K, V]) fetch(key K) {
 		r.mu.Lock()
 		canceled := ctx.Err() != nil
 		cancel()
+		if r.stopped {
+			r.busy = false
+			r.mu.Unlock()
+			return
+		}
 		if key != r.want || canceled {
 			r.fetch(r.want)
 			r.mu.Unlock()
@@ -207,4 +218,17 @@ func statSide(res statResult, done bool, names *stat.Names) view.StatSide {
 		sd.User, sd.Group = names.User(sd.Stat.Uid), names.Group(sd.Stat.Gid)
 	}
 	return sd
+}
+
+// stop cancels the current read and prevents any further reads or results.
+// Loaders that cannot be interrupted finish without waking the app.
+func (r *reader[K, V]) stop() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopped = true
+	if r.cancel != nil {
+		r.cancel()
+	}
+	var zero V
+	r.got, r.done = zero, false
 }

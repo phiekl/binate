@@ -1211,7 +1211,81 @@ func TestGitTrees(t *testing.T) {
 	pt.Write("e")
 	screen("Files in git revisions can't be edited.")
 	pt.Write("j")
+
+	// The Actions popup's m shows a side's commit, chosen as the sides'
+	// differ, as git show does.
+	first, second := gitRev(t, repo, "HEAD~"), gitRev(t, repo, "HEAD")
+	pt.Write("a")
+	scr = screen("trees before and after that commit")
+	if !regexp.MustCompile(`m  Commit message +commit that last changed it`).MatchString(scr) || !strings.Contains(scr, "d  Commit diff") {
+		t.Errorf("Actions without the commit actions:\n%s", scr)
+	}
+	pt.Write("m")
+	scr = screen("Select side's commit to show")
+	if !strings.Contains(scr, first[:12]+" first") || !strings.Contains(scr, second[:12]+" second") {
+		t.Errorf("popup without the commits:\n%s", scr)
+	}
+	pt.Write("l")
+	scr = screen("commit " + second)
+	for _, want := range []string{"(commit) " + second[:12] + " second", "Author: a <a@example.org>", "Date:   " + gitAuthored[1].Format("Mon Jan 2 15:04:05 2006 -0700"), "    second"} {
+		if !strings.Contains(scr, want) {
+			t.Errorf("message without %q:\n%s", want, scr)
+		}
+	}
+	// Esc goes back to the popup, the side chosen selected, to choose the
+	// other, and closes it then.
+	pressEsc(pt)
+	scr = screen("Select side's commit to show")
+	if !regexp.MustCompile(`l → +` + second[:12]).MatchString(scr) {
+		t.Errorf("popup not shown again:\n%s", scr)
+	}
+	pt.Write("h")
+	screen("commit " + first)
+	pressEsc(pt)
+	screen("Select side's commit to show")
+	// Then to the Actions popup, the action selected.
+	pressEsc(pt)
+	actions := "Enter or a key runs, Esc closes"
+	scr = screen(actions)
+	if strings.Contains(scr, "Select side's commit") {
+		t.Errorf("the side's popup is still open:\n%s", scr)
+	}
+	pressEsc(pt)
+	screen("[1 identical] [1 left] [1 right] [1 contents]")
+	// d compares the trees before and after it: the first commit's with
+	// none, the entry selected.
+	pt.Write("ad")
+	screen("Select side's commit to compare")
+	pt.Write("h")
+	// The panels are read after the trees are drawn: wait for both.
+	short := first[:7]
+	screen("[3 right]")
+	scr = screen("path │ " + short + ":dir/changed")
+	if !strings.Contains(scr, "(no parent)") || !strings.Contains(scr, "[3 right]") {
+		t.Errorf("the first commit's trees:\n%s", scr)
+	}
+	pressEsc(pt)
+	screen("Select side's commit to compare")
+	pressEsc(pt)
+	screen(actions)
+	pressEsc(pt)
+	screen("[1 identical] [1 left] [1 right] [1 contents]")
+
 	pt.Write("\r")
+	screen("| │2 TWO")
+	// From the diff view too, back to it.
+	pt.Write("ad")
+	pt.Write("l")
+	screen("[1 left] [1 right] [1 contents]")
+	scr = screen("path │ " + second[:7] + "^:dir/changed")
+	if !strings.Contains(scr, "[1 left] [1 right] [1 contents]") {
+		t.Errorf("the second commit's trees:\n%s", scr)
+	}
+	pressEsc(pt)
+	screen("Select side's commit to compare")
+	pressEsc(pt)
+	screen(actions)
+	pressEsc(pt)
 	screen("| │2 TWO")
 	pt.Write("\x1b")
 	screen("[1 contents]")

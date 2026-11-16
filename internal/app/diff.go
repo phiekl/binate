@@ -111,6 +111,13 @@ type DiffScreen struct {
 	edited func()
 	home   string
 	edit   *editor
+	// actions is the Actions popup, of the commit actions alone, and
+	// commit the popup choosing whose commit one shows.
+	actions *view.ActionPopup
+	commit  *commitPicker
+	// opts and context are what a commit's trees are compared with.
+	opts    scan.Options
+	context int
 	// loaded, while streams are read, receives them once read.
 	loaded chan [2]Source
 	// stats reads the files' metadata, again once statGen is raised, as
@@ -135,6 +142,9 @@ type DiffConfig struct {
 	// Compare is the attributes whose differences the panels mark: the
 	// tree's, or --compare's for two files; 0 means the default.
 	Compare scan.Attrs
+	// Excludes are the names left out of a commit's trees, as of the
+	// tree the diff view was opened from.
+	Excludes []string
 }
 
 // NewDiffScreen returns the diff view on two sides, not yet loaded.
@@ -152,6 +162,8 @@ func NewDiffScreen(a *App, cfg DiffConfig) *DiffScreen {
 		back:    cfg.Back,
 		edited:  cfg.Edited,
 		home:    cfg.Home,
+		opts:    scan.Options{Compare: cfg.Compare, Excludes: cfg.Excludes},
+		context: cfg.Context,
 		stats:   statReader{app: a},
 		changes: changeReader{app: a},
 	}
@@ -360,6 +372,12 @@ func (d *DiffScreen) Draw(s *term.Screen) {
 	if d.edit != nil {
 		d.edit.Draw(s, d.styles)
 	}
+	if d.actions != nil {
+		d.actions.Draw(s, d.styles)
+	}
+	if d.commit != nil {
+		d.commit.Draw(s, d.styles)
+	}
 }
 
 // panelStats returns what the panels show of the two sides.
@@ -372,12 +390,7 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 		}
 	}
 	got, done := d.stats.read(key)
-	var ckey changeKey
-	for i, src := range srcs {
-		if !src.Missing && !src.Stream {
-			ckey.sides[i] = historyKey(src.Root, src.Rel)
-		}
-	}
+	ckey := d.changeKey()
 	var changes [2]changeResult
 	changesDone := true
 	if ckey != (changeKey{}) {
@@ -401,6 +414,50 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 	}
 	return sides
+}
+
+// changeKey returns the request for the commits that last changed the
+// sides.
+func (d *DiffScreen) changeKey() changeKey {
+	var ckey changeKey
+	for i, src := range [2]*Source{&d.left, &d.right} {
+		if !src.Missing && !src.Stream {
+			ckey.sides[i] = historyKey(src.Root, src.Rel)
+		}
+	}
+	return ckey
+}
+
+// startCommit runs the commit action a on the sides, from the Actions
+// popup menu, opened again on going back.
+func (d *DiffScreen) startCommit(a commitAction, menu *view.ActionPopup) {
+	cv := commitView{
+		app: d.app, styles: d.styles, home: d.home,
+		opts: d.opts, context: d.context,
+		back:   func() { d.app.Main = d },
+		repick: func(p *commitPicker) { d.commit = p },
+		reopen: func() { d.actions = menu },
+	}
+	d.commit, d.view.Notice = cv.start(a, d.changeKey(), &d.changes)
+}
+
+// actionKey handles a key in the Actions popup, of the commit actions
+// alone: the keys that move through Help move the selection, Enter runs
+// the selected action, as does its key, and Esc closes the popup.
+func (d *DiffScreen) actionKey(k term.Key) {
+	p := d.actions
+	switch {
+	case listKey(p.Help, d.last, k):
+	case k.Code == term.KeyEnter || k.Code == term.KeyRune && !k.Alt && p.SelectKey(k.Rune):
+		d.actions = nil
+		if why := p.Rows[p.Row()].Why; why != "" {
+			d.view.Notice = why
+			return
+		}
+		d.startCommit(commitActions[p.Row()], p)
+	case k.Code == term.KeyEsc:
+		d.actions = nil
+	}
 }
 
 // startEdit edits a side, then reads both sides again: whether or not the
@@ -431,6 +488,16 @@ func (d *DiffScreen) Key(k term.Key) bool {
 		if !d.edit.Key(k) {
 			d.edit = nil
 		}
+		return true
+	}
+	if d.commit != nil {
+		if !d.commit.Key(d.last, k) {
+			d.commit = nil
+		}
+		return true
+	}
+	if d.actions != nil {
+		d.actionKey(k)
 		return true
 	}
 	if d.help != nil {
@@ -483,6 +550,8 @@ func (d *DiffScreen) Key(k term.Key) bool {
 		d.help = view.NewHelp(view.DiffHelp(d.back != nil))
 	case k == term.Rune('e'):
 		d.startEdit()
+	case k == term.Rune('a') && hasCommits(d.left.Root, d.right.Root):
+		d.actions = view.NewActionPopup(commitRows(d.changeKey()))
 	case k.Code == term.KeyEsc:
 		// Esc goes back to the tree, but never quits.
 		if d.back != nil {

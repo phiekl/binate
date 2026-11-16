@@ -5,6 +5,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"sync"
@@ -191,6 +192,14 @@ func (t *TreeScreen) openActions() {
 		a := &actions[i]
 		rows[i] = view.ActionRow{Key: a.key, Name: a.name, What: a.what, Why: a.why(n)}
 	}
+	// In git mode, the commit actions follow.
+	if hasCommits(t.roots[0], t.roots[1]) {
+		var ckey changeKey
+		if n != nil {
+			ckey = t.changeKey(n)
+		}
+		rows = append(rows, commitRows(ckey)...)
+	}
 	t.actions = view.NewActionPopup(rows)
 }
 
@@ -202,8 +211,16 @@ func (t *TreeScreen) actionKey(k term.Key) {
 	case listKey(p.Help, t.last, k):
 	case k.Code == term.KeyEnter || k.Code == term.KeyRune && !k.Alt && p.SelectKey(k.Rune):
 		t.actions = nil
-		a := &actions[p.Row()]
 		n := t.model.SelectedNode()
+		if i := p.Row() - len(actions); i >= 0 {
+			if why := p.Rows[p.Row()].Why; why != "" || n == nil {
+				t.message = cmp.Or(why, "nothing is selected")
+				return
+			}
+			t.startCommit(commitActions[i], n, p)
+			return
+		}
+		a := &actions[p.Row()]
 		if why := a.why(n); why != "" {
 			t.message = why
 			return
