@@ -5,7 +5,6 @@
 package git
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +36,12 @@ func OpenRepo(dir string, f *Format) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openRepo(dirs, f)
+}
+
+// openRepo returns the repository whose objects directories, alternates
+// and all, are dirs.
+func openRepo(dirs []string, f *Format) (*Repo, error) {
 	r := &Repo{format: f, dirs: dirs, cache: baseCache{limit: defaultCacheLimit}}
 	for _, d := range r.dirs {
 		if err := r.openPacks(d); err != nil {
@@ -209,6 +214,11 @@ func (r *Repo) Open(id ID) (Object, error) {
 	if p != nil {
 		return p.open(off, id)
 	}
+	return r.openLoose(id)
+}
+
+// openLoose searches the loose objects after packs have been searched.
+func (r *Repo) openLoose(id ID) (Object, error) {
 	for _, dir := range r.dirs {
 		obj, err := openLoose(dir, id)
 		if !errors.Is(err, ErrNotFound) {
@@ -242,7 +252,7 @@ func (r *Repo) info(id ID, depth int) (Type, int64, error) {
 	if p != nil {
 		return p.info(off, id, depth)
 	}
-	obj, err := r.Open(id)
+	obj, err := r.openLoose(id)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -260,8 +270,12 @@ func (r *Repo) Size(id ID) (int64, error) {
 	if p != nil {
 		return p.size(off, id)
 	}
-	_, size, err := r.info(id, 0)
-	return size, err
+	obj, err := r.openLoose(id)
+	if err != nil {
+		return 0, err
+	}
+	_ = obj.Close()
+	return obj.Size, nil
 }
 
 // Info returns the type and size of the object id.
@@ -276,6 +290,11 @@ func (r *Repo) Read(id ID, max int64) (Type, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	return readObject(id, obj, max)
+}
+
+// readObject reads and closes an already opened object.
+func readObject(id ID, obj Object, max int64) (Type, []byte, error) {
 	defer func() { _ = obj.Close() }()
 	if obj.Size > max {
 		return 0, nil, fmt.Errorf("%s: %s of %d bytes, larger than %d", id, obj.Type, obj.Size, max)
@@ -322,53 +341,16 @@ const maxPeel = 32
 // PeelTree returns the tree id names: id itself if a tree, a commit's
 // tree, or that of what a tag points to.
 func (r *Repo) PeelTree(id ID) (ID, error) {
-	for range maxPeel {
-		typ, data, err := r.Read(id, maxTree)
-		if err != nil {
-			return ID{}, err
-		}
-		switch typ {
-		case Tree:
-			return id, nil
-		case Commit:
-			tree, ok := header(data, "tree")
-			if !ok {
-				return ID{}, corrupt(id, "commit without a tree")
-			}
-			t, err := ParseID(r.format, tree)
-			if err != nil {
-				return ID{}, corrupt(id, "%v", err)
-			}
-			return t, nil
-		case Tag:
-			obj, ok := header(data, "object")
-			if !ok {
-				return ID{}, corrupt(id, "tag without an object")
-			}
-			next, err := ParseID(r.format, obj)
-			if err != nil {
-				return ID{}, corrupt(id, "%v", err)
-			}
-			id = next
-		default:
-			return ID{}, fmt.Errorf("%s is a %s, not a tree, commit or tag", id, typ)
-		}
-	}
-	return ID{}, fmt.Errorf("%s: more than %d tags in a row", id, maxPeel)
+	return r.peelTo(id, Tree)
 }
 
 // header returns the value of the header field name of a commit or tag:
 // the lines before the first empty one.
 func header(data []byte, name string) (string, bool) {
-	for len(data) > 0 {
-		line, rest, _ := bytes.Cut(data, []byte{'\n'})
-		if len(line) == 0 {
-			break
+	for line := range headerLines(data) {
+		if k, v, ok := strings.Cut(line, " "); ok && k == name {
+			return v, true
 		}
-		if k, v, ok := bytes.Cut(line, []byte{' '}); ok && string(k) == name {
-			return string(v), true
-		}
-		data = rest
 	}
 	return "", false
 }

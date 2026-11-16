@@ -1,0 +1,511 @@
+// SPDX-FileCopyrightText: 2026 Philip Eklöf
+//
+// SPDX-License-Identifier: MIT
+
+package git
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// noEnv is an environment without git's variables.
+func noEnv(string) string { return "" }
+
+func TestDiscover(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"a/b/f": "x"})
+	r.commit()
+	gitDir := filepath.Join(r.dir, ".git")
+
+	for _, tc := range []struct{ from, prefix string }{
+		{r.dir, ""},
+		{filepath.Join(r.dir, "a"), "a"},
+		{filepath.Join(r.dir, "a", "b"), "a/b"},
+	} {
+		loc, err := Discover(tc.from, noEnv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loc.GitDir != gitDir || loc.CommonDir != gitDir || loc.WorkTree != r.dir || loc.Prefix != tc.prefix {
+			t.Errorf("from %s: %+v", tc.from, loc)
+		}
+		if want := []string{filepath.Join(gitDir, "objects")}; !slices.Equal(loc.ObjectDirs, want) {
+			t.Errorf("objects %q", loc.ObjectDirs)
+		}
+	}
+	// Inside the git directory, it is a bare repository.
+	if loc, err := Discover(filepath.Join(gitDir, "objects"), noEnv); err != nil || loc.GitDir != gitDir || loc.WorkTree != "" {
+		t.Errorf("inside .git: %+v, %v", loc, err)
+	}
+
+	// A linked work tree shares the objects and refs.
+	linked := filepath.Join(t.TempDir(), "linked")
+	r.git("worktree", "add", "-q", linked)
+	loc, err := Discover(linked, noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.CommonDir != gitDir || filepath.Dir(loc.GitDir) != filepath.Join(gitDir, "worktrees") || loc.WorkTree != linked {
+		t.Errorf("linked: %+v", loc)
+	}
+	if dirs := loc.ReadDirs(); !slices.Equal(dirs, []string{loc.GitDir, gitDir}) {
+		t.Errorf("linked reads %q", dirs)
+	}
+
+	// GIT_DIR names the repository, and no work tree is assumed.
+	env := func(k string) string {
+		if k == "GIT_DIR" {
+			return gitDir
+		}
+		return ""
+	}
+	if loc, err := Discover(t.TempDir(), env); err != nil || loc.GitDir != gitDir || loc.WorkTree != "" {
+		t.Errorf("GIT_DIR: %+v, %v", loc, err)
+	}
+
+	// The search stops at a ceiling, above the directory searched from.
+	ceiling := func(k string) string {
+		if k == "GIT_CEILING_DIRECTORIES" {
+			return r.dir
+		}
+		return ""
+	}
+	if _, err := Discover(filepath.Join(r.dir, "a"), ceiling); err == nil {
+		t.Error("searched past the ceiling")
+	}
+	if _, err := Discover(t.TempDir(), noEnv); err == nil {
+		t.Error("found a repository outside one")
+	}
+}
+
+func TestDiscoverBare(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.commit()
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	r.git("clone", "-q", "--bare", r.dir, bare)
+	loc, err := Discover(filepath.Join(bare, "refs"), noEnv)
+	if err != nil || loc.GitDir != bare || loc.WorkTree != "" {
+		t.Errorf("%+v, %v", loc, err)
+	}
+}
+
+func TestDiscoverGitFile(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	r := &testRepo{t: t, dir: t.TempDir(), format: SHA1}
+	sep := filepath.Join(t.TempDir(), "sep.git")
+	r.git("init", "-q", "--separate-git-dir="+sep)
+	loc, err := Discover(r.dir, noEnv)
+	if err != nil || loc.GitDir != sep || loc.WorkTree != r.dir {
+		t.Errorf("%+v, %v", loc, err)
+	}
+	if err := os.WriteFile(filepath.Join(r.dir, ".git"), []byte("not a gitfile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Discover(r.dir, noEnv); err == nil {
+		t.Error("read an invalid gitfile")
+	}
+}
+
+func TestParseConfig(t *testing.T) {
+	data := "\ufeff# comment\n" +
+		"[core]\n" +
+		"\trepositoryFormatVersion = 1 ; comment\n" +
+		"\tbare\n" +
+		"[Extensions]\n" +
+		"  objectFormat = \"sha256\"\n" +
+		"[remote \"Origin \\\"x\\\"\"]\n" +
+		"\turl = a\\\n  b # comment\n" +
+		"\tname = \" spaced \"  \"out\"\n" +
+		"\tesc = a\\tb\\nc\\\\d\\\"\n" +
+		"[old.Sub]\n" +
+		"\tk = v1\n" +
+		"\tk = v2\n"
+	c, err := parseConfig(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"core.repositoryformatversion": "1",
+		"core.bare":                    "",
+		"extensions.objectformat":      "sha256",
+		`remote.Origin "x".url`:        "a  b",
+		`remote.Origin "x".name`:       " spaced   out",
+		`remote.Origin "x".esc`:        "a\tb\nc\\d\"",
+		"old.sub.k":                    "v2",
+	} {
+		if got, ok := c.get(name); !ok || got != want {
+			t.Errorf("%s: %q, %v", name, got, ok)
+		}
+	}
+	for _, bad := range []string{
+		"k = v\n",
+		"[core\n",
+		"[core \"x]\n",
+		"[core]\nk = \"open\n",
+		"[core]\nk = \\q\n",
+		"[core]\n=v\n",
+		"[]\n",
+		"[co re]\n",
+	} {
+		if _, err := parseConfig(bad); err == nil {
+			t.Errorf("parsed %q", bad)
+		}
+	}
+}
+
+func FuzzParseConfig(f *testing.F) {
+	f.Add("[core]\n\trepositoryformatversion = 1\n[extensions]\nobjectformat = sha256\n")
+	f.Add("[remote \"o\"]\n\turl = \"a\\\"b\" # c\n")
+	f.Fuzz(func(t *testing.T, data string) {
+		c, err := parseConfig(data)
+		if err != nil {
+			return
+		}
+		for name, values := range c {
+			if len(values) == 0 || !strings.Contains(name, ".") {
+				t.Errorf("%q: %q", name, values)
+			}
+		}
+	})
+}
+
+func TestRepositoryFormat(t *testing.T) {
+	for _, tc := range []struct {
+		config string
+		want   *Format
+	}{
+		{"", SHA1},
+		{"[core]\nrepositoryformatversion = 0\n", SHA1},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = sha256\n", SHA256},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectFormat = SHA1\nrefStorage = files\n", SHA1},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\npartialclone = origin\nworktreeconfig\npreciousobjects\nnoop-v1\n", SHA1},
+		// Version 0 ignores extensions it doesn't know.
+		{"[core]\nrepositoryformatversion = 0\n[extensions]\nsomething = x\n", SHA1},
+		{"[core]\nrepositoryformatversion = 2\n", nil},
+		{"[core]\nrepositoryformatversion = x\n", nil},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nsomething = x\n", nil},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nrefstorage = reftable\n", nil},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = md5\n", nil},
+		{"[core]\nrepositoryformatversion = 0\n[extensions]\nobjectformat = sha256\n", nil},
+	} {
+		c, err := parseConfig(tc.config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := repositoryFormat(c)
+		if got != tc.want || (err == nil) != (tc.want != nil) {
+			t.Errorf("%q: %v, %v", tc.config, got, err)
+		}
+	}
+}
+
+// openTest opens the test repository, found from its work tree's
+// directory sub.
+func openTest(t *testing.T, r *testRepo, sub string) *Repository {
+	t.Helper()
+	loc, err := Discover(filepath.Join(r.dir, sub), noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Open(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(repo.Close)
+	return repo
+}
+
+func TestOpenReftable(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	if err := os.RemoveAll(filepath.Join(r.dir, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	r.git("init", "-q", "--ref-format=reftable")
+	loc, err := Discover(r.dir, noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(loc); err == nil || !strings.Contains(err.Error(), "reftable") {
+		t.Errorf("opened a reftable repository: %v", err)
+	}
+}
+
+func TestCheckRefName(t *testing.T) {
+	for _, ok := range []string{"HEAD", "ORIG_HEAD", "FETCH_HEAD", "refs/heads/main", "refs/tags/v1.0", "refs/heads/a-b/c_d"} {
+		if err := checkRefName(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "head", "main", "_X", "refs/heads/", "refs//x", "refs/heads/../../config",
+		"refs/heads/.hidden", "refs/heads/x.lock", "refs/heads/a b", "refs/heads/a~1",
+		"refs/heads/a^", "refs/heads/a:b", "refs/heads/a?", "refs/heads/a*", "refs/heads/a[",
+		"refs/heads/a\\b", "refs/heads/a@{1}", "refs/heads/a.", "refs/heads/\x01", "/refs/heads/x",
+	} {
+		if checkRefName(bad) == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+func TestParsePackedRefs(t *testing.T) {
+	id := strings.Repeat("ab", 20)
+	refs, err := parsePackedRefs("# pack-refs with: peeled fully-peeled sorted \n"+
+		id+" refs/heads/main\n"+id+" refs/tags/v1\n^"+id+"\n", SHA1)
+	if err != nil || len(refs) != 2 {
+		t.Fatalf("%v, %v", refs, err)
+	}
+	for _, bad := range []string{
+		id + "\n",
+		id + " HEAD\n",
+		id + " refs/heads/../x\n",
+		"xyz refs/heads/x\n",
+		"^xyz\n",
+		id + " refs/heads/x\n# late comment\n",
+	} {
+		if _, err := parsePackedRefs(bad, SHA1); err == nil {
+			t.Errorf("parsed %q", bad)
+		}
+	}
+}
+
+// revRepo makes a repository with history to resolve revisions in: two
+// branches merged, tags, a remote's branches and a symref.
+func revRepo(t testing.TB) *testRepo {
+	t.Helper()
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"f": "1", "dir/sub/g": "g", "dir/x": "x"})
+	r.commit()
+	r.git("branch", "-M", "main")
+	r.git("tag", "light")
+	r.git("tag", "-a", "-m", "annotated", "v1")
+	r.git("tag", "-a", "-m", "of a tag", "v1-outer", "v1")
+	r.write(map[string]string{"f": "2"})
+	r.commit()
+	r.git("checkout", "-q", "-b", "side", "HEAD~1")
+	r.write(map[string]string{"side": "s"})
+	r.commit()
+	r.git("checkout", "-q", "main")
+	r.git("merge", "-q", "--no-edit", "side")
+	r.write(map[string]string{"f": "3"})
+	r.commit()
+	r.git("update-ref", "refs/remotes/origin/main", "HEAD~1")
+	r.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	r.git("tag", "-a", "-m", "blob", "blobtag", "HEAD:f")
+	return r
+}
+
+// gitTarget returns what git resolves rev to, as Resolve should: a tree,
+// or a blob.
+func (r *testRepo) gitTarget(rev string) string {
+	r.t.Helper()
+	if !strings.Contains(rev, ":") {
+		rev += "^{}"
+	}
+	id := strings.TrimSpace(r.git("rev-parse", "--verify", "-q", rev))
+	if strings.TrimSpace(r.git("cat-file", "-t", id)) == "commit" {
+		return strings.TrimSpace(r.git("rev-parse", id+"^{tree}"))
+	}
+	return id
+}
+
+func TestResolve(t *testing.T) {
+	r := revRepo(t)
+	head := r.id("HEAD").String()
+	revs := []string{
+		"HEAD", "@", "main", "refs/heads/main", "heads/main", "side", "HEAD~", "HEAD~2", "HEAD^", "HEAD^1",
+		"HEAD^0", "HEAD~1^2", "@~1", "HEAD^^", "HEAD~0", "light", "v1", "tags/v1", "v1^{}",
+		"v1^{commit}", "v1-outer", "v1-outer^{}", "v1-outer^{tag}", "HEAD^{tree}", "HEAD^{commit}", "HEAD^{object}",
+		"origin", "origin/main", "remotes/origin/main", "HEAD:", "HEAD:dir", "HEAD:dir/", "HEAD:dir/sub/g",
+		"HEAD:f", "HEAD~2:f", "v1:dir/x", "blobtag", "blobtag^{blob}", head, head[:7], head[:4],
+		"HEAD:./dir", "HEAD:./dir/../f", "HEAD:./",
+	}
+	for _, packed := range []bool{false, true} {
+		if packed {
+			r.git("pack-refs", "--all")
+		}
+		repo := openTest(t, r, "")
+		for _, rev := range revs {
+			got, err := repo.Resolve(rev)
+			if err != nil {
+				t.Errorf("packed %v, %s: %v", packed, rev, err)
+				continue
+			}
+			if want := r.gitTarget(rev); got.ID.String() != want {
+				t.Errorf("packed %v, %s: %s, want %s", packed, rev, got.ID, want)
+			}
+		}
+	}
+
+	// From a subdirectory, ./ and ../ are relative to it.
+	repo := openTest(t, r, "dir")
+	for rev, want := range map[string]string{"HEAD:./x": "HEAD:dir/x", "HEAD:../f": "HEAD:f", "HEAD:../": "HEAD:", "HEAD:./": "HEAD:dir", "HEAD:sub/g": "HEAD:sub/g"} {
+		got, err := repo.Resolve(rev)
+		if want == "HEAD:sub/g" {
+			if err == nil {
+				t.Errorf("%s: resolved from the root to %s", rev, got.ID)
+			}
+			continue
+		}
+		if err != nil || got.ID.String() != r.gitTarget(want) {
+			t.Errorf("%s: %s, %v", rev, got.ID, err)
+		}
+	}
+	if got, err := repo.Resolve("HEAD:f"); err != nil || got.Mode != ModeFile {
+		t.Errorf("file: %+v, %v", got, err)
+	}
+	if got, err := repo.Resolve("HEAD"); err != nil || !got.IsTree() {
+		t.Errorf("tree: %+v, %v", got, err)
+	}
+
+	for _, rev := range []string{
+		"nope", "HEAD~9", "HEAD^2", "HEAD~1^3", "HEAD@{1}", "@{u}", ":f", ":/msg", "HEAD^{/msg}", "HEAD^{nope}",
+		"HEAD..main", "HEAD^!", "HEAD^@", "^HEAD", "HEAD:nope", "HEAD:f/x", "HEAD:../x", "v1^{blob}",
+		"HEAD^{", "refs/heads/../../config", "HEAD:dir/../f", "HEAD:/f", "HEAD:dir//x", "HEAD^99999999999",
+	} {
+		if got, err := repo.Resolve(rev); err == nil {
+			t.Errorf("resolved %s to %s", rev, got.ID)
+		}
+	}
+	if _, err := repo.Resolve(":f"); !errors.Is(err, errUnsupported) {
+		t.Errorf(":f: %v", err)
+	}
+}
+
+func TestResolveAmbiguous(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	// Enough blobs for two to share their first four hex digits.
+	dir := t.TempDir()
+	var paths []string
+	for i := range 1500 {
+		p := filepath.Join(dir, strings.Repeat("x", 1+i%5)+string(rune('a'+i%26))+strings.Repeat("y", i/26))
+		if err := os.WriteFile(p, []byte(p), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	out := r.git(append([]string{"hash-object", "-w", "--"}, paths...)...)
+	seen := map[string]string{}
+	var short, one string
+	for id := range strings.FieldsSeq(out) {
+		if _, dup := seen[id[:4]]; dup && short == "" {
+			short = id[:4]
+		}
+		seen[id[:4]] = id
+		one = id
+	}
+	if short == "" {
+		t.Skip("no two blobs share a prefix")
+	}
+	for _, packed := range []bool{false, true} {
+		if packed {
+			r.git("repack", "-adq")
+		}
+		repo := openTest(t, r, "")
+		if _, err := repo.Resolve(short); !errors.Is(err, errAmbiguous) {
+			t.Errorf("packed %v, %s: %v", packed, short, err)
+		}
+		if got, err := repo.Resolve(one[:12]); err != nil || got.ID.String() != one {
+			t.Errorf("packed %v, %s: %v, %v", packed, one[:12], got.ID, err)
+		}
+		if got, err := repo.Resolve(one[:11]); err != nil || got.ID.String() != one {
+			t.Errorf("packed %v, odd %s: %v, %v", packed, one[:11], got.ID, err)
+		}
+	}
+}
+
+func TestTargetRoot(t *testing.T) {
+	r := revRepo(t)
+	repo := openTest(t, r, "")
+	target, err := repo.Resolve("HEAD:f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := NewTargetRoot(repo.Repo, target, "HEAD:f")
+	if !root.IsFile() || root.Path("") != "HEAD:f" {
+		t.Errorf("file root %v %q", root.IsFile(), root.Path(""))
+	}
+	e, err := root.Entry("", false)
+	if err != nil || e.Mode&0o170000 != 0o100000 || e.Size != 1 {
+		t.Errorf("Entry: %+v, %v", e, err)
+	}
+	if _, err := root.ReadDir(""); err == nil {
+		t.Error("listed a file")
+	}
+	if _, err := root.Entry("x", false); err == nil {
+		t.Error("found an entry in a file")
+	}
+	if id, ok := root.ContentID(""); !ok || id.Sum != string(target.ID.Bytes()) {
+		t.Errorf("ContentID: %v, %v", id, ok)
+	}
+
+	tree, err := repo.Resolve("HEAD:dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = NewTargetRoot(repo.Repo, tree, "HEAD:dir")
+	if got := root.Path("sub/g"); got != "HEAD:dir/sub/g" {
+		t.Errorf("path %q", got)
+	}
+	if got := NewTargetRoot(repo.Repo, tree, "main").Path("x"); got != "main:x" {
+		t.Errorf("path %q", got)
+	}
+}
+
+func FuzzResolve(f *testing.F) {
+	for _, s := range []string{"HEAD", "@~1", "v1^{}", "HEAD^2~1:dir/x", "main:./f", "origin", "abcd", "HEAD^{/x}"} {
+		f.Add(s)
+	}
+	r := revRepo(f)
+	loc, err := Discover(r.dir, noEnv)
+	if err != nil {
+		f.Fatal(err)
+	}
+	repo, err := Open(loc)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, rev string) {
+		got, err := repo.Resolve(rev)
+		if err != nil {
+			return
+		}
+		switch got.Mode {
+		case ModeTree, ModeFile, ModeExecutable:
+		default:
+			t.Errorf("%q: mode %o", rev, got.Mode)
+		}
+	})
+}
+
+func TestResolveUppercaseHashes(t *testing.T) {
+	for _, f := range []*Format{SHA1, SHA256} {
+		t.Run(f.name, func(t *testing.T) {
+			r := newTestRepo(t, f)
+			r.write(map[string]string{"a": "one\n"})
+			r.commit()
+			hash := r.id("HEAD").String()
+			for _, packed := range []bool{false, true} {
+				if packed {
+					r.git("repack", "-ad")
+				}
+				rp := openTest(t, r, "")
+				for _, n := range []int{7, 8, len(hash)} {
+					rev := strings.ToUpper(hash[:n])
+					got, err := rp.Resolve(rev)
+					if err != nil || got.ID != r.id("HEAD^{tree}") {
+						t.Errorf("%s: %+v, %v", rev, got, err)
+					}
+				}
+			}
+		})
+	}
+}

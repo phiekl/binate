@@ -130,9 +130,12 @@ pseudo-terminals and skip without them.
   an index truncated while mapped and objects missing as errors; objects in
   alternates, searched depth first and each once; a tree as a side of the
   comparison, with git's modes and no times or owners, two commits compared, and
-  a commit and its checkout differing in nothing git records. Fuzzing checks
-  that parsing trees and loose objects' headers, and deltas, pack entries'
-  headers and indexes never panics.
+  a commit and its checkout differing in nothing git records; finding a
+  repository from a directory up, bare or through a gitfile, its format and
+  configuration, refusing reftable, and resolving revisions, ambiguous
+  abbreviations included, as git rev-parse does. Fuzzing checks that parsing
+  trees and loose objects' headers, deltas, pack entries' headers and indexes,
+  and configuration and revisions never panics.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,

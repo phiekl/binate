@@ -21,14 +21,14 @@ import (
 // testRepo is a repository made by git for a test, which is skipped if git
 // is not installed: binate never runs git, only its tests do.
 type testRepo struct {
-	t      *testing.T
+	t      testing.TB
 	dir    string
 	format *Format
 }
 
 // newTestRepo makes an empty repository of format f, its work tree in a
 // temporary directory.
-func newTestRepo(t *testing.T, f *Format) *testRepo {
+func newTestRepo(t testing.TB, f *Format) *testRepo {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")

@@ -277,3 +277,89 @@ func TestFailedPackUnmapsIndex(t *testing.T) {
 		})
 	}
 }
+
+func TestSmallObjectSkipsDeltaBlobs(t *testing.T) {
+	for _, named := range []bool{false, true} {
+		t.Run(fmt.Sprintf("named=%t", named), func(t *testing.T) {
+			r := newTestRepo(t, SHA1)
+			history(r, 10)
+			r.git("-c", fmt.Sprintf("repack.useDeltaBaseOffset=%t", !named), "repack", "-adf", "--depth=50", "--window=50")
+			repo := r.open()
+			defer repo.Close()
+			deltas := 0
+			for _, o := range r.all() {
+				if o.typ != Blob.String() {
+					continue
+				}
+				p, off, err := repo.find(o.id)
+				if err != nil || p == nil {
+					t.Fatalf("find packed blob: %v", err)
+				}
+				e, err := p.entry(off)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if e.typ == ofsDelta || e.typ == refDelta {
+					deltas++
+				}
+				typ, data, err := repo.readSmallObject(o.id)
+				if err != nil || typ != Blob || data != nil {
+					t.Fatalf("blob type: %v, %d bytes, %v", typ, len(data), err)
+				}
+				if repo.cache.size != 0 {
+					t.Fatal("type lookup reconstructed blob delta bases")
+				}
+			}
+			if deltas == 0 {
+				t.Fatal("fixture has no delta blobs")
+			}
+		})
+	}
+}
+
+func TestSmallObjectCorruptPackedCommit(t *testing.T) {
+	for _, format := range []*Format{SHA1, SHA256} {
+		t.Run(format.name, func(t *testing.T) {
+			r := newTestRepo(t, format)
+			r.write(map[string]string{"file": "contents\n"})
+			id := r.commit()
+			r.git("repack", "-adf", "--window=0")
+			repo := openTest(t, r, "")
+			p, off, err := repo.find(id)
+			if err != nil || p == nil {
+				t.Fatalf("find packed commit: %v", err)
+			}
+			e, err := p.entry(off)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.typ != uint8(Commit) {
+				t.Fatalf("expected non-delta commit, got %d", e.typ)
+			}
+			if err := os.Chmod(p.f.Name(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.OpenFile(p.f.Name(), os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// An invalid zlib header makes opening the object fail before reading it.
+			_, err = f.WriteAt([]byte{0, 0}, e.data)
+			closeErr := f.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			_, _, err = repo.readSmallObject(id)
+			var corruptErr *CorruptError
+			if !errors.As(err, &corruptErr) {
+				t.Fatalf("expected corrupt object error, got %v", err)
+			}
+			if _, err := repo.Resolve("HEAD"); !errors.As(err, &corruptErr) {
+				t.Fatalf("resolve: expected corrupt object error, got %v", err)
+			}
+		})
+	}
+}
