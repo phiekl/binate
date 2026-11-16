@@ -299,3 +299,28 @@ func drawBar(s *term.Screen, y int, items []barItem, st colors.Styles) {
 		put("]", bracket)
 	}
 }
+
+// Header is a row above the boxes naming what both sides are of: a
+// repository's directory.
+type Header struct {
+	// Label says what Path is.
+	Label string
+	Path  string
+	// Home is shown as "~" in Path.
+	Home string
+}
+
+// DrawHeader draws h in the top row, its path shortened in the middle if
+// it doesn't fit, and linked to in full, quoted for the shell as the
+// panels' paths are.
+func DrawHeader(s *term.Screen, h Header, st colors.Styles) {
+	s.Fill(0, 0, s.W, st.Plain)
+	x := 1
+	x += s.Label(x, 0, s.W-x, h.Label+" ", st.Plain.With(term.Dim))
+	room := max(s.W-x-1, 0)
+	style := st.Plain.With(term.Bold)
+	esc := st.Escape
+	style.Link = display.ShellQuote(h.Path)
+	esc.Link = style.Link
+	s.Text(x, 0, room, ShortenMiddle(display.Name(HomePath(h.Path, h.Home)), room), style, esc)
+}

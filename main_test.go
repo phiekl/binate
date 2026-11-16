@@ -1162,10 +1162,14 @@ func TestGitTrees(t *testing.T) {
 	pt := startIn(t, filepath.Join(repo, "dir"), "-v", "-g", "HEAD~", "main")
 	offset := pt.Wait(0, enterScreen)
 	screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
-	screen("[1 identical] [1 left] [1 right] [1 contents]")
+	scr := screen("[1 identical] [1 left] [1 right] [1 contents]")
+	// The repository is named at the top, above the boxes.
+	if lines := strings.Split(scr, "\n"); !strings.HasPrefix(lines[0], " (git) "+repo) || !strings.HasPrefix(lines[1], "┌") {
+		t.Errorf("no repository at the top:\n%s", scr)
+	}
 	// The panels show the revisions' paths, as git names them.
 	pt.Write("n")
-	scr := screen("main:dir/changed")
+	scr = screen("main:dir/changed")
 	if !regexp.MustCompile(`│ +path │ HEAD~:dir/changed *│   │ +path │ main:dir/changed *│`).MatchString(scr) {
 		t.Errorf("panels without the paths:\n%s", scr)
 	}
@@ -1222,6 +1226,10 @@ func TestGitFiles(t *testing.T) {
 	offset := pt.Wait(0, enterScreen)
 	// The files have the history of their commits.
 	scr := pt.WaitScreen(100, 30, offset, "committed │")
+	// The repository is the one -C names, at the top of the diff view too.
+	if !strings.HasPrefix(scr, " (git) "+repo) {
+		t.Errorf("no repository at the top:\n%s", scr)
+	}
 	if !strings.Contains(scr, "| │2 TWO") || !regexp.MustCompile(`│ +path │ HEAD~:\./changed *│   │ +path │ HEAD:dir/changed *│`).MatchString(scr) {
 		t.Errorf("screen:\n%s", scr)
 	}

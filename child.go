@@ -27,6 +27,7 @@ import (
 	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/supervise"
 	"pxy.se/go/binate/internal/term"
+	"pxy.se/go/binate/internal/view"
 )
 
 // childSpec is what the parent passes in childEnv: the socket's file
@@ -182,6 +183,9 @@ func (c *child) run() (code int) {
 		if roots, err = c.gitRoots(); err != nil {
 			return fail("%v", err)
 		}
+		// The revisions are of the repository at the top: its work tree,
+		// or the git directory of a bare one.
+		a.Header = view.Header{Label: "(git)", Path: cmp.Or(c.repo.WorkTree, c.repo.GitDir), Home: os.Getenv("HOME")}
 	} else if c.in.dirMode() {
 		roots = [2]source.Root{source.Disk(c.in.left.path), source.Disk(c.in.right.path)}
 	}

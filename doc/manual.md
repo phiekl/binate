@@ -133,9 +133,12 @@ alternates elsewhere, as **git clone --reference** makes. An alternate that
 doesn't exist is skipped, as git skips it. Symlinks in the git directory to
 files, as an old repository's **HEAD**, are not read either. **GIT_DIR** names
 the repository instead, relative to the same directory, which is then the top,
-and beneath it. A revision naming a commit or a tag compares its tree; one
-naming a file, as **HEAD:README**, compares that file, as two files are
-compared. A tree can't be compared with a file.
+and beneath it. The repository's work tree, or its git directory if it is bare,
+is shown in a row at the top of the screen, after **(git)**, and linked to in
+full as the panels' paths are, unless the terminal is too short to spare it. A
+revision naming a commit or a tag compares its tree; one naming a file, as
+**HEAD:README**, compares that file, as two files are compared. A tree can't be
+compared with a file.
 
 **binate** reads the repository itself, without running git: loose objects,
 packs and alternates, in either object format, SHA-1 or SHA-256. It reads a

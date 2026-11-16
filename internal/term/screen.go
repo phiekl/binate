@@ -137,6 +137,21 @@ func (s *Screen) Fill(x, y, w int, st Style) {
 	}
 }
 
+// Copy copies src, as wide as s, into s with its top row at row y, as
+// far as s reaches, and its cursor.
+func (s *Screen) Copy(src *Screen, y int) {
+	if src.W != s.W {
+		panic("term: copying a screen of another width")
+	}
+	for row := range src.H {
+		if y+row < 0 || y+row >= s.H {
+			continue
+		}
+		copy(s.cells[(y+row)*s.W:(y+row+1)*s.W], src.cells[row*src.W:(row+1)*src.W])
+	}
+	s.CursorX, s.CursorY, s.CursorOn = src.CursorX, src.CursorY+y, src.CursorOn
+}
+
 // Cell returns the cell at x, y.
 func (s *Screen) Cell(x, y int) Cell {
 	return s.cells[y*s.W+x]

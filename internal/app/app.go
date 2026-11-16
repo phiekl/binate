@@ -61,6 +61,11 @@ type App struct {
 	Names *stat.Names
 	// Styles draw the quit prompt.
 	Styles colors.Styles
+	// Header, if its Path is set, is shown in a row above Main, which is
+	// drawn below it, unless the terminal is too small for both.
+	Header view.Header
+	// main is what Main is drawn on below the header.
+	main *term.Screen
 
 	quit       bool
 	confirming bool // the quit prompt is shown
@@ -185,7 +190,7 @@ func (a *App) draw() {
 		msg := fmt.Sprintf("terminal too small (%dx%d, needs %dx%d)", a.screen.W, a.screen.H, MinWidth, MinHeight)
 		a.screen.Label(0, 0, a.screen.W, msg, term.Style{})
 	} else if a.Main != nil {
-		a.Main.Draw(a.screen)
+		a.drawMain()
 	}
 	if a.errTitle != "" && !a.tooSmall() {
 		view.DrawError(a.screen, a.Styles, a.errTitle, a.errTexts...)
@@ -196,6 +201,24 @@ func (a *App) draw() {
 	if err := a.screen.Flush(a.term.Out()); err != nil {
 		cli.Debug(a.log, cli.LevelDebug1, "writing the screen", "error", err)
 	}
+}
+
+// drawMain draws Main, below the header if there is one and room for it.
+func (a *App) drawMain() {
+	if a.Header.Path == "" || a.screen.H-1 < MinHeight {
+		a.Main.Draw(a.screen)
+		return
+	}
+	if a.main == nil {
+		a.main = term.NewScreen(0, 0)
+	}
+	if a.main.W != a.screen.W || a.main.H != a.screen.H-1 {
+		a.main.Resize(a.screen.W, a.screen.H-1)
+	}
+	a.main.Clear()
+	a.Main.Draw(a.main)
+	a.screen.Copy(a.main, 1)
+	view.DrawHeader(a.screen, a.Header, a.Styles)
 }
 
 func (a *App) key(k term.Key) {

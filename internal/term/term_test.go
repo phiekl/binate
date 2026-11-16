@@ -290,3 +290,21 @@ func TestStyleOn(t *testing.T) {
 		}
 	}
 }
+
+func TestCopy(t *testing.T) {
+	dst := NewScreen(4, 3)
+	src := NewScreen(4, 3)
+	for y := range 3 {
+		src.Label(0, y, 4, string(rune('a'+y))+"bcd", Style{})
+	}
+	src.CursorX, src.CursorY, src.CursorOn = 2, 1, true
+	dst.Label(0, 0, 4, "head", Style{})
+	dst.Copy(src, 1)
+	// The last row of src is past the bottom of dst.
+	if got := dst.String(); got != "head\nabcd\nbbcd\n" {
+		t.Errorf("screen %q", got)
+	}
+	if dst.CursorX != 2 || dst.CursorY != 2 || !dst.CursorOn {
+		t.Errorf("cursor %d,%d %v", dst.CursorX, dst.CursorY, dst.CursorOn)
+	}
+}
