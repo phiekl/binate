@@ -60,28 +60,52 @@ type options struct {
 	right     string
 }
 
-func parseOptions(argv []string) (*args.Set, options, error) {
+// gitName is the name, as of a symlink to binate, run by which it compares
+// git revisions without --git.
+const gitName = "agitate"
+
+// programName is the name binate goes by: gitName if run by it, and
+// binate by any other.
+func programName() string {
+	if path.Base(os.Args[0]) == gitName {
+		return gitName
+	}
+	return "binate"
+}
+
+// parseOptions parses argv of binate run as name, which with gitName
+// implies --git.
+func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	var o options
 	var contextLines string
 	compare := scan.DefaultAttrs.String()
-	s := args.NewSet("binate")
+	gitOnly := name == gitName
+	s := args.NewSet(name)
 	s.Count(&o.verbose, "verbose", "v", "write debug messages (repeat for more)")
 	s.Bool(&o.version, "version", "V", "show version and exit")
 	s.Global("verbose", "version")
-	s.Arg(&o.left, "left", "left directory or file, or revision with --git")
-	s.Arg(&o.right, "right", "right directory or file, or revision with --git")
+	sides, directory := "%s directory or file, or revision with --git", "with --git, find the repository from directory, as git -C"
+	if gitOnly {
+		sides, directory = "%s git revision", "find the repository from directory, as git -C"
+	}
+	s.Arg(&o.left, "left", fmt.Sprintf(sides, "left"))
+	s.Arg(&o.right, "right", fmt.Sprintf(sides, "right"))
 	s.Func("compare", "c", "attributes to compare (see binate(1))", func(value string) {
 		compare = value
 	})
 	s.Bool(&o.quick, "quick", "q", "compare size and modification time")
 	s.Bool(&o.git, "git", "g", "compare two git revisions of the repository here")
-	s.String(&o.directory, "directory", "C", "", "with --git, find the repository from directory, as git -C")
+	s.String(&o.directory, "directory", "C", "", directory)
 	s.Func("exclude", "x", "exclude names matching a pattern (repeatable)", func(p string) {
 		o.excludes = append(o.excludes, p)
 	})
 	s.String(&contextLines, "unified", "U", "3", "context lines around changes")
 	s.DenyEmpty("left")
 	s.DenyEmpty("right")
+	if gitOnly {
+		// Implied, and refused with it.
+		s.Hide("git", "quick")
+	}
 
 	err := s.Parse(argv)
 	if err == args.ErrUsage && o.version {
@@ -90,6 +114,7 @@ func parseOptions(argv []string) (*args.Set, options, error) {
 	if err != nil {
 		return s, o, err
 	}
+	o.git = o.git || gitOnly
 	if o.directory != "" && !o.git {
 		return s, o, errors.New("--directory without --git: it names where to find the repository (for context lines, use -U)")
 	}
@@ -120,7 +145,7 @@ func main() {
 }
 
 func runParent() int {
-	set, o, err := parseOptions(os.Args[1:])
+	set, o, err := parseOptions(programName(), os.Args[1:])
 	switch {
 	case err == args.ErrHelp:
 		if err := writeHelp(os.Stdout, set); err != nil {
@@ -193,6 +218,8 @@ func (p *parent) run(in inputs) int {
 		return fail("finding the executable: %v", err)
 	}
 	cmd := exec.Command(exe, os.Args[1:]...)
+	// The child is run by the same name, which may imply --git.
+	cmd.Args[0] = os.Args[0]
 	cmd.Stdin, cmd.Stdout = os.Stdin, os.Stdout
 	// The child's stderr is held while it holds the screen, where messages
 	// would be lost, and written once the terminal is restored.

@@ -72,7 +72,7 @@ func runChild(specText string) int {
 	// The child runs no programs, but don't leave the marker around.
 	_ = os.Unsetenv(childEnv)
 
-	_, o, err := parseOptions(os.Args[1:])
+	_, o, err := parseOptions(programName(), os.Args[1:])
 	if err != nil {
 		return fail("usage: %v", err)
 	}

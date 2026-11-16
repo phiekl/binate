@@ -40,6 +40,7 @@ type flag struct {
 	fn          func(string)
 	changed     bool
 	global      bool
+	hidden      bool
 	positional  bool
 }
 
@@ -131,6 +132,14 @@ func (s *Set) lookupArg(name string) *flag {
 func (s *Set) Global(names ...string) {
 	for _, name := range names {
 		s.mustLookup(name).global = true
+	}
+}
+
+// Hide leaves the named flags out of help, still parsing them, as for
+// flags with no effect in a mode.
+func (s *Set) Hide(names ...string) {
+	for _, name := range names {
+		s.mustLookup(name).hidden = true
 	}
 }
 
@@ -339,7 +348,7 @@ func (s *Set) Help(columns int) string {
 		fmt.Fprintf(&b, " %s", f.long)
 	}
 	b.WriteByte('\n')
-	options := slices.Clone(s.flags)
+	options := slices.DeleteFunc(slices.Clone(s.flags), func(f *flag) bool { return f.hidden })
 	slices.SortFunc(options, func(a, b *flag) int {
 		if a.global != b.global {
 			if a.global {

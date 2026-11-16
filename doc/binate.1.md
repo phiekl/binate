@@ -11,14 +11,15 @@ Inspect file and directory differences in a read-only terminal view.
 ```
 binate [options] left right
 binate -g [-C directory] [options] left right
+agitate [-C directory] [options] left right
 ```
 
 **binate** shows two directory trees, or two files, side by side, and marks
-where they differ. With **-g**, they are trees or files of two git revisions. It
-never changes anything itself: the only way a file changes is through your own
-editor, which **e** opens. Scanning, comparing and drawing run in a child
-process. Where available, Landlock restricts it from writing and running
-programs, within the kernel's limits.
+where they differ. With **-g**, or run as **agitate**, a symlink to it, they are
+trees or files of two git revisions. It never changes anything itself: the only
+way a file changes is through your own editor, which **e** opens. Scanning,
+comparing and drawing run in a child process. Where available, Landlock
+restricts it from writing and running programs, within the kernel's limits.
 
 *left* and *right* may be directories, files, or one of each. When one input is
 a directory, its entry matching the other input's filename is compared, as with

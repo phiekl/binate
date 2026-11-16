@@ -54,10 +54,10 @@ tree.
 
 ### Native git object reader
 
-Use `-g` to compare two revisions or files within them. Data is read directly
-from the repository without running git or checking anything out. Files are
-compared by their object IDs without reading their contents. Two revisions of
-Linux compare in about 0.2 seconds.
+Use `-g`, or run binate as `agitate`, to compare two revisions or files within
+them. Data is read directly from the repository without running git or checking
+anything out. Files are compared by their object IDs without reading their
+contents. Two revisions of Linux compare in about 0.2 seconds.
 
 The panels on both sides show the commit that last changed each entry. From the
 action menu, `a`, you can show that commit's message or a summary of the files
@@ -123,6 +123,12 @@ Compare the tag `v1.0` with `HEAD` in the repository at `~/src/project`:
 $ binate -g -C ~/src/project v1.0 HEAD
 ```
 
+When invoked as `agitate`, binate needs no `-g`. Compare `HEAD~3` with `HEAD`:
+
+```
+$ agitate HEAD~3 HEAD
+```
+
 Press `?` to list the current screen's key bindings, or run `binate --help` to
 list command-line options. [binate(1)](doc/binate.1.md) summarises both, and the
 [manual](doc/manual.md) describes everything in detail.
@@ -138,7 +144,7 @@ and network restrictions are partial. Without Landlock, binate runs unprotected.
 ## Building and testing
 
 ```
-make            # build/binate
+make            # build/binate, and build/agitate linking to it
 make test       # unit and end-to-end tests
 make vet        # go vet
 make man        # the man pages in build/man/, requires go-md2man
@@ -147,10 +153,13 @@ staticcheck ./...
 ```
 
 The build targets x86-64-v3 CPUs (roughly 2013 and later) by default.
-`make GOAMD64=v1` can be used for older CPUs.
+`make GOAMD64=v1` can be used for older CPUs. Install `agitate` as a symlink to
+`binate`, as the build makes it. Run by that name, binate compares git revisions
+without `-g`.
 
 `make man` builds binate(1) from [doc/binate.1.md](doc/binate.1.md) and
-binate-manual(7) from [doc/manual.md](doc/manual.md). Install
+binate-manual(7) from [doc/manual.md](doc/manual.md), and agitate(1) and
+agitate-manual(7) as symlinks to them. Install
 [go-md2man](https://github.com/cpuguy83/go-md2man) with your package manager or
 `go install github.com/cpuguy83/go-md2man/v2@v2.0.7`, and read the results with
 `man -l build/man/binate.1` and `man -l build/man/binate-manual.7`. A page's

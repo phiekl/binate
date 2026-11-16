@@ -11,12 +11,13 @@ Full reference for the binate file and directory difference viewer.
 ```
 binate [options] left right
 binate -g [-C directory] [options] left right
+agitate [-C directory] [options] left right
 ```
 
 **binate** shows two directory trees, or two files, side by side, and marks
-where they differ. With **-g**, they are trees or files of two git revisions. It
-never changes anything itself: the only way a file changes is through your own
-editor, which **e** opens.
+where they differ. With **-g**, or run as **agitate**, a symlink to it, they are
+trees or files of two git revisions. It never changes anything itself: the only
+way a file changes is through your own editor, which **e** opens.
 
 It is Linux-only and needs a terminal: if stdin or stdout is not a terminal, it
 exits with an error before drawing anything. The man page,
@@ -116,30 +117,30 @@ next arguments are *left* and *right* even if they start with a dash.
 
 ## Git
 
-With **-g**, *left* and *right* are revisions of the repository of the current
-directory, or of **-C**'s, and **binate** reads regular files only within the
-repository's top. Before applying the sandbox, it resolves symlinks along the
-starting directory, which may read links outside the repository. It then finds
-the top as git finds it, by names without reading regular files on the way: the
-nearest of the directory and those above it with a **.git** in it,
-a directory or a file naming one, not past a file system's boundary or a
-directory in **GIT_CEILING_DIRECTORIES**, unless
-**GIT_DISCOVERY_ACROSS_FILESYSTEM** is true; or the directory itself, if a bare
-repository, which is told apart only there. A repository with any of its
-directories outside the top, symlinks followed, is refused before anything there
-is read: a linked work tree, whose git directory is in the main one's, a
-submodule checked out, whose git directory is in its superproject's, one apart
-from its work tree, as **git init --separate-git-dir** makes, or one with
-alternates elsewhere, as **git clone --reference** makes. An alternate that
-doesn't exist is skipped, as git skips it. Symlinks in the git directory to
-files, as an old repository's **HEAD**, are not read either. **GIT_DIR** names
-the repository instead, relative to the same directory, which is then the top,
-and beneath it. The repository's work tree, or its git directory if it is bare,
-is shown in a row at the top of the screen, after **(git)**, and linked to in
-full as the panels' paths are, unless the terminal is too short to spare it. A
-revision naming a commit or a tag compares its tree; one naming a file, as
-**HEAD:README**, compares that file, as two files are compared. A tree can't be
-compared with a file.
+With **-g**, or when run as **agitate**, by a symlink of that name, *left* and
+*right* are revisions of the repository of the current directory, or of
+**-C**'s, and **binate** reads regular files only within the repository's top.
+Before applying the sandbox, it resolves symlinks along the starting directory,
+which may read links outside the repository. It then finds the top as git finds
+it, by names without reading regular files on the way: the
+nearest of the directory and those above it with a **.git** in it, a directory
+or a file naming one, not past a file system's boundary or a directory in
+**GIT_CEILING_DIRECTORIES**, unless **GIT_DISCOVERY_ACROSS_FILESYSTEM** is true;
+or the directory itself, if a bare repository, which is told apart only there. A
+repository with any of its directories outside the top, symlinks followed, is
+refused before anything there is read: a linked work tree, whose git directory
+is in the main one's, a submodule checked out, whose git directory is in its
+superproject's, one apart from its work tree, as **git init --separate-git-dir**
+makes, or one with alternates elsewhere, as **git clone --reference** makes. An
+alternate that doesn't exist is skipped, as git skips it. Symlinks in the git
+directory to files, as an old repository's **HEAD**, are not read either.
+**GIT_DIR** names the repository instead, relative to the same directory, which
+is then the top, and beneath it. The repository's work tree, or its git
+directory if it is bare, is shown in a row at the top of the screen, after
+**(git)**, and linked to in full as the panels' paths are, unless the terminal
+is too short to spare it. A revision naming a commit or a tag compares its tree;
+one naming a file, as **HEAD:README**, compares that file, as two files are
+compared. A tree can't be compared with a file.
 
 **binate** reads the repository itself, without running git: loose objects,
 packs and alternates, in either object format, SHA-1 or SHA-256. It reads a

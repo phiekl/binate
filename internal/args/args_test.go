@@ -7,6 +7,7 @@ package args
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -240,6 +241,24 @@ options:
 `
 	if got := newTestSet(&o).Help(0); got != want {
 		t.Errorf("Help() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestHide(t *testing.T) {
+	var o testOpts
+	s := newTestSet(&o)
+	s.Hide("key", "json")
+	help := s.Help(0)
+	for _, name := range []string{"--key", "--json"} {
+		if strings.Contains(help, name) {
+			t.Errorf("hidden %s in help:\n%s", name, help)
+		}
+	}
+	if !strings.Contains(help, "--namespace") || !strings.Contains(help, "--verbose") {
+		t.Errorf("shown flags missing from help:\n%s", help)
+	}
+	if err := s.Parse([]string{"-k", "x", "--json", "a", "b"}); err != nil || o.key != "x" || !o.json {
+		t.Errorf("hidden flags not parsed: %+v, %v", o, err)
 	}
 }
 

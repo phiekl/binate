@@ -137,8 +137,15 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{dir + "/missing", dir}, "missing: no such file or directory"},
 		{[]string{"--bogus", dir, dir}, "unknown flag: --bogus"},
 		{[]string{"-g", "-q", "HEAD~", "HEAD"}, "--quick with --git"},
+		{[]string{"agitate", "-q", "HEAD~", "HEAD"}, "--quick with --git"},
+		{[]string{"agitate"}, "usage: agitate"},
 	} {
-		cmd := binate(t, tt.args...)
+		var cmd *exec.Cmd
+		if len(tt.args) > 0 && tt.args[0] == "agitate" {
+			cmd = agitate(t, "", tt.args[1:]...)
+		} else {
+			cmd = binate(t, tt.args...)
+		}
 		out, _ := cmd.CombinedOutput()
 		if code := cmd.ProcessState.ExitCode(); code != 2 {
 			t.Errorf("%q: exit status %d, want 2", tt.args, code)
@@ -220,7 +227,7 @@ func TestCompareOption(t *testing.T) {
 		{[]string{"--compare", "mode", "-c", "owner"}, scan.Owner},
 		{[]string{"-c", "owner", "--compare", "mode"}, scan.Mode},
 	} {
-		_, got, err := parseOptions(append(tt.flags, "left", "right"))
+		_, got, err := parseOptions("binate", append(tt.flags, "left", "right"))
 		if err != nil {
 			t.Errorf("%q: %v", tt.flags, err)
 		} else if got.compare != tt.want {
@@ -229,8 +236,45 @@ func TestCompareOption(t *testing.T) {
 	}
 }
 
+// Run as agitate, from any directory, binate takes --git without it.
+func TestGitName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		git  bool
+	}{
+		{"binate", false},
+		{"agitate", true},
+		{"agitated", false},
+	} {
+		_, o, err := parseOptions(tc.name, []string{"-C", "dir", "HEAD~", "HEAD"})
+		switch {
+		case tc.git && (err != nil || !o.git || o.directory != "dir"):
+			t.Errorf("%s: %+v, %v", tc.name, o, err)
+		case !tc.git && err == nil:
+			t.Errorf("%s: -C without --git accepted", tc.name)
+		}
+	}
+	if _, o, err := parseOptions("agitate", []string{"-g", "HEAD~", "HEAD"}); err != nil || !o.git {
+		t.Errorf("agitate -g: %+v, %v", o, err)
+	}
+	// Its help names revisions, and leaves out --git, implied, and
+	// --quick, refused with it.
+	s, _, _ := parseOptions("agitate", []string{"--help"})
+	help := s.Help(80)
+	for _, want := range []string{"usage: agitate ", "left git revision\n", "right git revision\n", "-C, --directory   find the repository"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("agitate's help without %q:\n%s", want, help)
+		}
+	}
+	for _, unwanted := range []string{"--git", "--quick"} {
+		if strings.Contains(help, unwanted) {
+			t.Errorf("agitate's help with %q:\n%s", unwanted, help)
+		}
+	}
+}
+
 func TestHelpFits80Columns(t *testing.T) {
-	s, _, err := parseOptions([]string{"--help"})
+	s, _, err := parseOptions("binate", []string{"--help"})
 	if err != args.ErrHelp {
 		t.Fatal(err)
 	}
@@ -1348,6 +1392,31 @@ func TestGitFiles(t *testing.T) {
 
 // Revisions that can't be compared are reported before the screen is
 // taken.
+// agitate returns a command running binate as agitate, in dir if given.
+func agitate(t *testing.T, dir string, args ...string) *exec.Cmd {
+	t.Helper()
+	cmd := binate(t, args...)
+	cmd.Args[0] = "/usr/local/bin/agitate"
+	cmd.Dir = dir
+	return cmd
+}
+
+// Run as agitate, binate compares revisions, its child too.
+func TestGitNameSession(t *testing.T) {
+	repo := gitRepo(t)
+	pt := ptytest.Open(t, 100, 30)
+	pt.Start(agitate(t, repo, "HEAD~", "main"))
+	offset := pt.Wait(0, enterScreen)
+	scr := pt.WaitScreen(100, 30, offset, "[1 contents]")
+	if lines := strings.Split(scr, "\n"); !strings.HasPrefix(lines[0], " (git) "+repo) {
+		t.Errorf("no repository at the top:\n%s", scr)
+	}
+	pt.Write("\x03x")
+	if code := pt.Exit(); code != 0 {
+		t.Errorf("exit status %d", code)
+	}
+}
+
 func TestGitErrors(t *testing.T) {
 	repo := gitRepo(t)
 	for _, tc := range []struct {
