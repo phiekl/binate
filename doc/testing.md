@@ -127,9 +127,10 @@ pseudo-terminals and skip without them.
   checksum, trees, with modes normalized and names git wouldn't check out
   refused, and commits and tags peeled to their trees; objects in packs, before
   loose ones, stored whole or as deltas at offsets or named, with large offsets,
-  an index truncated while mapped and objects missing as errors. Fuzzing checks
-  that parsing trees and loose objects' headers, and deltas, pack entries'
-  headers and indexes never panics.
+  an index truncated while mapped and objects missing as errors; objects in
+  alternates, searched depth first and each once. Fuzzing checks that parsing
+  trees and loose objects' headers, and deltas, pack entries' headers and
+  indexes never panics.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,

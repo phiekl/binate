@@ -13,7 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+
+	"pxy.se/go/binate/internal/files"
 )
 
 // Repo reads the objects of a repository. It is safe for concurrent use.
@@ -27,9 +30,14 @@ type Repo struct {
 }
 
 // OpenRepo returns the repository whose objects directory is dir, of
-// format f. The packs are those there now: one added later is not read.
+// format f, with the objects directories it names as alternates. The
+// packs are those there now: one added later is not read.
 func OpenRepo(dir string, f *Format) (*Repo, error) {
-	r := &Repo{format: f, dirs: []string{dir}, cache: baseCache{limit: defaultCacheLimit}}
+	dirs, err := objectDirs(dir)
+	if err != nil {
+		return nil, err
+	}
+	r := &Repo{format: f, dirs: dirs, cache: baseCache{limit: defaultCacheLimit}}
 	for _, d := range r.dirs {
 		if err := r.openPacks(d); err != nil {
 			r.Close()
@@ -37,6 +45,88 @@ func OpenRepo(dir string, f *Format) (*Repo, error) {
 		}
 	}
 	return r, nil
+}
+
+// Dirs returns the objects directories read: the repository's, and its
+// alternates.
+func (r *Repo) Dirs() []string {
+	return slices.Clone(r.dirs)
+}
+
+// maxAlternateDepth is how deep alternates of alternates are followed, as
+// git follows them.
+const maxAlternateDepth = 5
+
+// objectDirs returns dir and its alternates, each once, in the order git
+// searches them.
+func objectDirs(dir string) ([]string, error) {
+	dir = filepath.Clean(dir)
+	dirs := []string{dir}
+	seen := map[string]bool{dir: true}
+	var add func(d string, depth int) error
+	add = func(d string, depth int) error {
+		alts, err := readAlternates(d)
+		if err != nil {
+			return err
+		}
+		for _, alt := range alts {
+			if seen[alt] {
+				continue
+			}
+			if depth >= maxAlternateDepth {
+				return fmt.Errorf("%s: alternates nested more than %d deep", d, maxAlternateDepth)
+			}
+			seen[alt] = true
+			dirs = append(dirs, alt)
+			if err := add(alt, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := add(dir, 0); err != nil {
+		return nil, err
+	}
+	return dirs, nil
+}
+
+// readAlternates returns the objects directories the objects directory
+// dir names in info/alternates: one a line, relative to dir if not
+// absolute, quoted as a C string if it starts with a quote; empty lines
+// and those starting with "#" are skipped.
+func readAlternates(dir string) ([]string, error) {
+	path := filepath.Join(dir, "info", "alternates")
+	f, err := files.OpenRegular(path, false)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	var alts []string
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		if line[0] == '"' {
+			unq, err := strconv.Unquote(line)
+			if err != nil {
+				return nil, fmt.Errorf("%s: invalid quoted path %s", path, line)
+			}
+			line = unq
+		}
+		if !filepath.IsAbs(line) {
+			line = filepath.Join(dir, line)
+		}
+		alts = append(alts, filepath.Clean(line))
+	}
+	return alts, nil
 }
 
 // openPacks opens the packs in the objects directory dir. An index
