@@ -5,6 +5,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -103,7 +104,7 @@ func pickCommit(sides [2]commitSide, title string, run func(cs commitSide, note 
 
 // commitLabel shows a commit in the popup: abbreviated, and its subject.
 func commitLabel(ch source.Change) []display.Glyph {
-	return display.Name(ch.ID[:min(len(ch.ID), 12)] + " " + ch.Subject)
+	return display.Name(strings.TrimSpace(ch.ID[:min(len(ch.ID), 12)] + " " + ch.Subject))
 }
 
 // Key handles a key while the popup is open, and reports whether it's
@@ -146,6 +147,7 @@ func (p *commitPicker) Draw(s *term.Screen, st colors.Styles) {
 const (
 	messageTitle = "Select side's commit to show"
 	treesTitle   = "Select side's commit to compare"
+	statTitle    = "Select side's commit to count"
 )
 
 // commitView opens the views of a commit from a screen: its message, or
@@ -168,19 +170,29 @@ type commitView struct {
 }
 
 // commitAction is an action of the Actions popup, in git mode, on the
-// commit that last changed the selected entry: showing it, or comparing
-// the trees before and after it.
+// commit that last changed the selected entry: showing it, comparing the
+// trees before and after it, or counting the lines it changed.
 type commitAction struct {
 	key        rune
 	name, what string
-	trees      bool
+	kind       commitKind
 }
+
+// commitKind is what a commit action does.
+type commitKind int
+
+const (
+	commitMessage commitKind = iota
+	commitTrees
+	commitStat
+)
 
 // commitActions are the commit actions, in the popup's order, after the
 // other actions.
 var commitActions = []commitAction{
 	{key: 'm', name: "Commit message", what: "commit that last changed it, as git show"},
-	{key: 'd', name: "Commit diff", what: "trees before and after that commit", trees: true},
+	{key: 'd', name: "Commit diff", what: "trees before and after that commit", kind: commitTrees},
+	{key: 's', name: "Commit stat", what: "files that commit changed, as git show --stat", kind: commitStat},
 }
 
 // hasCommits reports whether any of roots has commits to show, as in git
@@ -222,8 +234,11 @@ func (c commitView) start(a commitAction, ckey changeKey, changes *changeReader)
 		return nil, wait
 	}
 	show, title := commitView.showMessage, messageTitle
-	if a.trees {
+	switch a.kind {
+	case commitTrees:
 		show, title = commitView.showTrees, treesTitle
+	case commitStat:
+		show, title = commitView.showStat, statTitle
 	}
 	// Going back from a commit shown at once, or closing the popup
 	// choosing a side, opens the Actions popup again.
@@ -258,19 +273,60 @@ func (c commitView) start(a commitAction, ckey changeKey, changes *changeReader)
 // showMessage shows the commit cs as "git show" does, without its diff,
 // with note in the status bar.
 func (c commitView) showMessage(cs commitSide, note string) {
+	if ts := c.messageScreen(cs, note); ts != nil {
+		c.app.Main = ts
+	}
+}
+
+// messageScreen returns the screen showing the commit cs as "git show"
+// does, without its diff, with note in the status bar, or nil, having
+// shown why in the error popup, if it can't be read.
+func (c commitView) messageScreen(cs commitSide, note string) *TextScreen {
 	text, err := cs.root.ShowChange(cs.ch.ID)
 	if err != nil {
 		c.app.ShowError(showFailed, errorTexts(err)...)
-		return
+		return nil
 	}
+	// A line apart from the title, as the stat.
+	return c.textScreen(cs, note, append([]string{""}, strings.Split(strings.TrimSuffix(text, "\n"), "\n")...))
+}
+
+// textScreen returns the screen showing lines of the commit cs, titled by
+// it, with note in the status bar.
+func (c commitView) textScreen(cs commitSide, note string, lines []string) *TextScreen {
 	v := &view.TextView{
 		Styles: c.styles, Lead: "(commit) ", Title: commitLabel(cs.ch),
-		Lines: strings.Split(strings.TrimSuffix(text, "\n"), "\n"),
+		Lines: lines,
 	}
 	if note != "" {
 		v.Notice = "showing " + note
 	}
-	c.app.Main = &TextScreen{app: c.app, view: v, back: c.back}
+	return &TextScreen{app: c.app, view: v, back: c.back}
+}
+
+// showStat shows the files the commit cs changed as "git show --stat
+// --summary" does, without the message but a blank line before them,
+// with note in the status bar, once
+// their lines are counted, in the background.
+func (c commitView) showStat(cs commitSide, note string) {
+	// A line apart from the title, as git's stat from the message.
+	ts := c.textScreen(cs, note, []string{""})
+	c.app.Main = ts
+	ts.view.SetTail(func(int) []string { return []string{" counting the lines changed…"} })
+	ctx, cancel := context.WithCancel(context.Background())
+	loaded := make(chan statLoad, 1)
+	ts.loaded, ts.cancel = loaded, cancel
+	go func() {
+		render, err := cs.root.ChangeStat(ctx, cs.ch.ID)
+		loaded <- statLoad{render, err}
+		c.app.Wake()
+	}()
+}
+
+// statLoad is the stat of a commit counted, or why it couldn't be.
+type statLoad struct {
+	render func(width int) []string
+	err    error
 }
 
 // showTrees compares the trees before and after the commit cs, its first
@@ -305,6 +361,10 @@ type TextScreen struct {
 	help *view.Help
 	last *term.Screen
 	back func()
+	// loaded, while the rest of the text, as a commit's stat, is read in
+	// the background, receives it, and cancel stops reading it.
+	loaded <-chan statLoad
+	cancel context.CancelFunc
 	// pendingG is set after g, which goes to the start if repeated.
 	pendingG bool
 }
@@ -318,8 +378,29 @@ func (t *TextScreen) Draw(s *term.Screen) {
 	}
 }
 
-// Tick does nothing: the text doesn't change.
-func (t *TextScreen) Tick() time.Duration { return -1 }
+// Tick shows the rest of the text once read, or the error reading it.
+func (t *TextScreen) Tick() time.Duration {
+	if t.loaded == nil {
+		return -1
+	}
+	select {
+	case got := <-t.loaded:
+		t.loaded = nil
+		if got.err != nil {
+			t.view.SetTail(nil)
+			t.app.ShowError(showFailed, errorTexts(got.err)...)
+			break
+		}
+		t.view.SetTail(func(width int) []string {
+			if lines := got.render(width); len(lines) > 0 {
+				return lines
+			}
+			return []string{" no files changed"}
+		})
+	default:
+	}
+	return -1
+}
 
 // Key handles a key.
 func (t *TextScreen) Key(k term.Key) bool {
@@ -348,6 +429,9 @@ func (t *TextScreen) Key(k term.Key) bool {
 	case k == term.Rune('?'):
 		t.help = view.NewHelp(view.TextHelp)
 	case k.Code == term.KeyEsc:
+		if t.cancel != nil {
+			t.cancel()
+		}
 		t.back()
 	default:
 		return false

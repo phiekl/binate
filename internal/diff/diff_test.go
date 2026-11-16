@@ -214,3 +214,63 @@ func FuzzInline(f *testing.F) {
 		}
 	})
 }
+
+func TestCount(t *testing.T) {
+	for _, tt := range []struct {
+		a, b     string
+		add, del int
+	}{
+		{"", "", 0, 0},
+		{"", "a\nb\n", 2, 0},
+		{"a\nb\n", "", 0, 2},
+		{"a\nb\nc\n", "a\nB\nc\n", 1, 1},
+		{"a", "a\n", 1, 1},
+		{"a\nb\nc\nd\n", "b\nc\nd\na\n", 1, 1},
+		{"x\ny\nx\ny\n", "y\nx\ny\nx\n", 1, 1},
+		{"a\n\n}\n\nb\n", "c\n\n}\n\nd\n", 2, 2},
+	} {
+		add, del := Count([]byte(tt.a), []byte(tt.b))
+		if add != tt.add || del != tt.del {
+			t.Errorf("Count(%q, %q) = +%d -%d, want +%d -%d", tt.a, tt.b, add, del, tt.add, tt.del)
+		}
+	}
+}
+
+func FuzzCount(f *testing.F) {
+	f.Add([]byte("a\nb\nc\n"), []byte("a\nc\nd\n"))
+	f.Fuzz(func(t *testing.T, a, b []byte) {
+		x, y := splitLines(a), splitLines(b)
+		add, del := Count(a, b)
+		// No more than the anchored diff's, and what remains the same on
+		// each side as many lines.
+		common := 0
+		for _, op := range Lines(x, y) {
+			if op.Kind == Equal {
+				common += op.X1 - op.X0
+			}
+		}
+		if len(x)-del != len(y)-add || len(y)-add < common {
+			t.Errorf("Count(%q, %q) = +%d -%d, more than the anchored diff's", a, b, add, del)
+		}
+		// Exactly the fewest, as a longest common subsequence found by
+		// dynamic programming has.
+		if len(x)*len(y) <= 10000 {
+			dp := make([][]int, len(x)+1)
+			for i := range dp {
+				dp[i] = make([]int, len(y)+1)
+			}
+			for i := len(x) - 1; i >= 0; i-- {
+				for j := len(y) - 1; j >= 0; j-- {
+					if x[i] == y[j] {
+						dp[i][j] = dp[i+1][j+1] + 1
+					} else {
+						dp[i][j] = max(dp[i+1][j], dp[i][j+1])
+					}
+				}
+			}
+			if len(y)-add != dp[0][0] {
+				t.Errorf("Count(%q, %q) = +%d -%d, keeping %d lines, not %d", a, b, add, del, len(y)-add, dp[0][0])
+			}
+		}
+	})
+}

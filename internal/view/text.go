@@ -20,6 +20,9 @@ type TextView struct {
 	Lead  string
 	Title []display.Glyph
 	Lines []string
+	// tail, if set, returns more lines after Lines for the width of the
+	// text, as a commit's stat, scaled to it (see SetTail).
+	tail func(width int) []string
 	// Top is the first visual line shown.
 	Top int
 	// Notice, if set, is shown in the status bar.
@@ -34,6 +37,13 @@ type TextView struct {
 // but its borders and the status bar.
 func textRows(h int) int { return max(h-3, 0) }
 
+// SetTail sets the lines shown after Lines, for the width of the text, or
+// none if tail is nil.
+func (v *TextView) SetTail(tail func(width int) []string) {
+	v.tail = tail
+	v.rows = nil
+}
+
 // layout breaks the lines into rows of width columns.
 func (v *TextView) layout(width int) {
 	if v.rows != nil && v.width == width {
@@ -41,7 +51,11 @@ func (v *TextView) layout(width int) {
 	}
 	v.width = width
 	v.rows = [][]display.Glyph{}
-	for _, line := range v.Lines {
+	lines := v.Lines
+	if v.tail != nil {
+		lines = append(lines[:len(lines):len(lines)], v.tail(width)...)
+	}
+	for _, line := range lines {
 		parts := breakLines(display.Content([]byte(line)), width)
 		if len(parts) == 0 {
 			parts = [][]display.Glyph{nil}

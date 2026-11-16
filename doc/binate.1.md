@@ -102,7 +102,7 @@ The column between the sides marks each pair:
 - **f**: Show the full files, or only the changes.
 - **w**: Wrap long lines, or not.
 - **e**: Edit a side.
-- **a**: In git mode, show the commit that last changed a side.
+- **a**: In git mode, show the commit that last changed a side, or its changes.
 - **Esc**: Go back to the tree.
 
 ### Everywhere

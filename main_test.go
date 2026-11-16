@@ -1252,6 +1252,29 @@ func TestGitTrees(t *testing.T) {
 	}
 	pressEsc(pt)
 	screen("[1 identical] [1 left] [1 right] [1 contents]")
+	// s counts the lines it changed, as git show --stat --summary does,
+	// without the message.
+	pt.Write("as")
+	screen("Select side's commit to count")
+	pt.Write("l")
+	scr = screen("3 files changed")
+	if strings.Contains(scr, "Author:") {
+		t.Errorf("stat with the message:\n%s", scr)
+	}
+	for _, want := range []string{
+		"(commit) " + second[:12] + " second", "│  dir/changed | 2 +-", "│  gone        | 1 -", "│  new         | 1 +",
+		"│  3 files changed, 2 insertions(+), 2 deletions(-)", "│  delete mode 100644 gone", "│  create mode 100644 new",
+	} {
+		if !strings.Contains(scr, want) {
+			t.Errorf("stat without %q:\n%s", want, scr)
+		}
+	}
+	pressEsc(pt)
+	screen("Select side's commit to count")
+	pressEsc(pt)
+	screen(actions)
+	pressEsc(pt)
+	screen("[1 identical] [1 left] [1 right] [1 contents]")
 	// d compares the trees before and after it: the first commit's with
 	// none, the entry selected.
 	pt.Write("ad")

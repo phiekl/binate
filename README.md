@@ -60,10 +60,11 @@ compared by their object IDs without reading their contents. Two revisions of
 Linux compare in about 0.2 seconds.
 
 The panels on both sides show the commit that last changed each entry. From the
-action menu, `a`, you can show that commit's message, or open the trees from
-before and after it side by side to see exactly what it changed. There, the
-panels again show each entry's last commit. Repeating this follows a file back
-through its history, one change at a time. `Esc` goes back a step.
+action menu, `a`, you can show that commit's message or a summary of the files
+it changed, or open the trees from before and after it side by side to see
+exactly what it changed. There, the panels again show each entry's last commit.
+Repeating this follows a file back through its history, one change at a time.
+`Esc` goes back a step.
 
 <img src="doc/screenshots/git.png"
      alt="binate comparing Linux git revisions with a file diff preview and each file's last commit details"

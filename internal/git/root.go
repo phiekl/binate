@@ -384,6 +384,34 @@ func (r *Root) ChangeTrees(id string) (before, after source.Root, parents int, e
 	return before, after, len(c.Parents), nil
 }
 
+// ChangeStat counts the lines the commit id changed, from its first
+// parent's tree, or an empty one if it has none, and returns the lines
+// "git show --stat --summary" writes of them for a width (see FormatStat).
+// It is canceled with ctx.
+func (r *Root) ChangeStat(ctx context.Context, id string) (func(width int) []string, error) {
+	cid, err := ParseID(r.repo.format, id)
+	if err != nil {
+		return nil, err
+	}
+	c, err := r.repo.ReadCommit(cid)
+	if err != nil {
+		return nil, err
+	}
+	var before ID
+	if len(c.Parents) > 0 {
+		pc, err := r.repo.ReadCommit(c.Parents[0])
+		if err != nil {
+			return nil, err
+		}
+		before = pc.Tree
+	}
+	files, err := r.repo.DiffStat(ctx, before, c.Tree)
+	if err != nil {
+		return nil, err
+	}
+	return func(width int) []string { return FormatStat(files, width) }, nil
+}
+
 // file is a blob open for reading.
 type file struct {
 	Object

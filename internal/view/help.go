@@ -152,7 +152,7 @@ var diffHelp = []HelpLine{
 	key("wrap long lines", "w"),
 	key("full file or changes with context", "f"),
 	key("edit a side in $VISUAL or $EDITOR", "e"),
-	key("show or compare the commit that last changed a side (git)", "a"),
+	key("show, compare or count the commit that last changed a side (git)", "a"),
 	key("exit binate", "Ctrl+c"),
 	{},
 	{Text: "Comparison marks"},

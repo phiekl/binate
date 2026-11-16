@@ -219,6 +219,18 @@ func TestShallowHistory(t *testing.T) {
 			if id != target.Commit || len(c.Parents) != 0 {
 				t.Fatalf("boundary: %s, parents %v", id, c.Parents)
 			}
+			root := NewTargetRoot(rp.Repo, target, "HEAD")
+			before, _, parents, err := root.ChangeTrees(id.String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			names, err := before.ReadDir("")
+			if err != nil || len(names) != 0 || parents != 0 {
+				t.Fatalf("before: %v, %d parents, %v", names, parents, err)
+			}
+			if _, err := root.ChangeStat(context.Background(), id.String()); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := rp.Resolve("HEAD^"); err == nil {
 				t.Fatal("resolved parent past shallow boundary")
 			}

@@ -188,20 +188,21 @@ An error resolving a revision is written before the screen is taken.
 
 ### Commits
 
-Two actions of the Actions popup, **a**, act on the commit that last changed the
-selected entry, the one its panel shows: **Commit message**, its key **m**,
-shows it, and **Commit diff**, **d**, compares the trees before and after it.
-The diff view has them too: there, **a** opens a popup listing these two alone.
-If the sides' commits differ, a box like the one of [Editing](#editing), titled
-**Select side's commit to show** or **to compare**, lists each side's commit,
-abbreviated to 12 digits, and its subject: **h** or **Left** takes the left one,
-**l** or **Right** the right one, **Enter** or **Space** the selected one, and
-**Esc** closes it. Going back from the side chosen opens the box again, that
-side selected, to choose the other; closing it, or going back from a commit
-taken at once, opens the Actions popup again, the action selected. If only one
-side has a commit, as when the other is missing, it is taken at once, and the
-status bar says which; with none, a red box says why. While the commits are
-still being found, the status bar says so, and nothing is shown.
+Three actions of the Actions popup, **a**, act on the commit that last changed
+the selected entry, the one its panel shows: **Commit message**, its key **m**,
+shows it, **Commit diff**, **d**, compares the trees before and after it, and
+**Commit stat**, **s**, counts the lines it changed. The diff view has them too:
+there, **a** opens a popup listing these three alone. If the sides' commits
+differ, a box like the one of [Editing](#editing), titled **Select side's commit
+to show**, **to compare** or **to count**, lists each side's commit, abbreviated
+to 12 digits, and its subject: **h** or **Left** takes the left one, **l** or
+**Right** the right one, **Enter** or **Space** the selected one, and **Esc**
+closes it. Going back from the side chosen opens the box again, that side
+selected, to choose the other; closing it, or going back from a commit taken at
+once, opens the Actions popup again, the action selected. If only one side has a
+commit, as when the other is missing, it is taken at once, and the status bar
+says which; with none, a red box says why. While the commits are still being
+found, the status bar says so, and nothing is shown.
 
 **Commit message** shows it as **git show --no-patch** does, in git's medium
 format: **commit** and its object name, **Merge:** and its parents abbreviated
@@ -209,8 +210,23 @@ if it has more than one, **Author:** and **Date:**, the time authored in its own
 zone, then the message, indented by four spaces, tabs expanded and spaces at the
 ends of lines left out. The author is as recorded: a **.mailmap** is not read,
 and signatures are neither shown nor checked. The text is in a box across the
-screen, its lines broken to fit; **j**, **k**, **PgDn**, **PgUp**, **gg**, **G**
-and their alternatives scroll it, and **Esc** goes back.
+screen, after a blank line, its lines broken to fit; **j**, **k**, **PgDn**,
+**PgUp**, **gg**, **G** and their alternatives scroll it, and **Esc** goes back.
+
+**Commit stat** shows the files the commit changed as
+**git show --stat --summary --diff-merges=first-parent --no-renames** does,
+without the message, after a blank line, at the width of the text, once counted
+in the background: a line for each file it changed, from its first parent, or
+from nothing if it has none: its name, quoted as git quotes it, the lines
+changed and a graph of **+** and **-**, scaled to fit as git scales it, or for a
+binary file **Bin** and its sizes before and after, then the totals, then the
+files created and deleted and whose modes changed. A file renamed shows as one
+deleted and one created. A file with a NUL in its first 8000 bytes is binary, as
+one larger than 512 MiB; **.gitattributes** is not read. The fewest lines
+changed are counted. For a large change git may count a few more, as it counts
+lines found on both sides, such as blank ones, as changed among many others that
+are. A commit changing no files, as an empty one, says **no files changed**.
+**Esc** stops counting.
 
 **Commit diff** opens the tree view on the commit's first parent's tree and its
 own, named by the commit, abbreviated as **git rev-parse --short** does, with a
@@ -539,6 +555,7 @@ entry with no commit on either side:
 
     m  Commit message  commit that last changed it, as git show
     d  Commit diff     trees before and after that commit
+    s  Commit stat     files that commit changed, as git show --stat
 
 **j**, **k** and the other keys that move through Help move the selection, and
 **Enter** runs the selected action, as does its key at once. **Esc** closes the

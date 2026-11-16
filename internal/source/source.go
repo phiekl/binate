@@ -133,6 +133,11 @@ type Changes interface {
 	// one before as of its first parent, or empty if it has none, and its
 	// number of parents.
 	ChangeTrees(id string) (before, after Root, parents int, err error)
+	// ChangeStat counts the lines the change id changed, against its
+	// first parent, and returns the lines describing them, as "git show
+	// --stat --summary" does, for a width. It may take long, and is
+	// canceled with ctx.
+	ChangeStat(ctx context.Context, id string) (func(width int) []string, error)
 }
 
 // Disk is a side in the file system, at the path given. Its errors carry

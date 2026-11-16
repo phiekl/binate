@@ -7,6 +7,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -31,6 +32,15 @@ func (fakeChanges) LastChange(context.Context, string) (source.Change, error) {
 func (fakeChanges) RepoPath(rel string) (string, bool) { return rel, true }
 func (fakeChanges) ShowChange(id string) (string, error) {
 	return "commit " + id + "\n", nil
+}
+func (fakeChanges) ChangeStat(_ context.Context, id string) (func(int) []string, error) {
+	switch id {
+	case "bad":
+		return nil, errors.New("no stat")
+	case "empty":
+		return func(int) []string { return nil }, nil
+	}
+	return func(w int) []string { return []string{fmt.Sprintf(" stat of %s at %d", id, w)} }, nil
 }
 func (fakeChanges) ChangeTrees(string) (before, after source.Root, parents int, err error) {
 	return nil, nil, 0, errors.New("no trees")
@@ -125,7 +135,7 @@ func TestShowMessage(t *testing.T) {
 	if !ok {
 		t.Fatalf("Main is %T", a.Main)
 	}
-	if !slices.Equal(ts.view.Lines, []string{"commit abc"}) || ts.view.Notice != "showing the left side's commit" {
+	if !slices.Equal(ts.view.Lines, []string{"", "commit abc"}) || ts.view.Notice != "showing the left side's commit" {
 		t.Errorf("lines %q, notice %q", ts.view.Lines, ts.view.Notice)
 	}
 	if ts.Key(term.Rune('x')) {
@@ -169,10 +179,10 @@ func TestCommitRows(t *testing.T) {
 		t.Error("hasCommits wrong")
 	}
 	rows := commitRows(changeKey{sides: [2]sideKey{{root, "f"}, {}}})
-	if len(rows) != 2 || rows[0].Key != 'm' || rows[1].Key != 'd' || rows[0].Why != "" {
+	if len(rows) != 3 || rows[0].Key != 'm' || rows[1].Key != 'd' || rows[2].Key != 's' || rows[0].Why != "" {
 		t.Errorf("rows %+v", rows)
 	}
-	if rows := commitRows(changeKey{}); rows[0].Why == "" || rows[1].Why == "" {
+	if rows := commitRows(changeKey{}); rows[0].Why == "" || rows[1].Why == "" || rows[2].Why == "" {
 		t.Errorf("rows without a commit not dimmed: %+v", rows)
 	}
 }
@@ -212,5 +222,60 @@ func TestCommitBackToActions(t *testing.T) {
 	ts.Key(term.Key{Code: term.KeyEsc})
 	if a.Main != main || reopened != 1 {
 		t.Errorf("back to %T, Actions opened %d times", a.Main, reopened)
+	}
+}
+
+func TestShowStat(t *testing.T) {
+	a := testApp(60, 20)
+	root := fakeChanges{"/r"}
+	back := false
+	cv := commitView{app: a, styles: colors.Default(), back: func() { back = true }}
+	// wait returns the screen once the stat is read.
+	wait := func(ts *TextScreen) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); ts.loaded != nil; ts.Tick() {
+			if time.Now().After(deadline) {
+				t.Fatal("the stat was not read")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	text := func(w int) string {
+		scr := term.NewScreen(w, 20)
+		a.Main.Draw(scr)
+		return scr.String()
+	}
+	cv.showStat(commitSide{root: root, ch: source.Change{ID: "abc", Subject: "subject"}}, "")
+	ts := a.Main.(*TextScreen)
+	if got := text(60); !strings.Contains(got, "counting") {
+		t.Errorf("not counting:\n%s", got)
+	}
+	wait(ts)
+	// The stat alone, under the commit's title and a blank line, scaled
+	// to the text's width.
+	for _, w := range []int{60, 40} {
+		lines := strings.Split(text(w), "\n")
+		if !strings.HasPrefix(lines[0], "┌ (commit) abc subject ") || lines[1] != "│"+strings.Repeat(" ", w-2)+"│" || !strings.HasPrefix(lines[2], fmt.Sprintf("│  stat of abc at %d ", w-4)) {
+			t.Errorf("no stat at %d:\n%s", w, strings.Join(lines, "\n"))
+		}
+	}
+	if strings.Contains(text(60), "commit abc\n") {
+		t.Errorf("the message shown:\n%s", text(60))
+	}
+	ts.Key(term.Key{Code: term.KeyEsc})
+	if !back {
+		t.Error("Esc didn't go back")
+	}
+	// A commit without files says so.
+	cv.showStat(commitSide{root: root, ch: source.Change{ID: "empty"}}, "")
+	wait(a.Main.(*TextScreen))
+	if got := text(60); !strings.Contains(got, "│  no files changed") {
+		t.Errorf("empty commit:\n%s", got)
+	}
+	// An error reading it is shown in the error popup.
+	cv.showStat(commitSide{root: root, ch: source.Change{ID: "bad"}}, "")
+	wait(a.Main.(*TextScreen))
+	if a.errTitle != showFailed || strings.Contains(text(60), "counting") {
+		t.Errorf("error %q:\n%s", a.errTitle, text(60))
 	}
 }
