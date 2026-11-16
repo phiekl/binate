@@ -7,7 +7,6 @@ package git
 import (
 	"bufio"
 	"bytes"
-	"compress/zlib"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -109,19 +108,24 @@ type entry struct {
 	// refDelta.
 	base   int64
 	baseID ID
+	// head is the start of the compressed data, read with the header,
+	// which for a small entry is all of it.
+	head []byte
 }
 
-// maxEntryHeader is the most an entry's header may take: the type and
-// size, and a delta's base.
-const maxEntryHeader = 10 + 32
+// entryRead is how much is read of an entry at first: its header, of at
+// most 10 bytes of type and size and 32 of a delta's base, and the start
+// of its data, enough for most commits and deltas of trees, which a walk
+// of history reads many of.
+const entryRead = 512
 
 // entry reads the header of the entry at off.
 func (p *pack) entry(off int64) (entry, error) {
 	if off < 12 || off >= p.end {
 		return entry{}, fmt.Errorf("pack entry at invalid offset %d", off)
 	}
-	var buf [maxEntryHeader]byte
-	n, err := p.f.ReadAt(buf[:min(int64(len(buf)), p.end-off)], off)
+	buf := make([]byte, min(entryRead, p.end-off))
+	n, err := p.f.ReadAt(buf, off)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return entry{}, err
 	}
@@ -130,6 +134,7 @@ func (p *pack) entry(off int64) (entry, error) {
 		return entry{}, fmt.Errorf("pack entry at %d: %w", off, err)
 	}
 	e.off = off
+	e.head = buf[e.data:n]
 	e.data += off
 	if e.typ == ofsDelta {
 		if e.base <= 0 || e.base >= off {
@@ -196,13 +201,18 @@ func parseEntry(b []byte, f *Format) (entry, error) {
 
 // inflate returns a reader of e's data, of e.size bytes, failing if the
 // data turns out to be of another size or corrupt.
-func (p *pack) inflate(e entry, id ID) (io.Reader, error) {
-	sr := io.NewSectionReader(p.f, e.data, p.end-e.data)
-	z, err := zlib.NewReader(bufio.NewReaderSize(sr, 4096))
+func (p *pack) inflate(e entry, id ID) (*sizedReader, error) {
+	rest := e.data + int64(len(e.head))
+	sr := io.MultiReader(bytes.NewReader(e.head), io.NewSectionReader(p.f, rest, p.end-rest))
+	z, err := newInflater(sr)
 	if err != nil {
 		return nil, corrupt(id, "pack entry at %d: %v", e.off, err)
 	}
-	return &sizedReader{r: z, left: e.size, id: id}, nil
+	release := func() error {
+		z.release()
+		return nil
+	}
+	return &sizedReader{r: z, left: e.size, id: id, close: release}, nil
 }
 
 // inflateAll returns e's data, which may be at most max bytes.
@@ -214,6 +224,7 @@ func (p *pack) inflateAll(e entry, id ID, max int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = r.Close() }()
 	data := make([]byte, e.size)
 	if _, err := io.ReadFull(r, data); err != nil {
 		return nil, err
@@ -234,6 +245,7 @@ func (p *pack) resultSize(e entry, id ID) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer func() { _ = r.Close() }()
 	_, size, err := deltaSizes(bufio.NewReaderSize(r, 32))
 	if err != nil {
 		return 0, corrupt(id, "pack entry at %d: %v", e.off, err)
@@ -261,7 +273,7 @@ func (p *pack) open(off int64, id ID) (Object, error) {
 		if err != nil {
 			return Object{}, err
 		}
-		return Object{Type: Type(e.typ), Size: e.size, ReadCloser: io.NopCloser(r)}, nil
+		return Object{Type: Type(e.typ), Size: e.size, ReadCloser: r}, nil
 	}
 	typ, data, err := p.resolve(e, id, 0)
 	if err != nil {

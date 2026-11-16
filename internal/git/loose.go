@@ -7,9 +7,9 @@ package git
 import (
 	"bufio"
 	"bytes"
-	"compress/zlib"
 	"errors"
 	"io"
+	"io/fs"
 	"path/filepath"
 	"strconv"
 
@@ -40,26 +40,30 @@ func openLoose(dir string, id ID) (Object, error) {
 	if err != nil {
 		return Object{}, err
 	}
-	z, err := zlib.NewReader(bufio.NewReader(f))
+	z, err := newInflater(f)
 	if err != nil {
 		_ = f.Close()
 		return Object{}, corrupt(id, "%v", err)
+	}
+	closeAll := func() error {
+		z.release()
+		return f.Close()
 	}
 	r := bufio.NewReaderSize(z, 4096)
 	head, err := r.Peek(maxHeader)
 	if err != nil && !errors.Is(err, io.EOF) {
-		_ = f.Close()
+		_ = closeAll()
 		return Object{}, corrupt(id, "%v", err)
 	}
 	typ, size, n, err := parseLooseHeader(head)
 	if err != nil {
-		_ = f.Close()
+		_ = closeAll()
 		return Object{}, corrupt(id, "%v", err)
 	}
 	_, _ = r.Discard(n)
 	return Object{
 		Type: typ, Size: size,
-		ReadCloser: &sizedReader{r: r, left: size, id: id, close: f.Close},
+		ReadCloser: &sizedReader{r: r, left: size, id: id, close: closeAll},
 	}, nil
 }
 
@@ -159,5 +163,7 @@ func (s *sizedReader) Close() error {
 	}
 	err := s.close()
 	s.close = nil
+	// What was read from may be in use elsewhere now.
+	s.r, s.err = nil, fs.ErrClosed
 	return err
 }
