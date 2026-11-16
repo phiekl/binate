@@ -10,11 +10,13 @@ Full reference for the binate file and directory difference viewer.
 
 ```
 binate [options] left right
+binate -g [options] left right
 ```
 
 **binate** shows two directory trees, or two files, side by side, and marks
-where they differ. It never changes anything itself: the only way a file changes
-is through your own editor, which **e** opens.
+where they differ. With **-g**, they are trees or files of two git revisions. It
+never changes anything itself: the only way a file changes is through your own
+editor, which **e** opens.
 
 It is Linux-only and needs a terminal: if stdin or stdout is not a terminal, it
 exits with an error before drawing anything. The man page,
@@ -22,6 +24,7 @@ exits with an error before drawing anything. The man page,
 
 - [Inputs](#inputs)
 - [Options](#options)
+- [Git](#git)
 - [Comparing](#comparing)
 - [Tree view](#tree-view)
 - [Diff view](#diff-view)
@@ -89,6 +92,11 @@ next arguments are *left* and *right* even if they start with a dash.
 - **-q**, **--quick**: In the tree view, compare files by size and modification
   time instead of by contents.
 
+- **-g**, **--git**: Take *left* and *right* as revisions of the git repository
+  of the current directory, such as **main**, **HEAD~2** or **v1.0:src**, and
+  compare their trees, or files. Nothing outside the repository is read. See
+  [Git](#git).
+
 - **-h**, **--help**: Show the options and exit.
 
 - **-v**, **--verbose**: Write debug messages to stderr, including whether
@@ -97,6 +105,61 @@ next arguments are *left* and *right* even if they start with a dash.
   **-vvv**).
 
 - **-V**, **--version**: Show the version and exit.
+
+## Git
+
+With **-g**, *left* and *right* are revisions of the repository of the current
+directory, and **binate** reads nothing outside the repository's top. The top is
+found as git finds it, but by names alone, reading nothing on the way: the
+nearest of the directory and those above it with a **.git** in it, a directory
+or a file naming one, not past a file system's boundary or a directory in
+**GIT_CEILING_DIRECTORIES**, unless **GIT_DISCOVERY_ACROSS_FILESYSTEM** is true;
+or the directory itself, if a bare repository, which is told apart only there. A
+repository with any of its directories outside the top, symlinks followed, is
+refused before anything there is read: a linked work tree, whose git directory
+is in the main one's, a submodule checked out, whose git directory is in its
+superproject's, one apart from its work tree, as **git init --separate-git-dir**
+makes, or one with alternates elsewhere, as **git clone --reference** makes. An
+alternate that doesn't exist is skipped, as git skips it. Symlinks in the git
+directory to files, as an old repository's **HEAD**, are not read either.
+**GIT_DIR** names the repository instead, relative to the current directory,
+which is then the top, and beneath it. A revision naming a commit or a tag
+compares its tree; one naming a file, as **HEAD:README**, compares that file, as
+two files are compared. A tree can't be compared with a file.
+
+**binate** reads the repository itself, without running git: loose objects,
+packs and alternates, in either object format, SHA-1 or SHA-256. It reads a
+repository of a format git reads, version 0 or 1, and refuses one with an
+extension it doesn't know, or refs stored as reftable. Nothing in the
+repository's configuration is acted on, so a repository owned by another user is
+read as any other, where git refuses it unless **safe.directory** allows it.
+
+A revision is written as for **git rev-parse**:
+
+- a ref name, as **main**, **v1.0**, **origin/main** or **refs/heads/main**,
+  looked up as git does, loose or packed, following symrefs; **HEAD**, or **@**
+  for it;
+- an object name, or 4 or more of its first hex digits, naming one object alone;
+- then any of **^** or **^**_n_, a commit's first or _n_-th parent, **~** or
+  **~**_n_, its first parent _n_ times, **^{}**, what a tag points to, and
+  **^{commit}**, **^{tree}**, **^{blob}**, **^{tag}** or **^{object}**;
+- then maybe **:**_path_, the entry at _path_ in the tree, relative to the
+  current directory if it starts with **./** or **../**.
+
+Reflogs and upstreams (**@{**...**}**), ranges (**..**, **^!**, **^@**),
+searches (**:/**_text_, **^{/**_text_**}**) and the index (**:**_path_) are not
+supported.
+
+A tree's entries have the modes git records: a file is **0644** or, if
+executable, **0755**; a directory **0755**; a symlink **0777**. They have no
+times or owners, so these compare equal. Files are compared by their blob's
+object name, without being read: two files are the same exactly when their blobs
+are. Symlinks are compared by their targets, and not followed. A submodule is
+not read, and shows as an entry that couldn't be. An object missing from the
+repository, as one a partial clone left out, is an error on its entry. Files in
+a revision can't be edited.
+
+An error resolving a revision is written before the screen is taken.
 
 ## Comparing
 
@@ -859,7 +922,13 @@ The child restricts itself with Landlock before it reads any input:
   signalled, nor an abstract unix socket outside it reached, as far as the
   kernel's Landlock ABI restricts each (see below).
 - **/etc/passwd** and **/etc/group**, which name the owners in the panels, are
-  read before the restriction, and not again.
+  read before the restriction, and not again; with **-g**, which shows no
+  owners, not at all.
+- With **-g**, the child finds the repository's top by names alone, reading
+  nothing, then restricts itself to reading beneath it before reading anything
+  of the repository, and then further, to its git directory, and its common and
+  objects directories, also beneath it, before reading its configuration, refs
+  and objects. Both layers deny the rest, as above.
 
 The editor is run by the parent, and is not restricted (see
 [Editing](#editing)).
@@ -896,4 +965,4 @@ Column widths come from Unicode's East Asian Width property, which gets some
 emoji wrong. Such characters can misalign columns. Characters with no width
 can't, since they are escaped.
 
-See also [**binate**(1)](binate.1.md), **diff**(1) and **sdiff**(1).
+See also [**binate**(1)](binate.1.md), **diff**(1), **sdiff**(1) and **git-rev-parse**(1).

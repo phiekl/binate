@@ -19,6 +19,7 @@ import (
 	"pxy.se/go/binate/internal/app"
 	"pxy.se/go/binate/internal/cli"
 	"pxy.se/go/binate/internal/colors"
+	"pxy.se/go/binate/internal/git"
 	"pxy.se/go/binate/internal/landlock"
 	"pxy.se/go/binate/internal/scan"
 	"pxy.se/go/binate/internal/source"
@@ -59,6 +60,10 @@ type child struct {
 	in      inputs
 	client  *supervise.Client
 	streams [2]*os.File
+	// repo is the repository of --git, found before the process is
+	// restricted, and gitFiles the revisions' files, if files.
+	repo     *git.Location
+	gitFiles [2]*git.Root
 }
 
 func runChild(specText string) int {
@@ -110,6 +115,9 @@ func socketFile(fd int) (*os.File, error) {
 // policy returns what the child may read (see doc/manual.md#landlock).
 func (c *child) policy() landlock.Policy {
 	var p landlock.Policy
+	if c.repo != nil {
+		p.Dirs = append(p.Dirs, c.repo.ReadDirs()...)
+	}
 	for _, side := range []input{c.in.left, c.in.right} {
 		switch side.kind {
 		case inputDir:
@@ -133,12 +141,48 @@ func (c *child) restrict() error {
 }
 
 // run takes the terminal, restricts the process and runs the screens.
+// What can fail before the screens run, as resolving git revisions, is
+// done before the terminal is taken, so that its error is plain to see.
 func (c *child) run() (code int) {
 	t, err := term.Open(os.Stdin, os.Stdout)
 	if err != nil {
 		return fail("opening the terminal: %v", err)
 	}
 	a := app.New(c.log, t, c.client)
+	if c.opts.git {
+		// Nothing outside the repository's top is read: it is found by
+		// names alone, then read under a first layer allowing only it,
+		// before the next allows only the repository. A git revision has
+		// no owners to name.
+		top, err := git.FindTop(".", os.Getenv)
+		if err != nil {
+			return fail("%v", err)
+		}
+		rules, err := landlock.Policy{Dirs: []string{top}}.Rules()
+		if err != nil {
+			return fail("%v", err)
+		}
+		if err := landlock.Restrict(c.log, rules...); err != nil {
+			return fail("restricting the process: %v", err)
+		}
+		if c.repo, err = git.Discover(top, ".", os.Getenv); err != nil {
+			return fail("%v", err)
+		}
+	} else {
+		a.Names = stat.LoadNames()
+	}
+	if err := c.restrict(); err != nil {
+		return fail("restricting the process: %v", err)
+	}
+	var roots [2]source.Root
+	if c.opts.git {
+		if roots, err = c.gitRoots(); err != nil {
+			return fail("%v", err)
+		}
+	} else if c.in.dirMode() {
+		roots = [2]source.Root{source.Disk(c.in.left.path), source.Disk(c.in.right.path)}
+	}
+
 	if err := a.Enter(); err != nil {
 		return fail("entering raw mode: %v", err)
 	}
@@ -149,20 +193,15 @@ func (c *child) run() (code int) {
 			panic(r)
 		}
 	}()
-	a.Names = stat.LoadNames()
-	if err := c.restrict(); err != nil {
-		_ = a.Leave()
-		return fail("restricting the process: %v", err)
-	}
 	a.HasEditor = len(editorCommand()) > 0
 	styles := colors.Parse(colors.FromEnv(os.Getenv)).Styles
 	a.Styles = styles
-	if c.in.dirMode() {
+	if roots[0] != nil {
 		a.Main = app.NewTreeScreen(a, app.TreeConfig{
 			Styles: styles,
 			Home:   os.Getenv("HOME"),
-			Left:   source.Disk(c.in.left.path),
-			Right:  source.Disk(c.in.right.path),
+			Left:   roots[0],
+			Right:  roots[1],
 			Options: scan.Options{
 				Compare:  c.opts.compare,
 				Quick:    c.opts.quick,
@@ -187,10 +226,37 @@ func (c *child) run() (code int) {
 	return code
 }
 
+// gitRoots opens the repository and resolves the revisions: two trees,
+// returned to compare as such, or two files, kept for source to return.
+func (c *child) gitRoots() ([2]source.Root, error) {
+	repo, err := git.Open(c.repo)
+	if err != nil {
+		return [2]source.Root{}, err
+	}
+	for i, side := range []input{c.in.left, c.in.right} {
+		target, err := repo.Resolve(side.path)
+		if err != nil {
+			return [2]source.Root{}, err
+		}
+		c.gitFiles[i] = git.NewTargetRoot(repo.Repo, target, side.path)
+	}
+	l, r := c.gitFiles[0], c.gitFiles[1]
+	switch {
+	case l.IsFile() != r.IsFile():
+		return [2]source.Root{}, fmt.Errorf("unable to compare a tree with a file: %s and %s", c.in.left.path, c.in.right.path)
+	case l.IsFile():
+		return [2]source.Root{}, nil
+	}
+	return [2]source.Root{l, r}, nil
+}
+
 // source returns side i (0 left, 1 right) for the diff view. A stream is read
 // once, by the diff view, in the background.
 func (c *child) source(i int) app.Source {
 	in := []input{c.in.left, c.in.right}[i]
+	if f := c.gitFiles[i]; f != nil {
+		return app.Source{Root: f}
+	}
 	src := app.Source{Root: source.Disk(in.path)}
 	if f := c.streams[i]; f != nil {
 		src.Stream, src.Pipe = true, f

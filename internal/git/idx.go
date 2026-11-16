@@ -10,10 +10,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
 	"runtime/debug"
 
 	"golang.org/x/sys/unix"
+
+	"pxy.se/go/binate/internal/files"
 )
 
 // packIndex is a pack's index, version 2, mapped into memory: the names of
@@ -37,7 +38,7 @@ var idxMagic = []byte{0xff, 't', 'O', 'c'}
 // are read through it while mapped, so that one changed meanwhile can't do
 // more than make lookups fail: see safely.
 func openIndex(path string, f *Format) (*packIndex, error) {
-	file, err := os.Open(path)
+	file, err := files.OpenRegular(path, false)
 	if err != nil {
 		return nil, err
 	}

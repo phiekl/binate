@@ -10,13 +10,15 @@ Inspect file and directory differences in a read-only terminal view.
 
 ```
 binate [options] left right
+binate -g [options] left right
 ```
 
 **binate** shows two directory trees, or two files, side by side, and marks
-where they differ. It never changes anything itself: the only way a file changes
-is through your own editor, which **e** opens. Scanning, comparing and drawing
-run in a child process. Where available, Landlock restricts it from writing and
-running programs, within the kernel's limits.
+where they differ. With **-g**, they are trees or files of two git revisions. It
+never changes anything itself: the only way a file changes is through your own
+editor, which **e** opens. Scanning, comparing and drawing run in a child
+process. Where available, Landlock restricts it from writing and running
+programs, within the kernel's limits.
 
 *left* and *right* may be directories, files, or one of each. When one input is
 a directory, its entry matching the other input's filename is compared, as with
@@ -39,6 +41,9 @@ See [**binate-manual**(7)](manual.md) for the full reference.
   shell-style *pattern*. Repeatable.
 - **-q**, **--quick**: Compare files by size and modification time instead of
   contents.
+- **-g**, **--git**: Compare *left* and *right* as revisions of the git
+  repository of the current directory, such as **main**, **HEAD~2** or
+  **v1.0:src**.
 - **-h**, **--help**: Show the options and exit.
 - **-v**, **--verbose**: Write debug messages to stderr, including the Landlock
   ABI in effect. Repeat for more.
@@ -113,4 +118,4 @@ The column between the sides marks each pair:
 **0** after a normal quit, **2** on errors. The status does not say whether the
 inputs differ.
 
-See also [**binate-manual**(7)](manual.md), **diff**(1) and **sdiff**(1).
+See also [**binate-manual**(7)](manual.md), **diff**(1), **sdiff**(1) and **git-rev-parse**(1).

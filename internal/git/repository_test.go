@@ -23,12 +23,16 @@ func TestDiscover(t *testing.T) {
 	r.commit()
 	gitDir := filepath.Join(r.dir, ".git")
 
+	// From the top or below it, the directory searched from is the prefix.
 	for _, tc := range []struct{ from, prefix string }{
 		{r.dir, ""},
 		{filepath.Join(r.dir, "a"), "a"},
 		{filepath.Join(r.dir, "a", "b"), "a/b"},
 	} {
-		loc, err := Discover(tc.from, noEnv)
+		if top, err := FindTop(tc.from, noEnv); err != nil || top != r.dir {
+			t.Errorf("top from %s: %s, %v", tc.from, top, err)
+		}
+		loc, err := discover(tc.from, noEnv)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,36 +43,6 @@ func TestDiscover(t *testing.T) {
 			t.Errorf("objects %q", loc.ObjectDirs)
 		}
 	}
-	// Inside the git directory, it is a bare repository.
-	if loc, err := Discover(filepath.Join(gitDir, "objects"), noEnv); err != nil || loc.GitDir != gitDir || loc.WorkTree != "" {
-		t.Errorf("inside .git: %+v, %v", loc, err)
-	}
-
-	// A linked work tree shares the objects and refs.
-	linked := filepath.Join(t.TempDir(), "linked")
-	r.git("worktree", "add", "-q", linked)
-	loc, err := Discover(linked, noEnv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loc.CommonDir != gitDir || filepath.Dir(loc.GitDir) != filepath.Join(gitDir, "worktrees") || loc.WorkTree != linked {
-		t.Errorf("linked: %+v", loc)
-	}
-	if dirs := loc.ReadDirs(); !slices.Equal(dirs, []string{loc.GitDir, gitDir}) {
-		t.Errorf("linked reads %q", dirs)
-	}
-
-	// GIT_DIR names the repository, and no work tree is assumed.
-	env := func(k string) string {
-		if k == "GIT_DIR" {
-			return gitDir
-		}
-		return ""
-	}
-	if loc, err := Discover(t.TempDir(), env); err != nil || loc.GitDir != gitDir || loc.WorkTree != "" {
-		t.Errorf("GIT_DIR: %+v, %v", loc, err)
-	}
-
 	// The search stops at a ceiling, above the directory searched from.
 	ceiling := func(k string) string {
 		if k == "GIT_CEILING_DIRECTORIES" {
@@ -76,11 +50,97 @@ func TestDiscover(t *testing.T) {
 		}
 		return ""
 	}
-	if _, err := Discover(filepath.Join(r.dir, "a"), ceiling); err == nil {
+	if _, err := discover(filepath.Join(r.dir, "a"), ceiling); err == nil {
 		t.Error("searched past the ceiling")
 	}
-	if _, err := Discover(t.TempDir(), noEnv); err == nil {
+	// The git directory itself is a bare repository, where binate starts.
+	if loc, err := discover(gitDir, noEnv); err != nil || loc.GitDir != gitDir || loc.WorkTree != "" {
+		t.Errorf("in .git: %+v, %v", loc, err)
+	}
+	if _, err := discover(t.TempDir(), noEnv); err == nil {
 		t.Error("found a repository outside one")
+	}
+
+	// GIT_DIR names the repository, relative to the directory, and no
+	// work tree is assumed; not one outside it.
+	env := func(dir string) func(string) string {
+		return func(k string) string {
+			if k == "GIT_DIR" {
+				return dir
+			}
+			return ""
+		}
+	}
+	if loc, err := discover(r.dir, env(".git")); err != nil || loc.GitDir != gitDir || loc.WorkTree != "" {
+		t.Errorf("GIT_DIR: %+v, %v", loc, err)
+	}
+	if _, err := discover(t.TempDir(), env(gitDir)); !errors.Is(err, errOutside) {
+		t.Errorf("GIT_DIR outside: %v", err)
+	}
+}
+
+// Nothing outside the directory searched is read: a repository with a
+// directory outside it is refused.
+func TestDiscoverOutside(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.commit()
+	gitDir := filepath.Join(r.dir, ".git")
+
+	// A linked work tree's git directory, and the objects and refs it
+	// shares, are in the main one.
+	linked := filepath.Join(t.TempDir(), "linked")
+	r.git("worktree", "add", "-q", linked)
+	if _, err := discover(linked, noEnv); !errors.Is(err, errOutside) {
+		t.Errorf("linked work tree: %v", err)
+	}
+
+	// .git as a symlink to a repository elsewhere.
+	elsewhere := t.TempDir()
+	if err := os.Symlink(gitDir, filepath.Join(elsewhere, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := discover(elsewhere, noEnv); !errors.Is(err, errOutside) {
+		t.Errorf(".git a symlink outside: %v", err)
+	}
+
+	// An alternate outside, or the objects as a symlink outside.
+	alt := newTestRepo(t, SHA1)
+	writeAlternates(t, filepath.Join(gitDir, "objects"), filepath.Join(alt.dir, ".git", "objects"))
+	if _, err := discover(r.dir, noEnv); !errors.Is(err, errOutside) {
+		t.Errorf("alternate outside: %v", err)
+	}
+	// One missing, inside, is skipped, as git skips it.
+	writeAlternates(t, filepath.Join(gitDir, "objects"), filepath.Join(r.dir, "missing"))
+	if loc, err := discover(r.dir, noEnv); err != nil || len(loc.ObjectDirs) != 1 {
+		t.Errorf("alternate missing: %+v, %v", loc, err)
+	}
+	if err := os.Remove(filepath.Join(gitDir, "objects", "info", "alternates")); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "objects")
+	if err := os.Rename(filepath.Join(gitDir, "objects"), moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, filepath.Join(gitDir, "objects")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := discover(r.dir, noEnv); !errors.Is(err, errOutside) {
+		t.Errorf("objects a symlink outside: %v", err)
+	}
+	// Inside, it is read, and allowed.
+	inside := filepath.Join(r.dir, "objects-moved")
+	if err := os.Rename(moved, inside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(gitDir, "objects")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(inside, filepath.Join(gitDir, "objects")); err != nil {
+		t.Fatal(err)
+	}
+	loc, err := discover(r.dir, noEnv)
+	if err != nil || !slices.Contains(loc.ReadDirs(), filepath.Join(gitDir, "objects")) {
+		t.Errorf("objects a symlink inside: %+v, %v", loc, err)
 	}
 }
 
@@ -89,9 +149,12 @@ func TestDiscoverBare(t *testing.T) {
 	r.commit()
 	bare := filepath.Join(t.TempDir(), "bare.git")
 	r.git("clone", "-q", "--bare", r.dir, bare)
-	loc, err := Discover(filepath.Join(bare, "refs"), noEnv)
+	loc, err := discover(bare, noEnv)
 	if err != nil || loc.GitDir != bare || loc.WorkTree != "" {
 		t.Errorf("%+v, %v", loc, err)
+	}
+	if _, err := discover(filepath.Join(bare, "refs"), noEnv); err == nil {
+		t.Error("found a bare repository from below it")
 	}
 }
 
@@ -99,17 +162,23 @@ func TestDiscoverGitFile(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
+	// A git directory apart from the work tree, inside it or not.
 	r := &testRepo{t: t, dir: t.TempDir(), format: SHA1}
-	sep := filepath.Join(t.TempDir(), "sep.git")
+	sep := filepath.Join(r.dir, "sep.git")
 	r.git("init", "-q", "--separate-git-dir="+sep)
-	loc, err := Discover(r.dir, noEnv)
+	loc, err := discover(r.dir, noEnv)
 	if err != nil || loc.GitDir != sep || loc.WorkTree != r.dir {
 		t.Errorf("%+v, %v", loc, err)
+	}
+	r = &testRepo{t: t, dir: t.TempDir(), format: SHA1}
+	r.git("init", "-q", "--separate-git-dir="+filepath.Join(t.TempDir(), "sep.git"))
+	if _, err := discover(r.dir, noEnv); !errors.Is(err, errOutside) {
+		t.Errorf("git directory outside: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(r.dir, ".git"), []byte("not a gitfile\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Discover(r.dir, noEnv); err == nil {
+	if _, err := discover(r.dir, noEnv); err == nil {
 		t.Error("read an invalid gitfile")
 	}
 }
@@ -211,7 +280,7 @@ func TestRepositoryFormat(t *testing.T) {
 // directory sub.
 func openTest(t *testing.T, r *testRepo, sub string) *Repository {
 	t.Helper()
-	loc, err := Discover(filepath.Join(r.dir, sub), noEnv)
+	loc, err := discover(filepath.Join(r.dir, sub), noEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +298,7 @@ func TestOpenReftable(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.git("init", "-q", "--ref-format=reftable")
-	loc, err := Discover(r.dir, noEnv)
+	loc, err := discover(r.dir, noEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,13 +414,26 @@ func TestResolve(t *testing.T) {
 		}
 	}
 
-	// From a subdirectory, ./ and ../ are relative to it.
-	repo := openTest(t, r, "dir")
-	for rev, want := range map[string]string{"HEAD:./x": "HEAD:dir/x", "HEAD:../f": "HEAD:f", "HEAD:../": "HEAD:", "HEAD:./": "HEAD:dir", "HEAD:sub/g": "HEAD:sub/g"} {
-		got, err := repo.Resolve(rev)
-		if want == "HEAD:sub/g" {
+	// ./ and ../ are relative to the directory searched from: a
+	// subdirectory, or the top.
+	for rev, want := range map[string]string{"HEAD:./x": "HEAD:dir/x", "HEAD:../f": "HEAD:f", "HEAD:../": "HEAD:", "HEAD:./": "HEAD:dir", "HEAD:sub/g": ""} {
+		got, err := openTest(t, r, "dir").Resolve(rev)
+		if want == "" {
 			if err == nil {
 				t.Errorf("%s: resolved from the root to %s", rev, got.ID)
+			}
+			continue
+		}
+		if err != nil || got.ID.String() != r.gitTarget(want) {
+			t.Errorf("from dir, %s: %s, %v", rev, got.ID, err)
+		}
+	}
+	repo := openTest(t, r, "")
+	for rev, want := range map[string]string{"HEAD:./dir/x": "HEAD:dir/x", "HEAD:dir/../f": "", "HEAD:./dir/../f": "HEAD:f", "HEAD:./": "HEAD:", "HEAD:../f": ""} {
+		got, err := repo.Resolve(rev)
+		if want == "" {
+			if err == nil {
+				t.Errorf("%s: resolved to %s", rev, got.ID)
 			}
 			continue
 		}
@@ -465,7 +547,7 @@ func FuzzResolve(f *testing.F) {
 		f.Add(s)
 	}
 	r := revRepo(f)
-	loc, err := Discover(r.dir, noEnv)
+	loc, err := discover(r.dir, noEnv)
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -508,4 +590,14 @@ func TestResolveUppercaseHashes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// discover finds the repository of dir as binate does: its top, then the
+// repository there.
+func discover(dir string, getenv func(string) string) (*Location, error) {
+	top, err := FindTop(dir, getenv)
+	if err != nil {
+		return nil, err
+	}
+	return Discover(top, dir, getenv)
 }

@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # binate
 
-binate compares two directory trees side by side in the terminal. It highlights
-differences in file contents and metadata, and opens text files in a diff view
-to inspect them line by line.
+binate compares two directory trees side by side in the terminal, or two
+revisions of a git repository. It highlights differences in file contents and
+metadata, and opens text files in a diff view to inspect them line by line.
 
 ## Features
 
@@ -52,13 +52,18 @@ tree.
      alt="binate filtering both directory trees to Stockholm, highlighting a file type difference"
      width="800">
 
+### Native git object reader
+
+Use `-g` to compare two revisions or files within them. Data is read directly
+from the repository without running git or checking anything out.
+
 ### Read-only, escaped output and Landlock sandbox
 
 binate never changes files itself. Press `e` to open a file in your editor.
 Control characters, bidi overrides and invisible characters in names and
 contents are shown escaped, never sent to the terminal. Landlock prevents the
 process that reads files from writing files or running programs, and restricts
-some network access.
+some network access. With `-g`, it also prevents reads outside the repository.
 
 ### difftool, editor and terminal integration
 
@@ -91,6 +96,12 @@ Use binate as git's difftool, which opens each changed file in turn:
 
 ```
 $ git difftool --no-prompt -x binate
+```
+
+Compare two branches of the git repository you're in:
+
+```
+$ binate -g main feature
 ```
 
 Press `?` to list the current screen's key bindings, or run `binate --help` to

@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"pxy.se/go/binate/internal/files"
 )
 
@@ -32,7 +34,7 @@ type Repo struct {
 // format f, with the objects directories it names as alternates. The
 // packs are those there now: one added later is not read.
 func OpenRepo(dir string, f *Format) (*Repo, error) {
-	dirs, err := objectDirs(dir)
+	dirs, err := (*beneath)(nil).objectDirs(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +66,11 @@ const maxAlternateDepth = 5
 
 // objectDirs returns dir and its alternates, each once, in the order git
 // searches them.
-func objectDirs(dir string) ([]string, error) {
+func (b *beneath) objectDirs(dir string) ([]string, error) {
 	dir = filepath.Clean(dir)
+	if err := b.check(dir); err != nil {
+		return nil, err
+	}
 	dirs := []string{dir}
 	seen := map[string]bool{dir: true}
 	var add func(d string, depth int) error
@@ -76,6 +81,13 @@ func objectDirs(dir string) ([]string, error) {
 		}
 		for _, alt := range alts {
 			if seen[alt] {
+				continue
+			}
+			if err := b.check(alt); err != nil {
+				return fmt.Errorf("%s: alternate: %w", d, err)
+			}
+			if _, err := os.Stat(alt); errors.Is(err, fs.ErrNotExist) {
+				// Skipped, as git skips it.
 				continue
 			}
 			if depth >= maxAlternateDepth {
@@ -163,10 +175,12 @@ func (r *Repo) openPacks(dir string) error {
 }
 
 func readDirNames(dir string) ([]string, error) {
-	f, err := os.Open(dir)
+	// Not through a symlink, which could lead outside the repository.
+	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, err
+		return nil, &fs.PathError{Op: "open", Path: dir, Err: err}
 	}
+	f := os.NewFile(uintptr(fd), dir)
 	defer func() { _ = f.Close() }()
 	return f.Readdirnames(-1)
 }

@@ -21,6 +21,7 @@ const (
 	inputDir    inputKind = iota // a directory, compared as a tree
 	inputFile                    // a regular file, read by path
 	inputStream                  // anything else, such as /dev/null or a pipe, read once
+	inputGit                     // a git revision, resolved by the child
 )
 
 // input is one side as given on the command line.
@@ -36,6 +37,12 @@ type input struct {
 // argument is searched for an entry matching the other side's basename.
 type inputs struct {
 	left, right input
+}
+
+// gitInputs returns the inputs of --git: two revisions, which only the
+// child, restricted, reads the repository to resolve.
+func gitInputs(left, right string) inputs {
+	return inputs{left: input{path: left, kind: inputGit}, right: input{path: right, kind: inputGit}}
 }
 
 // dirMode reports whether two directories are compared.
@@ -85,7 +92,7 @@ func statInput(path string) (input, error) {
 
 // inputCodes are the letters encode gives each kind of input, in capitals
 // for a file looked up in the directory given.
-const inputCodes = "dfs"
+const inputCodes = "dfsg"
 
 // encode returns the kinds of both sides, for the child, which takes the
 // inputs as the parent resolved them rather than look again: what it

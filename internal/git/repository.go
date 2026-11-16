@@ -49,7 +49,8 @@ func readSmall(path string) (string, error) {
 
 // readLimited reads the regular file at path, of at most max bytes.
 func readLimited(path string, max int64) (string, error) {
-	f, err := files.OpenRegular(path, true)
+	// Not through a symlink, which could lead outside the repository.
+	f, err := files.OpenRegular(path, false)
 	if err != nil {
 		return "", err
 	}
@@ -64,23 +65,35 @@ func readLimited(path string, max int64) (string, error) {
 	return string(data), nil
 }
 
-// Discover finds the repository of the directory dir, as git does: its
-// own, or that of a directory above it, not past a file system's boundary
-// or a directory in GIT_CEILING_DIRECTORIES, unless GIT_DIR names it.
-func Discover(dir string, getenv func(string) string) (*Location, error) {
+// FindTop returns the top of the repository of the directory dir, beneath
+// which all of it is to be: the nearest of dir and the directories above
+// it with ".git" in it, or dir if a bare repository, or if GIT_DIR, which
+// is relative to dir, names the repository. As git, it stops at a file
+// system's boundary, unless GIT_DISCOVERY_ACROSS_FILESYSTEM is true, and
+// at a directory in GIT_CEILING_DIRECTORIES. It only looks at names, and
+// reads nothing, so that the top can be all that is allowed before
+// Discover reads there.
+func FindTop(dir string, getenv func(string) string) (string, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	if gd := getenv("GIT_DIR"); gd != "" {
-		if !filepath.IsAbs(gd) {
-			gd = filepath.Join(dir, gd)
-		}
-		loc, err := locate(filepath.Clean(gd), "")
-		if err != nil {
-			return nil, fmt.Errorf("GIT_DIR %s: %w", gd, err)
-		}
-		return loc, nil
+	if getenv("GIT_DIR") != "" {
+		return dir, nil
+	}
+	exists := func(p string) bool {
+		_, err := os.Lstat(p)
+		return err == nil
+	}
+	isDir := func(p string) bool {
+		fi, err := os.Stat(p)
+		return err == nil && fi.IsDir()
+	}
+	// A bare repository only where binate starts: one above would be
+	// told apart only by reading its HEAD.
+	if !exists(filepath.Join(dir, ".git")) && exists(filepath.Join(dir, "HEAD")) &&
+		isDir(filepath.Join(dir, "objects")) && isDir(filepath.Join(dir, "refs")) {
+		return dir, nil
 	}
 	ceilings := map[string]bool{}
 	for c := range strings.SplitSeq(getenv("GIT_CEILING_DIRECTORIES"), ":") {
@@ -91,49 +104,147 @@ func Discover(dir string, getenv func(string) string) (*Location, error) {
 	across, _ := parseBool(getenv("GIT_DISCOVERY_ACROSS_FILESYSTEM"))
 	var st unix.Stat_t
 	if err := unix.Stat(dir, &st); err != nil {
-		return nil, &fs.PathError{Op: "stat", Path: dir, Err: err}
+		return "", &fs.PathError{Op: "stat", Path: dir, Err: err}
 	}
 	dev := st.Dev
 	for cur := dir; ; {
-		loc, err := discoverAt(cur)
-		if err != nil {
-			return nil, err
-		}
-		if loc != nil {
-			if loc.WorkTree != "" {
-				rel, err := filepath.Rel(loc.WorkTree, dir)
-				if err == nil && rel != "." {
-					loc.Prefix = filepath.ToSlash(rel)
-				}
-			}
-			return loc, nil
+		if exists(filepath.Join(cur, ".git")) {
+			return cur, nil
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur || ceilings[parent] {
-			return nil, fmt.Errorf("not a git repository (or any of the parent directories): %s", dir)
+			return "", fmt.Errorf("not a git repository (or any of the parent directories): %s", dir)
 		}
 		if !across {
 			if err := unix.Stat(parent, &st); err != nil {
-				return nil, &fs.PathError{Op: "stat", Path: parent, Err: err}
+				return "", &fs.PathError{Op: "stat", Path: parent, Err: err}
 			}
 			if st.Dev != dev {
-				return nil, fmt.Errorf("not a git repository (or any parent up to mount point %s): %s; stopping at the file system boundary", cur, dir)
+				return "", fmt.Errorf("not a git repository (or any parent up to mount point %s): %s; stopping at the file system boundary", cur, dir)
 			}
 		}
 		cur = parent
 	}
 }
 
+// Discover finds the repository at top, as FindTop found it from the
+// directory dir, beneath it, reading nothing outside top: a repository
+// with any of its directories outside, symlinks resolved, as a linked
+// work tree's or an alternate's, is refused before anything there is
+// read.
+func Discover(top, dir string, getenv func(string) string) (*Location, error) {
+	top, err := filepath.Abs(top)
+	if err != nil {
+		return nil, err
+	}
+	if dir, err = filepath.Abs(dir); err != nil {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(top)
+	if err != nil {
+		return nil, err
+	}
+	b := &beneath{dir: top, top: resolved}
+	if gd := getenv("GIT_DIR"); gd != "" {
+		if !filepath.IsAbs(gd) {
+			gd = filepath.Join(dir, gd)
+		}
+		gd = filepath.Clean(gd)
+		if err := b.check(gd); err != nil {
+			return nil, fmt.Errorf("GIT_DIR: %w", err)
+		}
+		loc, err := b.locate(gd, "")
+		if err != nil {
+			return nil, fmt.Errorf("GIT_DIR %s: %w", gd, err)
+		}
+		return loc, nil
+	}
+	loc, err := b.discoverAt(top)
+	if err != nil {
+		return nil, err
+	}
+	if loc == nil {
+		return nil, fmt.Errorf("not a git repository: %s", top)
+	}
+	if loc.WorkTree != "" {
+		if rel, err := filepath.Rel(loc.WorkTree, dir); err == nil && rel != "." && within(loc.WorkTree, dir) {
+			loc.Prefix = filepath.ToSlash(rel)
+		}
+	}
+	return loc, nil
+}
+
+// parseBool parses a boolean as git does.
+func parseBool(s string) (bool, bool) {
+	switch strings.ToLower(s) {
+	case "true", "yes", "on", "1":
+		return true, true
+	case "false", "no", "off", "0", "":
+		return false, true
+	}
+	return false, false
+}
+
+// beneath confines discovery to a directory: dir, as given made absolute,
+// and top, dir with symlinks resolved. A nil beneath confines nothing.
+type beneath struct {
+	dir, top string
+}
+
+// errOutside is the error of a path outside the repository's top.
+var errOutside = errors.New("binate reads nothing outside the repository's top")
+
+// check checks that the path p is beneath the directory, as it is and
+// with symlinks resolved, before anything there is read. A path that
+// doesn't exist is checked as it is.
+func (b *beneath) check(p string) error {
+	if b == nil {
+		return nil
+	}
+	p = filepath.Clean(p)
+	if !within(b.dir, p) && !within(b.top, p) {
+		return fmt.Errorf("%s is outside %s: %w", p, b.dir, errOutside)
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !within(b.top, resolved) {
+		return fmt.Errorf("%s, a symlink to %s, is outside %s: %w", p, resolved, b.dir, errOutside)
+	}
+	return nil
+}
+
+// within reports whether the clean absolute path p is root or beneath it.
+func within(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
 // discoverAt returns the repository at dir: a work tree with ".git", a
 // directory or a file naming one, or a bare repository; or nil if dir is
 // none of those.
-func discoverAt(dir string) (*Location, error) {
+func (b *beneath) discoverAt(dir string) (*Location, error) {
 	dotGit := filepath.Join(dir, ".git")
-	fi, err := os.Stat(dotGit)
+	if err := b.check(dotGit); err != nil {
+		return nil, err
+	}
+	fi, err := os.Lstat(dotGit)
+	if err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		// Checked beneath dir, as a directory or file in its place is.
+		fi, err = os.Stat(dotGit)
+	}
 	switch {
 	case err == nil && fi.IsDir():
-		if ok, _ := isGitDir(dotGit); ok {
-			return locate(dotGit, dir)
+		ok, err := b.isGitDir(dotGit)
+		if errors.Is(err, errOutside) {
+			return nil, err
+		}
+		if ok {
+			return b.locate(dotGit, dir)
 		}
 	case err == nil && fi.Mode().IsRegular():
 		data, err := readSmall(dotGit)
@@ -148,20 +259,27 @@ func discoverAt(dir string) (*Location, error) {
 			target = filepath.Join(dir, target)
 		}
 		target = filepath.Clean(target)
-		if ok, err := isGitDir(target); !ok {
+		if err := b.check(target); err != nil {
+			return nil, fmt.Errorf("%s names a git directory: %w", dotGit, err)
+		}
+		if ok, err := b.isGitDir(target); !ok {
 			return nil, fmt.Errorf("%s: not a git repository: %s (%v)", dotGit, target, err)
 		}
-		return locate(target, dir)
+		return b.locate(target, dir)
 	}
-	if ok, _ := isGitDir(dir); ok {
-		return locate(dir, "")
+	ok, err := b.isGitDir(dir)
+	if errors.Is(err, errOutside) {
+		return nil, err
+	}
+	if ok {
+		return b.locate(dir, "")
 	}
 	return nil, nil
 }
 
 // commonDir returns where the git directory gitDir shares its objects and
 // refs: the directory its commondir file names, or gitDir itself.
-func commonDir(gitDir string) (string, error) {
+func (b *beneath) commonDir(gitDir string) (string, error) {
 	data, err := readSmall(filepath.Join(gitDir, "commondir"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return gitDir, nil
@@ -176,13 +294,17 @@ func commonDir(gitDir string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(gitDir, dir)
 	}
-	return filepath.Clean(dir), nil
+	dir = filepath.Clean(dir)
+	if err := b.check(dir); err != nil {
+		return "", fmt.Errorf("%s: commondir: %w", gitDir, err)
+	}
+	return dir, nil
 }
 
 // isGitDir reports whether dir is a git directory, as git checks: HEAD
 // holds a symref into refs/ or an object name, and there are objects and
 // refs, in the common directory.
-func isGitDir(dir string) (bool, error) {
+func (b *beneath) isGitDir(dir string) (bool, error) {
 	head, err := readSmall(filepath.Join(dir, "HEAD"))
 	if err != nil {
 		return false, err
@@ -190,12 +312,16 @@ func isGitDir(dir string) (bool, error) {
 	if !validHead(head) {
 		return false, errors.New("invalid HEAD")
 	}
-	common, err := commonDir(dir)
+	common, err := b.commonDir(dir)
 	if err != nil {
 		return false, err
 	}
 	for _, sub := range []string{"objects", "refs"} {
-		fi, err := os.Stat(filepath.Join(common, sub))
+		p := filepath.Join(common, sub)
+		if err := b.check(p); err != nil {
+			return false, err
+		}
+		fi, err := os.Stat(p)
 		if err != nil {
 			return false, err
 		}
@@ -231,12 +357,12 @@ func isHex(s string) bool {
 
 // locate returns the location of the git directory gitDir, of the work
 // tree workTree, finding its common and objects directories.
-func locate(gitDir, workTree string) (*Location, error) {
-	common, err := commonDir(gitDir)
+func (b *beneath) locate(gitDir, workTree string) (*Location, error) {
+	common, err := b.commonDir(gitDir)
 	if err != nil {
 		return nil, err
 	}
-	dirs, err := objectDirs(filepath.Join(common, "objects"))
+	dirs, err := b.objectDirs(filepath.Join(common, "objects"))
 	if err != nil {
 		return nil, err
 	}
@@ -244,13 +370,14 @@ func locate(gitDir, workTree string) (*Location, error) {
 }
 
 // ReadDirs returns the directories the repository is read from, for the
-// sandbox to allow.
+// sandbox to allow: the objects directories too, as one may be a symlink
+// to elsewhere beneath the directory searched.
 func (l *Location) ReadDirs() []string {
 	dirs := []string{l.GitDir}
 	if l.CommonDir != l.GitDir {
 		dirs = append(dirs, l.CommonDir)
 	}
-	return append(dirs, l.ObjectDirs[1:]...)
+	return append(dirs, l.ObjectDirs...)
 }
 
 // Repository is a repository opened: its objects and refs.
@@ -353,15 +480,4 @@ func repositoryFormat(c config) (*Format, error) {
 		}
 	}
 	return format, nil
-}
-
-// parseBool parses a boolean as git does.
-func parseBool(s string) (bool, bool) {
-	switch strings.ToLower(s) {
-	case "true", "yes", "on", "1":
-		return true, true
-	case "false", "no", "off", "0", "":
-		return false, true
-	}
-	return false, false
 }

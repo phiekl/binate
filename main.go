@@ -49,6 +49,7 @@ const releaseScreen = "\x1b[0m\x1b[?25h\x1b[?1049l"
 type options struct {
 	compare  scan.Attrs
 	quick    bool
+	git      bool
 	excludes []string
 	context  int
 	verbose  int
@@ -65,12 +66,13 @@ func parseOptions(argv []string) (*args.Set, options, error) {
 	s.Count(&o.verbose, "verbose", "v", "write debug messages (repeat for more)")
 	s.Bool(&o.version, "version", "V", "show version and exit")
 	s.Global("verbose", "version")
-	s.Arg(&o.left, "left", "left directory or file")
-	s.Arg(&o.right, "right", "right directory or file")
+	s.Arg(&o.left, "left", "left directory or file, or revision with --git")
+	s.Arg(&o.right, "right", "right directory or file, or revision with --git")
 	s.Func("compare", "c", "attributes to compare (see binate(1))", func(value string) {
 		compare = value
 	})
 	s.Bool(&o.quick, "quick", "q", "compare size and modification time")
+	s.Bool(&o.git, "git", "g", "compare two git revisions of the repository here")
 	s.Func("exclude", "x", "exclude names matching a pattern (repeatable)", func(p string) {
 		o.excludes = append(o.excludes, p)
 	})
@@ -130,9 +132,11 @@ func runParent() int {
 		return fail("%v", err)
 	}
 
-	in, err := resolveInputs(o.left, o.right)
-	if err != nil {
-		return fail("%v", err)
+	in := gitInputs(o.left, o.right)
+	if !o.git {
+		if in, err = resolveInputs(o.left, o.right); err != nil {
+			return fail("%v", err)
+		}
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return fail("stdin and stdout must be a terminal")

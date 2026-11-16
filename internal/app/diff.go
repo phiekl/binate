@@ -60,6 +60,8 @@ func (src Source) editSide() EditSide {
 	switch {
 	case src.Missing:
 		es.Why = "missing"
+	case !onDisk(src.Root):
+		es.Why = notOnDisk
 	case src.Stream:
 		es.Why = notRegular
 	}
@@ -97,7 +99,7 @@ type DiffScreen struct {
 	styles      colors.Styles
 	view        *view.DiffView
 	left, right Source
-	// abs is each side's path made absolute, for the panels.
+	// abs is each side's path as the panels show it (see panelPath).
 	abs  [2]string
 	help *view.Help
 	last *term.Screen
@@ -135,7 +137,7 @@ type DiffConfig struct {
 // NewDiffScreen returns the diff view on two sides, not yet loaded.
 func NewDiffScreen(a *App, cfg DiffConfig) *DiffScreen {
 	return &DiffScreen{
-		abs:    [2]string{absPath(cfg.Left.Path()), absPath(cfg.Right.Path())},
+		abs:    [2]string{panelPath(cfg.Left.Root, cfg.Left.Rel), panelPath(cfg.Right.Root, cfg.Right.Rel)},
 		app:    a,
 		styles: cfg.Styles,
 		view: &view.DiffView{

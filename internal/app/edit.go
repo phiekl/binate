@@ -7,6 +7,7 @@ package app
 import (
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/supervise"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/view"
@@ -25,9 +26,12 @@ type EditSide struct {
 	Why string
 }
 
-// whyNotEditable says why a tree entry's side can't be edited: only an
-// existing regular file can.
-func whyNotEditable(k scan.Kind) string {
+// whyNotEditable says why a tree entry's side of kind k in root can't be
+// edited: only an existing regular file in the file system can.
+func whyNotEditable(root source.Root, k scan.Kind) string {
+	if !onDisk(root) && k != scan.Missing {
+		return notOnDisk
+	}
 	switch k {
 	case scan.File:
 		return ""
@@ -52,6 +56,16 @@ const (
 // notRegular is why a side can't be edited, when nothing more specific is.
 const notRegular = "not a regular file"
 
+// notOnDisk is why a side not in the file system, as one in a git
+// revision, can't be edited.
+const notOnDisk = "in a git revision"
+
+// onDisk reports whether root is in the file system.
+func onDisk(root source.Root) bool {
+	_, ok := root.(source.Disk)
+	return ok
+}
+
 // EditDone is called after the editor exits, with a note on which side
 // was edited, if the popup was skipped and the edit succeeded. An error
 // editing has been shown in the error popup by then.
@@ -70,6 +84,10 @@ type editor struct {
 // editor set, it returns why, for the error popup: sides that can't be
 // edited for different reasons as a list.
 func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []string) {
+	// Setting an editor wouldn't help.
+	if sides[0].Why == notOnDisk && sides[1].Why == notOnDisk {
+		return nil, []string{"Files in git revisions can't be edited."}
+	}
 	if !a.HasEditor {
 		return nil, []string{"Environment variable VISUAL or EDITOR must be set."}
 	}
@@ -85,8 +103,11 @@ func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []st
 		e.run(1, "edited the right side, as the left side is "+sides[0].Why)
 		return nil, nil
 	}
-	const why = "Neither side is a regular file"
+	why := "Neither side is a regular file"
 	l, r := sides[0].Why, sides[1].Why
+	if l == notOnDisk || r == notOnDisk {
+		return nil, []string{"Neither side can be edited:", "The left side is " + l + ".", "The right side is " + r + "."}
+	}
 	if l == r || l == notRegular || r == notRegular {
 		return nil, []string{why + "."}
 	}

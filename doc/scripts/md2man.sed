@@ -61,11 +61,14 @@ x
 		s/.*/\n# DESCRIPTION/
 		b
 	}
-	# The command in bold and its operands in italics.
+	# The command and its options in bold, and its operands in italics.
+	# Each usage is a paragraph of its own.
 	s/^([^ ]+)/**\1**/
+	s/ (-[^ ]+)/ **\1**/g
 	s/\[([^]]+)\]/[*\1*]/g
 	s/ ([a-z]+)( |$)/ *\1*\2/g
 	s/ ([a-z]+)( |$)/ *\1*\2/g
+	s/$/\n/
 	b
 }
 x

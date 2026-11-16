@@ -6,7 +6,6 @@ package app
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 	"time"
 	"unicode"
@@ -55,10 +54,8 @@ type TreeScreen struct {
 	context int
 
 	edit *editor
-	// roots are the sides, and abs each root's path made absolute, for the
-	// panels' paths.
+	// roots are the sides.
 	roots [2]source.Root
-	abs   [2]string
 	// rechecks are paths to compare again, after an edit, once the
 	// recheck running in the background, which recheckDone closes, is done.
 	rechecks    []string
@@ -102,9 +99,6 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 	}
 	t.view.Compare = t.opts.Compare
 	t.roots = [2]source.Root{cfg.Left, cfg.Right}
-	for i, root := range t.roots {
-		t.abs[i] = absPath(root.Path(""))
-	}
 	t.stats.app, t.previews.app = a, a
 	t.start()
 	t.model = tree.New(t.scan.Root)
@@ -211,7 +205,7 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 				sides[i].Entries = sd.Count
 			}
 		}
-		sides[i].Path = filepath.Join(t.abs[i], filepath.FromSlash(n.Path()))
+		sides[i].Path = panelPath(t.roots[i], n.Path())
 	}
 	return sides
 }
@@ -256,7 +250,7 @@ func (t *TreeScreen) startEdit() {
 		for i := range 2 {
 			sides[i] = EditSide{
 				Path: t.roots[i].Path(path), Rel: path, HasRel: true,
-				Why: whyNotEditable(n.Side(i == 1).Kind),
+				Why: whyNotEditable(t.roots[i], n.Side(i == 1).Kind),
 			}
 		}
 	}

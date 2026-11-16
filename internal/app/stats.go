@@ -103,6 +103,15 @@ func (r *reader[K, V]) fetch(key K) {
 	}
 }
 
+// panelPath returns the path a panel shows of the entry at rel in root:
+// made absolute if in the file system, else as the root names it.
+func panelPath(root source.Root, rel string) string {
+	if d, ok := root.(source.Disk); ok {
+		return absPath(d.Path(rel))
+	}
+	return root.Path(rel)
+}
+
 // absPath returns path made absolute, for a panel, or as given if it can't
 // be.
 func absPath(path string) string {

@@ -55,11 +55,12 @@ func TestObjectDirs(t *testing.T) {
 	writeAlternates(t, d("a"), "# comment", "", "../b", strconv.Quote(d("c")))
 	writeAlternates(t, d("b"), d("a"), d("d"))
 	writeAlternates(t, d("c"), d("b"))
-	got, err := objectDirs(d("a"))
+	got, err := (*beneath)(nil).objectDirs(d("a"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{d("a"), d("b"), d("d"), d("c")}; !slices.Equal(got, want) {
+	// d, missing, is skipped, as git skips it.
+	if want := []string{d("a"), d("b"), d("c")}; !slices.Equal(got, want) {
 		t.Errorf("dirs %q, want %q", got, want)
 	}
 
@@ -67,12 +68,12 @@ func TestObjectDirs(t *testing.T) {
 	for i := range 7 {
 		writeAlternates(t, d("chain"+strconv.Itoa(i)), d("chain"+strconv.Itoa(i+1)))
 	}
-	if _, err := objectDirs(d("chain0")); err == nil {
+	if _, err := (*beneath)(nil).objectDirs(d("chain0")); err == nil {
 		t.Error("followed alternates too deep")
 	}
 
 	writeAlternates(t, d("bad"), `"unterminated`)
-	if _, err := objectDirs(d("bad")); err == nil {
+	if _, err := (*beneath)(nil).objectDirs(d("bad")); err == nil {
 		t.Error("read an invalid quoted path")
 	}
 }

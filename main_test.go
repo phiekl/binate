@@ -1067,9 +1067,140 @@ func TestInputsEncode(t *testing.T) {
 			t.Errorf("%q: decoded %+v, %v, want %+v", args, got, err, in)
 		}
 	}
+	git := gitInputs("HEAD~", "main:dir")
+	if got, err := decodeInputs("HEAD~", "main:dir", git.encode()); err != nil || got != git || git.encode() != "gg" {
+		t.Errorf("git: decoded %+v, %v, want %+v", got, err, git)
+	}
 	for _, code := range []string{"", "d", "ddd", "Dd", "FF", "xd"} {
 		if _, err := decodeInputs("a", "b", code); err == nil {
 			t.Errorf("decodeInputs(%q) succeeded", code)
+		}
+	}
+}
+
+// gitRepo makes a repository with two commits, in a temporary directory,
+// running git, or skips the test if git is not installed.
+func gitRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@example.org", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@example.org")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(files map[string]string) {
+		t.Helper()
+		for name, data := range files {
+			p := filepath.Join(dir, name)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	run("init", "-q", "-b", "main")
+	write(map[string]string{"dir/changed": "one\ntwo\n", "same": "x\n", "gone": "g\n"})
+	run("add", "-A")
+	run("commit", "-q", "-m", "first")
+	if err := os.Remove(filepath.Join(dir, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	write(map[string]string{"dir/changed": "one\nTWO\n", "new": "n\n"})
+	run("add", "-A")
+	run("commit", "-q", "-m", "second")
+	run("repack", "-adq")
+	return dir
+}
+
+// startIn runs binate in dir, in a new pseudo-terminal.
+func startIn(t *testing.T, dir string, args ...string) *ptytest.Term {
+	t.Helper()
+	pt := ptytest.Open(t, 100, 30)
+	cmd := binate(t, args...)
+	cmd.Dir = dir
+	pt.Start(cmd)
+	return pt
+}
+
+func TestGitTrees(t *testing.T) {
+	repo := gitRepo(t)
+	// From a subdirectory, the repository found above it.
+	pt := startIn(t, filepath.Join(repo, "dir"), "-v", "-g", "HEAD~", "main")
+	offset := pt.Wait(0, enterScreen)
+	screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
+	screen("[1 identical] [1 left] [1 right] [1 contents]")
+	// The panels show the revisions' paths, as git names them.
+	pt.Write("n")
+	scr := screen("main:dir/changed")
+	if !regexp.MustCompile(`│ path │ HEAD~:dir/changed *│   │ path │ main:dir/changed *│`).MatchString(scr) {
+		t.Errorf("panels without the paths:\n%s", scr)
+	}
+	pt.Write("e")
+	screen("Files in git revisions can't be edited.")
+	pt.Write("j")
+	pt.Write("\r")
+	screen("| │2 TWO")
+	pt.Write("\x1b")
+	screen("[1 contents]")
+	quit(t, pt, offset, "x")
+	pt.Wait(offset, leaveScreen)
+	if code := pt.Exit(); code != 0 {
+		t.Errorf("exit status %d", code)
+	}
+	if abi, err := llsyscall.LandlockGetABIVersion(); err == nil && abi >= 1 {
+		if out := pt.Output(); !strings.Contains(out[offset:], "debug1: landlock: enabled") {
+			t.Errorf("no report that Landlock is enabled in %q", out[offset:])
+		}
+	}
+}
+
+func TestGitFiles(t *testing.T) {
+	repo := gitRepo(t)
+	pt := startIn(t, filepath.Join(repo, "dir"), "--git", "HEAD~:./changed", "HEAD:dir/changed")
+	offset := pt.Wait(0, enterScreen)
+	scr := pt.WaitScreen(100, 30, offset, "1 changed")
+	if !strings.Contains(scr, "| │2 TWO") || !regexp.MustCompile(`│ path │ HEAD~:\./changed *│   │ path │ HEAD:dir/changed *│`).MatchString(scr) {
+		t.Errorf("screen:\n%s", scr)
+	}
+	quit(t, pt, offset, "x")
+	pt.Wait(offset, leaveScreen)
+	if code := pt.Exit(); code != 0 {
+		t.Errorf("exit status %d", code)
+	}
+}
+
+// Revisions that can't be compared are reported before the screen is
+// taken.
+func TestGitErrors(t *testing.T) {
+	repo := gitRepo(t)
+	for _, tc := range []struct {
+		dir  string
+		args []string
+		want string
+	}{
+		{repo, []string{"-g", "nope", "HEAD"}, "error: revision nope: unknown revision"},
+		{repo, []string{"-g", "HEAD@{1}", "HEAD"}, "not supported"},
+		{repo, []string{"-g", "HEAD", "HEAD:same"}, "unable to compare a tree with a file"},
+		{t.TempDir(), []string{"-g", "HEAD", "HEAD"}, "not a git repository"},
+	} {
+		pt := startIn(t, tc.dir, tc.args...)
+		pt.Wait(0, tc.want)
+		if code := pt.Exit(); code != 2 {
+			t.Errorf("%q: exit status %d", tc.args, code)
+		}
+		out := pt.Output()
+		if !strings.Contains(out, tc.want) || strings.Contains(out, enterScreen) {
+			t.Errorf("%q: output %q, want %q before any screen", tc.args, out, tc.want)
 		}
 	}
 }
