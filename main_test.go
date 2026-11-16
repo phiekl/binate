@@ -1167,6 +1167,9 @@ func TestGitTrees(t *testing.T) {
 	if lines := strings.Split(scr, "\n"); !strings.HasPrefix(lines[0], " (git) "+repo) || !strings.HasPrefix(lines[1], "┌") {
 		t.Errorf("no repository at the top:\n%s", scr)
 	}
+	if link := "\x1b]8;;'" + repo + "'\x1b\\"; !strings.Contains(pt.Output(), link) {
+		t.Errorf("the repository not linked: no %q", link)
+	}
 	// The panels show the revisions' paths, as git names them.
 	pt.Write("n")
 	scr = screen("main:dir/changed")

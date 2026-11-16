@@ -43,6 +43,10 @@ type Root interface {
 	Open(rel string, follow bool) (File, error)
 }
 
+// ModeGitlink is the type, in Mode, of a git submodule: a commit of another
+// repository, named by Target, as git's S_IFGITLINK. No file has it.
+const ModeGitlink = 0o160000
+
 // Entry is what the scan compares of an entry: less than stat.Stat, and
 // cheaper to read.
 type Entry struct {
@@ -56,7 +60,7 @@ type Entry struct {
 	// Rdev is a device's number.
 	Rdev  uint64
 	Mtime time.Time
-	// Target is a symlink's target.
+	// Target is a symlink's target, or a submodule's commit.
 	Target string
 }
 

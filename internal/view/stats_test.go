@@ -15,6 +15,7 @@ import (
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/display"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/tree"
@@ -527,5 +528,27 @@ func TestPanelRepoPath(t *testing.T) {
 				t.Errorf("not linked %q, linked %q", got, rest)
 			}
 		})
+	}
+}
+
+// A submodule's panel shows its commit as its type, marked where the
+// commits differ, and has no size or mode.
+func TestPanelSubmodule(t *testing.T) {
+	sub := func(commit string) *stat.Stat { return &stat.Stat{Mode: source.ModeGitlink, Target: commit} }
+	sides := [2]StatSide{
+		{Stat: sub("aaaa"), Entries: -1, InRevision: true},
+		{Stat: sub("bbbb"), Entries: -1, InRevision: true},
+	}
+	scr := term.NewScreen(80, 15)
+	p := Layout(80)
+	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", term.Style{}, colors.Default())
+	got := panelRowsText(scr)
+	for i, want := range []string{"type │ submodule aaaa", "size │ —", "mode │ —"} {
+		if !strings.Contains(got[i], want) {
+			t.Errorf("row %d: %q, want %q", i, got[i], want)
+		}
+	}
+	if m := scr.Cell(p.Mark, 2).R; m != '|' {
+		t.Errorf("commits differing marked %q", m)
 	}
 }

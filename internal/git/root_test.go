@@ -47,7 +47,7 @@ func twoCommits(t *testing.T) (*testRepo, ID, ID) {
 }
 
 func TestRoot(t *testing.T) {
-	r, _, second := twoCommits(t)
+	r, first, second := twoCommits(t)
 	repo := r.open()
 	defer repo.Close()
 	root, err := NewRoot(repo, second, "HEAD")
@@ -100,11 +100,20 @@ func TestRoot(t *testing.T) {
 		{"dir/nope", unix.ENOENT},
 		{"nope/x", unix.ENOENT},
 		{"a.txt/x", unix.ENOTDIR},
-		{"sub", errSubmodule},
 	} {
 		if e, err := root.Entry(tc.rel, false); e.Mode != 0 || !errors.Is(err, tc.want) {
 			t.Errorf("Entry(%q): %+v, %v", tc.rel, e, err)
 		}
+	}
+	// A submodule is its commit, of another repository, and no file.
+	if e, err := root.Entry("sub", false); err != nil || e.Mode != source.ModeGitlink || e.Target != first.String() {
+		t.Errorf("Entry of a submodule: %+v, %v", e, err)
+	}
+	if st, err := root.Stat("sub"); err != nil || st.Mode != source.ModeGitlink || st.Target != first.String() {
+		t.Errorf("Stat of a submodule: %+v, %v", st, err)
+	}
+	if _, err := root.Open("sub", false); !errors.Is(err, files.ErrNotRegular) {
+		t.Errorf("Open of a submodule: %v", err)
 	}
 	if _, err := root.Entry("link", true); !errors.Is(err, errFollow) {
 		t.Errorf("Entry followed a symlink: %v", err)
@@ -250,5 +259,48 @@ func TestScanMissingBlobs(t *testing.T) {
 	}
 	if _, err := right.Stat("a.txt"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Stat of a missing blob: %v", err)
+	}
+}
+
+// Submodules are compared by their commits.
+func TestScanSubmodules(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"f": "f\n"})
+	base := r.commit()
+	other := r.commit()
+	gitlink := func(path string, id ID) {
+		r.git("update-index", "--add", "--cacheinfo", "160000,"+id.String()+","+path)
+	}
+	gitlink("same", base)
+	gitlink("moved", base)
+	gitlink("became", base)
+	r.git("commit", "-q", "-m", "left")
+	left := r.id("HEAD")
+	gitlink("moved", other)
+	r.git("rm", "-q", "--cached", "became")
+	r.write(map[string]string{"became": "a file\n"})
+	r.git("add", "became")
+	r.git("commit", "-q", "-m", "right")
+	right := r.id("HEAD")
+
+	repo := r.open()
+	defer repo.Close()
+	l, err := NewRoot(repo, left, "left")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr, err := NewRoot(repo, right, "right")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := scanned(t, l, rr, scan.DefaultAttrs)
+	for p, m := range map[string]rune{"same": '=', "moved": '|', "became": '!'} {
+		if got[p] != m {
+			t.Errorf("%s: %c, want %c", p, got[p], m)
+		}
+	}
+	// Without contents compared, a submodule's commit isn't.
+	if got := scanned(t, l, rr, scan.DefaultAttrs&^scan.Content); got["moved"] != '=' {
+		t.Errorf("moved without contents compared: %c", got["moved"])
 	}
 }

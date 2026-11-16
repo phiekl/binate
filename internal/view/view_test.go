@@ -1192,3 +1192,22 @@ func TestComparePopup(t *testing.T) {
 		t.Errorf("after Set: selected %v, lines %+v", c.Attr(), c.Lines)
 	}
 }
+
+// A submodule shows as "sub", with its commit abbreviated after its name.
+func TestTreeSubmodule(t *testing.T) {
+	root := &scan.Node{L: scan.Side{Kind: scan.Dir}, R: scan.Side{Kind: scan.Dir}, State: scan.Differ}
+	sub := &scan.Node{
+		Name: "lib", Parent: root, State: scan.Differ, Own: scan.Content, Data: scan.Differ,
+		L: scan.Side{Kind: scan.Submodule, Target: strings.Repeat("a", 40)},
+		R: scan.Side{Kind: scan.Submodule, Target: strings.Repeat("b", 40)},
+	}
+	root.Children = []*scan.Node{sub}
+	m := tree.New(root)
+	v := &TreeView{Styles: colors.Default(), Left: "a", Right: "b"}
+	scr := term.NewScreen(70, 8)
+	v.Draw(scr, m, TreeStatus{})
+	want := "  sub │   lib @ aaaaaaaaaaaa    |   sub │   lib @ bbbbbbbbbbbb\n"
+	if got := strings.SplitAfter(panes(scr), "\n")[0]; got != want {
+		t.Errorf("panes:\n%q\nwant:\n%q", got, want)
+	}
+}

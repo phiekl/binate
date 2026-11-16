@@ -361,6 +361,8 @@ func (v *TreeView) typeLabel(sd *scan.Side) (string, term.Style) {
 		return "bdev", st.Device
 	case scan.Socket:
 		return "sock", st.Socket
+	case scan.Submodule:
+		return "sub", withoutBold(st.Dir)
 	}
 	return "?", st.Plain
 }
@@ -404,8 +406,12 @@ func (v *TreeView) drawSide(s *term.Screen, x, w, y int, m *tree.Model, row tree
 		name = append(name, display.Glyph{R: '/', W: 1})
 	}
 	var tail []display.Glyph
-	if sd.Kind == scan.Symlink {
+	switch sd.Kind {
+	case scan.Symlink:
 		tail = append(display.Plain(" -> "), display.Name(sd.Target)...)
+	case scan.Submodule:
+		// The commit, abbreviated: the panel has it whole.
+		tail = append(display.Plain(" @ "), display.Name(sd.Target[:min(len(sd.Target), 12)])...)
 	}
 
 	textW := w

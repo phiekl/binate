@@ -74,7 +74,8 @@ next arguments are *left* and *right* even if they start with a dash.
     **>**). Left out, they are hidden, with everything below them.
   - **type**: entries of different types on the two sides (**!**). Left out,
     they are hidden, with everything below them.
-  - **content**: a regular file's size and contents.
+  - **content**: a regular file's size and contents, and the commit of a git
+    submodule (see [Git](#git)).
   - **target**: a symlink's target.
   - **device**: a device's major and minor number.
   - **mode**: the permission bits, with setuid, setgid and sticky.
@@ -175,7 +176,9 @@ which may take a second in a large repository. A revision naming a tree or a
 blob, not through a commit, has no history to show. Files are compared by their
 blob's object name, without being read: two files are the same exactly when
 their blobs are. Symlinks are compared by their targets, and not followed. A
-submodule is not read, and shows as an entry that couldn't be. An object missing
+submodule, a commit of another repository, is not read: it shows as **sub**, and
+two are compared by their commits, as contents, marked **|** where they differ.
+Its panel shows the commit as its type, and no size or mode. An object missing
 from the repository, as one a partial clone left out, is an error where it is
 read: a tree on its entry, and a file only in the panels and when its
 differences are shown, so that two revisions of a clone without blobs can be
@@ -276,12 +279,14 @@ root path in the title: home becomes **~**, and long paths lose their middle to
 fit. In each row, the type precedes the escaped name (see [Showing text
 safely](#showing-text-safely)), as **dir │ ▾ src/**. The types are **file**,
 **dir**, **link** (symlink), **pipe** (FIFO), **char** and **bdev** (character
-and block device), **sock** (socket) and **?** (one that could not be read), in
-the colours **ls** gives them by default, an executable file in green. A
-directory has a **▸** or **▾** before its name and a **/** after it. A symlink
-shows its target after **->**. The mark (see [Marks](#marks)) is shown once per
-row, in a column of its own between the two boxes. The bottom border of each box
-shows the selected row and the number of rows shown, as **3/12**.
+and block device), **sock** (socket), **sub** (a git submodule, see [Git](#git))
+and **?** (one that could not be read), in the colours **ls** gives them by
+default, an executable file in green. A directory has a **▸** or **▾** before
+its name and a **/** after it. A symlink shows its target after **->**, and a
+submodule the first 12 digits of its commit after **@**. The mark (see
+[Marks](#marks)) is shown once per row, in a column of its own between the two
+boxes. The bottom border of each box shows the selected row and the number of
+rows shown, as **3/12**.
 
 Once the initial scan finishes, all directories expand, including one-sided
 ones. Identical entries start hidden. Directories with differences below them

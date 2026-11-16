@@ -37,12 +37,15 @@ const (
 	Socket
 	CharDev
 	BlockDev
+	// Submodule is a git submodule: a commit of another repository, in
+	// Target.
+	Submodule
 	Unknown // could not be read, or a type Linux doesn't name here
 )
 
 func (k Kind) String() string {
 	return [...]string{"missing", "directory", "file", "symlink", "fifo", "socket",
-		"character device", "block device", "unknown"}[k]
+		"character device", "block device", "submodule", "unknown"}[k]
 }
 
 // Side is an entry on one side.
@@ -51,7 +54,7 @@ type Side struct {
 	// Size is -1 if unknown (see source.Entry).
 	Size   int64
 	Mtime  time.Time
-	Target string // of a symlink
+	Target string // of a symlink, or a submodule's commit
 	Rdev   uint64 // of a device
 	Perm   uint32 // permission bits, with setuid, setgid and sticky
 	Uid    uint32
@@ -698,6 +701,8 @@ func statSide(root source.Root, rel string, follow bool) Side {
 		sd.Kind = CharDev
 	case unix.S_IFBLK:
 		sd.Kind = BlockDev
+	case source.ModeGitlink:
+		sd.Kind, sd.Target = Submodule, e.Target
 	default:
 		sd.Kind = Unknown
 	}
@@ -765,6 +770,11 @@ func classify(n *Node, opts Options) {
 		if set&Device != 0 && l.Rdev != r.Rdev {
 			data = Differ
 		}
+	case Submodule:
+		// A submodule's contents are its commit.
+		if set&Content != 0 && l.Target != r.Target {
+			data = Differ
+		}
 	case File:
 		switch {
 		case set&Content == 0:
@@ -797,7 +807,7 @@ func settle(n *Node, data State) {
 	n.Data = data
 	if data == Differ {
 		switch n.L.Kind {
-		case File:
+		case File, Submodule:
 			n.Own |= Content
 		case Symlink:
 			n.Own |= Target

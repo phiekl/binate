@@ -15,6 +15,7 @@ import (
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/display"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/term"
 )
@@ -192,6 +193,9 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 		typeAttr = scan.Target
 	case unix.S_IFCHR, unix.S_IFBLK:
 		typeAttr = scan.Device
+	case source.ModeGitlink:
+		// A submodule's commit is its contents.
+		typeAttr = scan.Content
 	}
 	field("type", typeValue(st), typeAttr, '|')
 	// Only a regular file's size is compared, with its contents: a
@@ -201,8 +205,14 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	if st.Mode&unix.S_IFMT == unix.S_IFREG {
 		sizeAttr = scan.Content
 	}
-	plain("size", sizeValue(st, sd.Entries), sizeAttr, '|')
-	plain("mode", fmt.Sprintf("%04o", st.Mode&0o7777), scan.Mode, '~')
+	if st.Mode&unix.S_IFMT == source.ModeGitlink {
+		// A submodule has neither in the tree: only its commit.
+		plain("size", "—", 0, 0)
+		plain("mode", "—", 0, 0)
+	} else {
+		plain("size", sizeValue(st, sd.Entries), sizeAttr, '|')
+		plain("mode", fmt.Sprintf("%04o", st.Mode&0o7777), scan.Mode, '~')
+	}
 	if sd.InRevision {
 		return append(rows, changeRows(sd.Change)...)
 	}
@@ -293,6 +303,8 @@ func typeValue(st *stat.Stat) []display.Glyph {
 		return display.Plain(fmt.Sprintf("char %d,%d", unix.Major(st.Rdev), unix.Minor(st.Rdev)))
 	case unix.S_IFBLK:
 		return display.Plain(fmt.Sprintf("bdev %d,%d", unix.Major(st.Rdev), unix.Minor(st.Rdev)))
+	case source.ModeGitlink:
+		return append(display.Plain("submodule "), display.Name(st.Target)...)
 	}
 	return display.Plain("?")
 }

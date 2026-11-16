@@ -75,10 +75,6 @@ func NewTargetRoot(repo *Repo, t Target, name string) *Root {
 // IsFile reports whether the root is a file, not a tree.
 func (r *Root) IsFile() bool { return r.file != nil }
 
-// errSubmodule is the error of a submodule, whose commit is in another
-// repository.
-var errSubmodule = errors.New("a submodule, which is not read")
-
 // errFollow is the error of following a symlink, which in a tree names
 // nothing the tree can resolve for sure.
 var errFollow = errors.New("symlinks are not followed in a git tree")
@@ -187,6 +183,8 @@ func unixMode(m Mode) uint32 {
 		return unix.S_IFLNK | 0o777
 	case ModeTree:
 		return unix.S_IFDIR | 0o755
+	case ModeSubmodule:
+		return source.ModeGitlink
 	}
 	return 0
 }
@@ -201,7 +199,8 @@ func (r *Root) Entry(rel string, follow bool) (source.Entry, error) {
 	}
 	switch e.Mode {
 	case ModeSubmodule:
-		return source.Entry{}, r.pathError("lstat", rel, errSubmodule)
+		// The commit, of another repository, is all there is of it.
+		return source.Entry{Mode: source.ModeGitlink, Target: e.ID.String()}, nil
 	case ModeSymlink:
 		if follow {
 			return source.Entry{}, r.pathError("stat", rel, errFollow)
