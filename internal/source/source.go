@@ -61,6 +61,23 @@ type File interface {
 	Stat() (fs.FileInfo, error)
 }
 
+// ContentIDs is a Root that names its files by a hash of their contents,
+// as a git tree does, so that files can be compared without reading them.
+type ContentIDs interface {
+	Root
+	// ContentID returns the ID of the regular file at rel, or false if it
+	// has none, as for an entry that is not a regular file. Two files with
+	// IDs of the same Scheme have the same contents exactly when their
+	// IDs are equal.
+	ContentID(rel string) (ContentID, bool)
+}
+
+// ContentID is the ID of a file's contents.
+type ContentID struct {
+	Scheme string
+	Sum    string
+}
+
 // Disk is a side in the file system, at the path given. Its errors carry
 // the path, as those of package os do.
 type Disk string

@@ -6,6 +6,7 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -655,5 +656,44 @@ func TestIgnoredEntries(t *testing.T) {
 	s.Reclassify(Options{})
 	if got := marks(s.Root); !strings.HasPrefix(got, "< gone\n< gone/b\n< gone/b/c\n< gone/a\n! kind\n") {
 		t.Errorf("compared again:\n%s", got)
+	}
+}
+
+// idRoot is a root on disk whose files have the IDs in ids, of scheme,
+// and can't be opened: compared by their IDs, they need not be.
+type idRoot struct {
+	source.Disk
+	scheme string
+	ids    map[string]string
+}
+
+func (r idRoot) ContentID(rel string) (source.ContentID, bool) {
+	id, ok := r.ids[rel]
+	return source.ContentID{Scheme: r.scheme, Sum: id}, ok
+}
+
+func (r idRoot) Open(rel string, follow bool) (source.File, error) {
+	return nil, errors.New("opened")
+}
+
+func TestContentIDs(t *testing.T) {
+	files := map[string]string{"same": "x", "differ": "y", "noid": "z"}
+	left := idRoot{source.Disk(tree(t, files)), "s", map[string]string{"same": "1", "differ": "2"}}
+	right := idRoot{source.Disk(tree(t, files)), "s", map[string]string{"same": "1", "differ": "3"}}
+	s := Start(left, right, Options{}, nil)
+	s.Wait()
+	// The IDs decide, though the contents are the same; without IDs, the
+	// files are opened, which fails.
+	for p, want := range map[string]State{"same": Same, "differ": Differ, "noid": Unverified} {
+		if n := s.Root.Find(p); n.State != want {
+			t.Errorf("%s: %c, want %c", p, n.State.Mark(), want.Mark())
+		}
+	}
+	// IDs of different schemes say nothing.
+	right.scheme = "other"
+	s = Start(left, right, Options{}, nil)
+	s.Wait()
+	if n := s.Root.Find("same"); n.State != Unverified {
+		t.Errorf("other scheme: %c", n.State.Mark())
 	}
 }

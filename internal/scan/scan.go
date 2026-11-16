@@ -843,8 +843,12 @@ type contentComparer struct {
 
 // compareContents reads the files at rel in left and right in blocks,
 // stopping at the first difference. Only regular files are read: opening
-// anything else could block or have side effects.
+// anything else could block or have side effects. Files whose roots name
+// them by IDs of the same scheme are compared by those, without reading.
 func (c *contentComparer) compareContents(ctx context.Context, left, right source.Root, rel string) (State, error, error) {
+	if state, ok := compareIDs(left, right, rel); ok {
+		return state, nil, nil
+	}
 	lf, lErr := left.Open(rel, false)
 	rf, rErr := right.Open(rel, false)
 	lErr, rErr = files.UnwrapPath(lErr), files.UnwrapPath(rErr)
@@ -879,6 +883,28 @@ func (c *contentComparer) compareContents(ctx context.Context, left, right sourc
 			return Same, nil, nil
 		}
 	}
+}
+
+// compareIDs compares the files at rel in left and right by their content
+// IDs, if both have IDs of the same scheme.
+func compareIDs(left, right source.Root, rel string) (State, bool) {
+	l, ok := left.(source.ContentIDs)
+	if !ok {
+		return Pending, false
+	}
+	r, ok := right.(source.ContentIDs)
+	if !ok {
+		return Pending, false
+	}
+	lID, lok := l.ContentID(rel)
+	rID, rok := r.ContentID(rel)
+	if !lok || !rok || lID.Scheme != rID.Scheme {
+		return Pending, false
+	}
+	if lID.Sum == rID.Sum {
+		return Same, true
+	}
+	return Differ, true
 }
 
 // readFull reads until buf is full or the file ends.
