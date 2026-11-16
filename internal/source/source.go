@@ -95,6 +95,15 @@ type History interface {
 	LastChange(ctx context.Context, rel string) (Change, error)
 }
 
+// RepoPaths is a Root in a repository, as a git commit's tree.
+type RepoPaths interface {
+	Root
+	// RepoPath returns the path of the entry at rel in the repository,
+	// from its top, as git commands take it, or false if that isn't
+	// known.
+	RepoPath(rel string) (string, bool)
+}
+
 // Change is a change in a History: a commit.
 type Change struct {
 	// ID names the change, as a commit's hash.

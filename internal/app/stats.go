@@ -175,6 +175,17 @@ func panelPath(root source.Root, rel string) string {
 	return root.Path(rel)
 }
 
+// repoPath returns the path of the entry at rel in root, a revision, from
+// the top of its repository, "" if that isn't known.
+func repoPath(root source.Root, rel string) string {
+	if w, ok := root.(source.RepoPaths); ok {
+		if p, ok := w.RepoPath(rel); ok {
+			return p
+		}
+	}
+	return ""
+}
+
 // absPath returns path made absolute, for a panel, or as given if it can't
 // be.
 func absPath(path string) string {

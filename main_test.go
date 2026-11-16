@@ -1173,16 +1173,22 @@ func TestGitTrees(t *testing.T) {
 	if !regexp.MustCompile(`│ +path │ HEAD~:dir/changed *│   │ +path │ main:dir/changed *│`).MatchString(scr) {
 		t.Errorf("panels without the paths:\n%s", scr)
 	}
-	// They show only what git records, and link to no file.
+	// They show only what git records.
 	scr = screen("mode │ 0644")
 	for _, label := range []string{"owner │", "inode │", "mtime │"} {
 		if strings.Contains(scr, label) {
 			t.Errorf("panels with %q:\n%s", label, scr)
 		}
 	}
+	// The path after a revision and its colon is linked to the entry's
+	// path in the repository, as git takes it; the revision is not.
 	if strings.Contains(pt.Output(), "\x1b]8;;'HEAD~") {
-		t.Error("a revision's path is linked")
+		t.Error("a revision is linked")
 	}
+	if link := "HEAD~:\x1b]8;;'dir/changed'\x1b\\dir/changed"; !strings.Contains(pt.Output(), link) {
+		t.Errorf("no link %q", link)
+	}
+
 	// And the commit that last changed each side, from git's history.
 	scr = screen("committed │")
 	local := func(t time.Time) string { return t.Local().Format("2006-01-02 15:04:05") }

@@ -5,6 +5,7 @@
 package git
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -297,6 +298,16 @@ func (r *Root) ContentID(rel string) (source.ContentID, bool) {
 	return source.ContentID{Scheme: "git-" + r.repo.format.name, Sum: string(e.ID.Bytes())}, true
 }
 
+// RepoPath returns the path of the entry at rel from the top of the
+// repository, "." for the top: known for a root of a commit, whose path in
+// its tree is known.
+func (r *Root) RepoPath(rel string) (string, bool) {
+	if r.commit.IsZero() {
+		return "", false
+	}
+	return cmp.Or(path.Join(r.prefix, rel), "."), true
+}
+
 // HasHistory reports whether the root is of a commit.
 func (r *Root) HasHistory() bool { return !r.commit.IsZero() }
 
@@ -358,5 +369,6 @@ func (fi fileInfo) Sys() any           { return nil }
 var (
 	_ source.ContentIDs = (*Root)(nil)
 	_ source.History    = (*Root)(nil)
+	_ source.RepoPaths  = (*Root)(nil)
 	_ io.ReadCloser     = (*file)(nil)
 )

@@ -227,6 +227,7 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 		}
 		sides[i].Path = panelPath(t.roots[i], n.Path())
 		sides[i].InRevision = !onDisk(t.roots[i])
+		sides[i].RepoPath = repoPath(t.roots[i], n.Path())
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 	}
 	return sides

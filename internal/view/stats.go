@@ -90,8 +90,12 @@ type StatSide struct {
 	Path string
 	// InRevision is set for a side in a git revision, which records only
 	// an entry's type, target, size and mode: the rest is left out, and
-	// the path, which names no file, is not linked.
+	// the path, which names no file, is linked only by RepoPath.
 	InRevision bool
+	// RepoPath, if set, of a side in a revision, is the entry's path from
+	// the top of the repository, as git commands take it, linked to from
+	// the part of Path after the revision and the colon.
+	RepoPath string
 	// Change, if set, is the commit that last changed the entry, of a
 	// side with a history.
 	Change *Change
@@ -125,6 +129,9 @@ type statRow struct {
 	path bool
 	link string
 	dim  bool
+	// linkFrom is the first glyph of the path linked, as after a
+	// revision and its colon.
+	linkFrom int
 	// item is set for a row of the commit that last changed the entry,
 	// whose value takes the item's style in the tree where it differs from
 	// the other side's; pending, for one still looked for.
@@ -141,10 +148,18 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	var rows []statRow
 	if sd.Path != "" {
 		row := statRow{label: "path", value: display.Name(HomePath(sd.Path, home)), path: true, dim: sd.Missing}
-		if !sd.Missing && !sd.InRevision {
+		switch {
+		case sd.Missing:
+		case !sd.InRevision:
 			// Quoted, to paste into a command line, which also keeps
 			// controls out of the link.
 			row.link = display.ShellQuote(sd.Path)
+		case sd.RepoPath != "":
+			if rev, rel, ok := strings.Cut(sd.Path, ":"); ok && rel != "" {
+				pre := display.Name(rev + ":")
+				row.value, row.linkFrom = append(pre, display.Name(rel)...), len(pre)
+				row.link = display.ShellQuote(sd.RepoPath)
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -496,8 +511,18 @@ func drawStatRow(s *term.Screen, x, y, w, labelW int, row statRow, highlight ter
 			style = style.With(term.Dim)
 		}
 		esc := rowEscape(st.Escape, style)
+		value := row.value
+		if pre := value[:row.linkFrom]; row.linkFrom > 0 && display.Width(pre) < room {
+			// The part not linked, as a revision, kept whole, and the
+			// part linked shortened in what room is left.
+			n := s.Text(x+used, y, room, pre, style, esc)
+			used, room, value = used+n, room-n, value[row.linkFrom:]
+		} else if row.linkFrom > 0 {
+			// No room for the part linked to show: none is.
+			row.link = ""
+		}
 		style.Link, esc.Link = row.link, row.link
-		s.Text(x+used, y, room, ShortenMiddle(row.value, room), style, esc)
+		s.Text(x+used, y, room, ShortenMiddle(value, room), style, esc)
 		return
 	}
 	var tag []display.Glyph

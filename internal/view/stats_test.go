@@ -476,3 +476,56 @@ func TestPanelChangeStyle(t *testing.T) {
 		})
 	}
 }
+
+// The path of a side in a revision links the part after the colon to the
+// entry's path in the repository, keeping the revision whole when
+// shortened.
+func TestPanelRepoPath(t *testing.T) {
+	st := colors.Default()
+	file := &stat.Stat{Mode: unix.S_IFREG | 0o644, Size: 3}
+	for _, tc := range []struct {
+		name, path string
+		w          int
+		// rev is the part shown whole and not linked, and linked whether
+		// the rest is linked.
+		rev    string
+		linked bool
+	}{
+		{"fits", "main:dir/f", 80, "main:", true},
+		{"shortened", "main:" + strings.Repeat("d/", 30) + "f", 60, "main:", true},
+		{"no room", strings.Repeat("r", 40) + ":f", 50, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sides := [2]StatSide{
+				{Stat: file, Entries: -1, Path: tc.path, InRevision: true, RepoPath: "d/it's"},
+				{Missing: true, Entries: -1},
+			}
+			scr := term.NewScreen(tc.w, 15)
+			p := Layout(tc.w)
+			drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", term.Style{}, st)
+			x0 := p.LeftX + len(" path │ ") - len("│") + 1
+			var plain, linked strings.Builder
+			for x := x0; x < p.LeftX+p.LeftW; x++ {
+				c := scr.Cell(x, 2)
+				switch c.Style.Link {
+				case "":
+					if linked.Len() == 0 {
+						plain.WriteRune(c.R)
+					}
+				case `'d/it'\''s'`:
+					linked.WriteRune(c.R)
+				default:
+					t.Errorf("link %q", c.Style.Link)
+				}
+			}
+			got, rest := strings.TrimRight(plain.String(), " "), linked.String()
+			shortened := len(tc.path) > p.LeftW-len(" path │ ")
+			switch {
+			case tc.linked && (got != tc.rev || rest == "" || shortened != strings.Contains(rest, "…") || !strings.HasSuffix(tc.path, rest[strings.LastIndex(rest, "…")+len("…"):])):
+				t.Errorf("not linked %q, linked %q", got, rest)
+			case !tc.linked && (rest != "" || !strings.Contains(got, "…")):
+				t.Errorf("not linked %q, linked %q", got, rest)
+			}
+		})
+	}
+}

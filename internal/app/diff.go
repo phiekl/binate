@@ -395,6 +395,9 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 		}
 		sides[i].Path = d.abs[i]
 		sides[i].InRevision = !onDisk(src.Root)
+		if !src.Missing && !src.Stream {
+			sides[i].RepoPath = repoPath(src.Root, src.Rel)
+		}
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 	}
 	return sides

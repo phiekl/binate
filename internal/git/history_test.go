@@ -160,6 +160,35 @@ func TestParseSignature(t *testing.T) {
 	}
 }
 
+func TestRepoPath(t *testing.T) {
+	r := historyRepo(t, SHA1)
+	rp := openTest(t, r, "")
+	blob := strings.TrimSpace(r.git("rev-parse", "HEAD:d/b"))
+	for _, tc := range []struct {
+		rev, rel, want string
+	}{
+		{"HEAD", "d/e/f", "d/e/f"},
+		{"HEAD", "", "."},
+		{"HEAD:d", "e/f", "d/e/f"},
+		{"HEAD:d", "", "d"},
+		{"HEAD:./d/e", "f", "d/e/f"},
+		{"HEAD~2:d/b", "", "d/b"},
+		// Where a tree or blob named alone is in the repository isn't
+		// known.
+		{"HEAD^{tree}", "d", ""},
+		{blob, "", ""},
+	} {
+		target, err := rp.Resolve(tc.rev)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.rev, err)
+		}
+		root := NewTargetRoot(rp.Repo, target, tc.rev)
+		if p, ok := root.RepoPath(tc.rel); p != tc.want || ok != (tc.want != "") {
+			t.Errorf("%s %s: %q %v, want %q", tc.rev, tc.rel, p, ok, tc.want)
+		}
+	}
+}
+
 func TestShallowHistory(t *testing.T) {
 	for _, f := range []*Format{SHA1, SHA256} {
 		t.Run(f.name, func(t *testing.T) {

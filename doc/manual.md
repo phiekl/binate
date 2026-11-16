@@ -376,7 +376,11 @@ per row:
   [Showing text safely](#showing-text-safely)) rather than as a **file://** URL,
   as **'/home/al/it'\''s here'**, to paste into a command line. A side without
   the entry has its path dimmed, and no link. A side in a git revision has the
-  path git names it by, as **main:src/a.c**, and no link.
+  path git names it by, as **main:src/a.c**: the part after the colon links to
+  the entry's path from the top of the repository, as **'src/a.c'**, as git
+  commands take it. When shortened, the revision is kept whole. A revision
+  naming a tree or blob not through a commit, as **main^{tree}**, whose place in
+  the repository isn't known, has no link.
 - **type**: as in the tree, with a symlink's target after **→** and a device's
   major and minor number.
 - **size**: in bytes, from 1 KiB also in binary units, as **4300 (4.2 KiB)**.
