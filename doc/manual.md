@@ -10,7 +10,7 @@ Full reference for the binate file and directory difference viewer.
 
 ```
 binate [options] left right
-binate -g [options] left right
+binate -g [-C directory] [options] left right
 ```
 
 **binate** shows two directory trees, or two files, side by side, and marks
@@ -81,8 +81,9 @@ next arguments are *left* and *right* even if they start with a dash.
   - **owner**: the user and group, by number.
   - **mtime**: the modification time, to the nanosecond.
 
-- **-C**, **--context** *n*: Show *n* lines of context around changes in the
-  collapsed diff view (default 3). Must not be negative.
+- **-U**, **--unified** *n*: Show *n* lines of context around changes in the
+  collapsed diff view (default 3), as **diff -U** and **git diff -U** do. Must
+  not be negative.
 
 - **-x**, **--exclude** *pattern*: Skip entries whose name matches *pattern*, in
   the syntax of Go's **path.Match**: **\***, **?**, **[**...**]**, and a
@@ -94,9 +95,14 @@ next arguments are *left* and *right* even if they start with a dash.
   reading them.
 
 - **-g**, **--git**: Take *left* and *right* as revisions of the git repository
-  of the current directory, such as **main**, **HEAD~2** or **v1.0:src**, and
-  compare their trees, or files. Nothing outside the repository is read. See
-  [Git](#git).
+  of the current directory, or of **-C**, such as **main**, **HEAD~2** or
+  **v1.0:src**, and compare their trees, or files. Regular files are read only
+  within the repository. See [Git](#git).
+
+- **-C**, **--directory** *directory*: With **-g**, find the repository from
+  *directory* instead of the current directory, as **git -C** does: revisions'
+  paths starting with **./** or **../**, and a relative **GIT_DIR**, are
+  relative to it.
 
 - **-h**, **--help**: Show the options and exit.
 
@@ -110,23 +116,26 @@ next arguments are *left* and *right* even if they start with a dash.
 ## Git
 
 With **-g**, *left* and *right* are revisions of the repository of the current
-directory, and **binate** reads nothing outside the repository's top. The top is
-found as git finds it, but by names alone, reading nothing on the way: the
-nearest of the directory and those above it with a **.git** in it, a directory
-or a file naming one, not past a file system's boundary or a directory in
-**GIT_CEILING_DIRECTORIES**, unless **GIT_DISCOVERY_ACROSS_FILESYSTEM** is true;
-or the directory itself, if a bare repository, which is told apart only there. A
-repository with any of its directories outside the top, symlinks followed, is
-refused before anything there is read: a linked work tree, whose git directory
-is in the main one's, a submodule checked out, whose git directory is in its
-superproject's, one apart from its work tree, as **git init --separate-git-dir**
-makes, or one with alternates elsewhere, as **git clone --reference** makes. An
-alternate that doesn't exist is skipped, as git skips it. Symlinks in the git
-directory to files, as an old repository's **HEAD**, are not read either.
-**GIT_DIR** names the repository instead, relative to the current directory,
-which is then the top, and beneath it. A revision naming a commit or a tag
-compares its tree; one naming a file, as **HEAD:README**, compares that file, as
-two files are compared. A tree can't be compared with a file.
+directory, or of **-C**'s, and **binate** reads regular files only within the
+repository's top. Before applying the sandbox, it resolves symlinks along the
+starting directory, which may read links outside the repository. It then finds
+the top as git finds it, by names without reading regular files on the way: the
+nearest of the directory and those above it with a **.git** in it,
+a directory or a file naming one, not past a file system's boundary or a
+directory in **GIT_CEILING_DIRECTORIES**, unless
+**GIT_DISCOVERY_ACROSS_FILESYSTEM** is true; or the directory itself, if a bare
+repository, which is told apart only there. A repository with any of its
+directories outside the top, symlinks followed, is refused before anything there
+is read: a linked work tree, whose git directory is in the main one's, a
+submodule checked out, whose git directory is in its superproject's, one apart
+from its work tree, as **git init --separate-git-dir** makes, or one with
+alternates elsewhere, as **git clone --reference** makes. An alternate that
+doesn't exist is skipped, as git skips it. Symlinks in the git directory to
+files, as an old repository's **HEAD**, are not read either. **GIT_DIR** names
+the repository instead, relative to the same directory, which is then the top,
+and beneath it. A revision naming a commit or a tag compares its tree; one
+naming a file, as **HEAD:README**, compares that file, as two files are
+compared. A tree can't be compared with a file.
 
 **binate** reads the repository itself, without running git: loose objects,
 packs and alternates, in either object format, SHA-1 or SHA-256. It reads a
@@ -145,7 +154,7 @@ A revision is written as for **git rev-parse**:
   **~**_n_, its first parent _n_ times, **^{}**, what a tag points to, and
   **^{commit}**, **^{tree}**, **^{blob}**, **^{tag}** or **^{object}**;
 - then maybe **:**_path_, the entry at _path_ in the tree, relative to the
-  current directory if it starts with **./** or **../**.
+  current directory, or that of **-C**, if it starts with **./** or **../**.
 
 Reflogs and upstreams (**@{**...**}**), ranges (**..**, **^!**, **^@**),
 searches (**:/**_text_, **^{/**_text_**}**) and the index (**:**_path_) are not
@@ -638,7 +647,7 @@ position. A file that uses CR+LF throughout is marked **CRLF** in the status
 bar. If only the line ends differ, the status bar says so. A last line without a
 line feed differs from the same line with one.
 
-By default, only changes are shown, with 3 lines of context (see **-C**). Each
+By default, only changes are shown, with 3 lines of context (see **-U**). Each
 run of lines left out is shown as one separator line. If there are no changed
 lines, the whole file is shown.
 
@@ -948,9 +957,11 @@ The child restricts itself with Landlock before it reads any input:
 - **/etc/passwd** and **/etc/group**, which name the owners in the panels, are
   read before the restriction, and not again; with **-g**, which shows no
   owners, not at all.
-- With **-g**, the child finds the repository's top by names alone, reading
-  nothing, then restricts itself to reading beneath it before reading anything
-  of the repository, and then further, to its git directory, and its common and
+- With **-g**, before applying the sandbox, the child resolves symlinks along
+  the starting directory, possibly reading links outside the repository, then
+  finds the repository's top by names without reading regular files. It
+  restricts itself to reading beneath the top before reading repository files,
+  and then further, to its git directory, and its common and
   objects directories, also beneath it, before reading its configuration, refs
   and objects. Both layers deny the rest, as above.
 

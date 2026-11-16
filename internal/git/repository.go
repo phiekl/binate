@@ -70,11 +70,16 @@ func readLimited(path string, max int64) (string, error) {
 // it with ".git" in it, or dir if a bare repository, or if GIT_DIR, which
 // is relative to dir, names the repository. As git, it stops at a file
 // system's boundary, unless GIT_DISCOVERY_ACROSS_FILESYSTEM is true, and
-// at a directory in GIT_CEILING_DIRECTORIES. It only looks at names, and
-// reads nothing, so that the top can be all that is allowed before
-// Discover reads there.
+// at a directory in GIT_CEILING_DIRECTORIES. Before the sandbox is applied,
+// it resolves symlinks along dir, which may read links outside the repository,
+// then searches by names without reading regular files. The top can then be
+// all that is allowed before Discover reads the repository.
 func FindTop(dir string, getenv func(string) string) (string, error) {
-	dir, err := filepath.Abs(dir)
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	dir, err = filepath.Abs(dir)
 	if err != nil {
 		return "", err
 	}
@@ -135,6 +140,9 @@ func FindTop(dir string, getenv func(string) string) (string, error) {
 func Discover(top, dir string, getenv func(string) string) (*Location, error) {
 	top, err := filepath.Abs(top)
 	if err != nil {
+		return nil, err
+	}
+	if dir, err = filepath.EvalSymlinks(dir); err != nil {
 		return nil, err
 	}
 	if dir, err = filepath.Abs(dir); err != nil {

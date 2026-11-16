@@ -126,7 +126,10 @@ func TestUsageErrors(t *testing.T) {
 	}{
 		{nil, "usage: binate"},
 		{[]string{dir}, "missing argument: right"},
-		{[]string{"-C", "-1", dir, dir}, "invalid context lines: -1"},
+		{[]string{"-U", "-1", dir, dir}, "invalid context lines: -1"},
+		// -C was the context lines' before it was git's.
+		{[]string{"-C", "5", dir, dir}, "--directory without --git: it names where to find the repository (for context lines, use -U)"},
+		{[]string{"--context", "5", dir, dir}, "unknown flag: --context"},
 		{[]string{"-x", "[", dir, dir}, "invalid exclude pattern"},
 		{[]string{"--compare", "+size", dir, dir}, `invalid --compare: unknown attribute "size"`},
 		{[]string{"-c", "+size", dir, dir}, `invalid --compare: unknown attribute "size"`},
@@ -1213,7 +1216,9 @@ func TestGitTrees(t *testing.T) {
 
 func TestGitFiles(t *testing.T) {
 	repo := gitRepo(t)
-	pt := startIn(t, filepath.Join(repo, "dir"), "--git", "HEAD~:./changed", "HEAD:dir/changed")
+	// Run from elsewhere, the repository found from -C's directory, which
+	// "./" is relative to, as with git -C.
+	pt := startIn(t, t.TempDir(), "--git", "-C", filepath.Join(repo, "dir"), "HEAD~:./changed", "HEAD:dir/changed")
 	offset := pt.Wait(0, enterScreen)
 	// The files have the history of their commits.
 	scr := pt.WaitScreen(100, 30, offset, "committed │")
@@ -1240,6 +1245,8 @@ func TestGitErrors(t *testing.T) {
 		{repo, []string{"-g", "HEAD@{1}", "HEAD"}, "not supported"},
 		{repo, []string{"-g", "HEAD", "HEAD:same"}, "unable to compare a tree with a file"},
 		{t.TempDir(), []string{"-g", "HEAD", "HEAD"}, "not a git repository"},
+		{repo, []string{"-g", "-C", "missing", "HEAD", "HEAD"}, "missing: no such file or directory"},
+		{t.TempDir(), []string{"-g", "-C", t.TempDir(), "HEAD", "HEAD"}, "not a git repository"},
 	} {
 		pt := startIn(t, tc.dir, tc.args...)
 		pt.Wait(0, tc.want)

@@ -5,6 +5,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -150,11 +151,13 @@ func (c *child) run() (code int) {
 	}
 	a := app.New(c.log, t, c.client)
 	if c.opts.git {
-		// Nothing outside the repository's top is read: it is found by
-		// names alone, then read under a first layer allowing only it,
-		// before the next allows only the repository. A git revision has
-		// no owners to name.
-		top, err := git.FindTop(".", os.Getenv)
+		// Before restricting the process, resolve the starting directory's
+		// symlinks, possibly reading links outside the repository, and
+		// find the top by names. Repository files are then read under a
+		// first layer allowing only the top, before the next allows only
+		// the repository. A git revision has no owners to name.
+		dir := cmp.Or(c.opts.directory, ".")
+		top, err := git.FindTop(dir, os.Getenv)
 		if err != nil {
 			return fail("%v", err)
 		}
@@ -165,7 +168,7 @@ func (c *child) run() (code int) {
 		if err := landlock.Restrict(c.log, rules...); err != nil {
 			return fail("restricting the process: %v", err)
 		}
-		if c.repo, err = git.Discover(top, ".", os.Getenv); err != nil {
+		if c.repo, err = git.Discover(top, dir, os.Getenv); err != nil {
 			return fail("%v", err)
 		}
 	} else {

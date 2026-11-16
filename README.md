@@ -112,6 +112,12 @@ Compare two branches of the git repository you're in:
 $ binate -g main feature
 ```
 
+Compare the tag `v1.0` with `HEAD` in the repository at `~/src/project`:
+
+```
+$ binate -g -C ~/src/project v1.0 HEAD
+```
+
 Press `?` to list the current screen's key bindings, or run `binate --help` to
 list command-line options. [binate(1)](doc/binate.1.md) summarises both, and the
 [manual](doc/manual.md) describes everything in detail.

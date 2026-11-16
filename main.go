@@ -47,15 +47,17 @@ const childEnv = "BINATE_INTERNAL_CHILD"
 const releaseScreen = "\x1b[0m\x1b[?25h\x1b[?1049l"
 
 type options struct {
-	compare  scan.Attrs
-	quick    bool
-	git      bool
-	excludes []string
-	context  int
-	verbose  int
-	version  bool
-	left     string
-	right    string
+	compare scan.Attrs
+	quick   bool
+	git     bool
+	// directory is where the repository of --git is found from.
+	directory string
+	excludes  []string
+	context   int
+	verbose   int
+	version   bool
+	left      string
+	right     string
 }
 
 func parseOptions(argv []string) (*args.Set, options, error) {
@@ -73,10 +75,11 @@ func parseOptions(argv []string) (*args.Set, options, error) {
 	})
 	s.Bool(&o.quick, "quick", "q", "compare size and modification time")
 	s.Bool(&o.git, "git", "g", "compare two git revisions of the repository here")
+	s.String(&o.directory, "directory", "C", "", "with --git, find the repository from directory, as git -C")
 	s.Func("exclude", "x", "exclude names matching a pattern (repeatable)", func(p string) {
 		o.excludes = append(o.excludes, p)
 	})
-	s.String(&contextLines, "context", "C", "3", "context lines around changes")
+	s.String(&contextLines, "unified", "U", "3", "context lines around changes")
 	s.DenyEmpty("left")
 	s.DenyEmpty("right")
 
@@ -86,6 +89,9 @@ func parseOptions(argv []string) (*args.Set, options, error) {
 	}
 	if err != nil {
 		return s, o, err
+	}
+	if o.directory != "" && !o.git {
+		return s, o, errors.New("--directory without --git: it names where to find the repository (for context lines, use -U)")
 	}
 	if o.git && o.quick {
 		return s, o, errors.New("--quick with --git: files in revisions are compared by their object names, without reading them")

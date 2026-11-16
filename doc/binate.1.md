@@ -10,7 +10,7 @@ Inspect file and directory differences in a read-only terminal view.
 
 ```
 binate [options] left right
-binate -g [options] left right
+binate -g [-C directory] [options] left right
 ```
 
 **binate** shows two directory trees, or two files, side by side, and marks
@@ -35,15 +35,17 @@ See [**binate-manual**(7)](manual.md) for the full reference.
   default. Items prefixed with **+** or **-** add to or take from the default,
   as **--compare -owner,+mtime**; **none** compares nothing. Leaving out
   **left**, **right** or **type** hides such entries.
-- **-C**, **--context** *n*: Lines of context around changes in the diff view
-  (default 3).
+- **-U**, **--unified** *n*: Lines of context around changes in the diff view
+  (default 3), as **diff -U** does.
 - **-x**, **--exclude** *pattern*: Skip entries whose name matches the
   shell-style *pattern*. Repeatable.
 - **-q**, **--quick**: Compare files by size and modification time instead of
   contents. Not with **-g**.
 - **-g**, **--git**: Compare *left* and *right* as revisions of the git
-  repository of the current directory, such as **main**, **HEAD~2** or
-  **v1.0:src**.
+  repository of the current directory, or of **-C**, such as **main**,
+  **HEAD~2** or **v1.0:src**.
+- **-C**, **--directory** *directory*: With **-g**, find the repository from
+  *directory*, as **git -C** does.
 - **-h**, **--help**: Show the options and exit.
 - **-v**, **--verbose**: Write debug messages to stderr, including the Landlock
   ABI in effect. Repeat for more.

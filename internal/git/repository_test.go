@@ -571,6 +571,45 @@ func FuzzResolve(f *testing.F) {
 	})
 }
 
+// discover finds the repository of dir as binate does: its top, then the
+// repository there.
+func discover(dir string, getenv func(string) string) (*Location, error) {
+	top, err := FindTop(dir, getenv)
+	if err != nil {
+		return nil, err
+	}
+	return Discover(top, dir, getenv)
+}
+
+func TestDiscoverSymlinkDirectory(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"sub/a": "one\n"})
+	r.commit()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(filepath.Join(r.dir, "sub"), link); err != nil {
+		t.Fatal(err)
+	}
+	loc, err := discover(link, noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.WorkTree != r.dir || loc.Prefix != "sub" {
+		t.Fatalf("location: %+v", loc)
+	}
+	rp, err := Open(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rp.Close()
+	target, err := rp.Resolve("HEAD:./a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ID != r.id("HEAD:sub/a") {
+		t.Fatalf("wrong relative path: %+v", target)
+	}
+}
+
 func TestResolveUppercaseHashes(t *testing.T) {
 	for _, f := range []*Format{SHA1, SHA256} {
 		t.Run(f.name, func(t *testing.T) {
@@ -593,14 +632,4 @@ func TestResolveUppercaseHashes(t *testing.T) {
 			}
 		})
 	}
-}
-
-// discover finds the repository of dir as binate does: its top, then the
-// repository there.
-func discover(dir string, getenv func(string) string) (*Location, error) {
-	top, err := FindTop(dir, getenv)
-	if err != nil {
-		return nil, err
-	}
-	return Discover(top, dir, getenv)
 }
