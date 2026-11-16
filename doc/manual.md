@@ -164,8 +164,10 @@ blob, not through a commit, has no history to show. Files are compared by their
 blob's object name, without being read: two files are the same exactly when
 their blobs are. Symlinks are compared by their targets, and not followed. A
 submodule is not read, and shows as an entry that couldn't be. An object missing
-from the repository, as one a partial clone left out, is an error on its entry.
-Files in a revision can't be edited.
+from the repository, as one a partial clone left out, is an error where it is
+read: a tree on its entry, and a file only in the panels and when its
+differences are shown, so that two revisions of a clone without blobs can be
+compared. Files in a revision can't be edited.
 
 An error resolving a revision is written before the screen is taken.
 

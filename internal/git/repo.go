@@ -30,6 +30,10 @@ type Repo struct {
 	// packs are the packs in dirs, as found when opened.
 	packs []*pack
 	cache baseCache
+
+	// trees are the trees read as a Root's directories, by ID, shared
+	// between the roots, as two revisions' trees are mostly the same.
+	trees treeCache
 }
 
 // OpenRepo returns the repository whose objects directory is dir, of
@@ -46,7 +50,7 @@ func OpenRepo(dir string, f *Format) (*Repo, error) {
 // openRepo returns the repository whose objects directories, alternates
 // and all, are dirs.
 func openRepo(dirs []string, f *Format) (*Repo, error) {
-	r := &Repo{format: f, dirs: dirs, cache: baseCache{limit: defaultCacheLimit}}
+	r := &Repo{format: f, dirs: dirs, cache: baseCache{limit: defaultCacheLimit}, trees: treeCache{limit: defaultTreeCacheLimit}}
 	for _, d := range r.dirs {
 		if err := r.openPacks(d); err != nil {
 			r.Close()

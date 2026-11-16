@@ -516,8 +516,11 @@ func TestTargetRoot(t *testing.T) {
 		t.Errorf("file root %v %q", root.IsFile(), root.Path(""))
 	}
 	e, err := root.Entry("", false)
-	if err != nil || e.Mode&0o170000 != 0o100000 || e.Size != 1 {
+	if err != nil || e.Mode&0o170000 != 0o100000 || e.Size != -1 {
 		t.Errorf("Entry: %+v, %v", e, err)
+	}
+	if st, err := root.Stat(""); err != nil || st.Size != 1 {
+		t.Errorf("Stat: %+v, %v", st, err)
 	}
 	if _, err := root.ReadDir(""); err == nil {
 		t.Error("listed a file")

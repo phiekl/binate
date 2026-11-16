@@ -47,7 +47,8 @@ func (k Kind) String() string {
 
 // Side is an entry on one side.
 type Side struct {
-	Kind   Kind
+	Kind Kind
+	// Size is -1 if unknown (see source.Entry).
 	Size   int64
 	Mtime  time.Time
 	Target string // of a symlink
@@ -767,7 +768,7 @@ func classify(n *Node, opts Options) {
 	case File:
 		switch {
 		case set&Content == 0:
-		case l.Size != r.Size:
+		case l.Size >= 0 && r.Size >= 0 && l.Size != r.Size:
 			data = Differ
 		case opts.Quick && l.Mtime.Equal(r.Mtime):
 		case opts.Quick:

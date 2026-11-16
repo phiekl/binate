@@ -74,3 +74,65 @@ func (c *baseCache) put(p *pack, off int64, typ Type, data []byte) {
 		c.size -= int64(len(e.data))
 	}
 }
+
+// treeCache shares parsed directories between roots without retaining every
+// tree visited in a session. A root itself retains the directories it uses.
+// Costs include an estimate of map buckets, entries, and names.
+type treeCache struct {
+	limit int64
+	mu    sync.Mutex
+	size  int64
+	order *list.List
+	byID  map[ID]*list.Element
+}
+
+type treeCacheEntry struct {
+	id   ID
+	dir  *dir
+	cost int64
+}
+
+const defaultTreeCacheLimit = 16 << 20
+
+func treeCost(d *dir) int64 {
+	cost := int64(128 + len(d.names)*128)
+	for _, name := range d.names {
+		cost += int64(len(name))
+	}
+	return cost
+}
+
+func (c *treeCache) get(id ID) (*dir, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.byID[id]
+	if !ok {
+		return nil, false
+	}
+	c.order.MoveToFront(el)
+	return el.Value.(*treeCacheEntry).dir, true
+}
+
+func (c *treeCache) put(id ID, d *dir) {
+	cost := treeCost(d)
+	if cost > c.limit {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byID == nil {
+		c.order, c.byID = list.New(), map[ID]*list.Element{}
+	}
+	if _, ok := c.byID[id]; ok {
+		return
+	}
+	c.byID[id] = c.order.PushFront(&treeCacheEntry{id, d, cost})
+	c.size += cost
+	for c.size > c.limit {
+		el := c.order.Back()
+		e := el.Value.(*treeCacheEntry)
+		c.order.Remove(el)
+		delete(c.byID, e.id)
+		c.size -= e.cost
+	}
+}

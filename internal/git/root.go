@@ -126,18 +126,31 @@ func (r *Root) dir(rel string) (*dir, error) {
 		}
 		id = e.ID
 	}
-	entries, err := r.repo.ReadTree(id)
+	d, err := r.repo.treeDir(id)
 	if err != nil {
 		return nil, err
-	}
-	d = &dir{names: make([]string, len(entries)), byName: make(map[string]TreeEntry, len(entries))}
-	for i, e := range entries {
-		d.names[i] = e.Name
-		d.byName[e.Name] = e
 	}
 	r.mu.Lock()
 	r.dirs[rel] = d
 	r.mu.Unlock()
+	return d, nil
+}
+
+// treeDir returns the entries of the tree id, read once for all roots.
+func (r *Repo) treeDir(id ID) (*dir, error) {
+	if d, ok := r.trees.get(id); ok {
+		return d, nil
+	}
+	entries, err := r.ReadTree(id)
+	if err != nil {
+		return nil, err
+	}
+	d := &dir{names: make([]string, len(entries)), byName: make(map[string]TreeEntry, len(entries))}
+	for i, e := range entries {
+		d.names[i] = e.Name
+		d.byName[e.Name] = e
+	}
+	r.trees.put(id, d)
 	return d, nil
 }
 
@@ -196,9 +209,10 @@ func (r *Root) Entry(rel string, follow bool) (source.Entry, error) {
 	out := source.Entry{Mode: unixMode(e.Mode)}
 	switch e.Mode {
 	case ModeFile, ModeExecutable:
-		if out.Size, err = r.repo.Size(e.ID); err != nil {
-			return source.Entry{}, r.pathError("lstat", rel, err)
-		}
+		// A file is compared by its blob's ID; its size, which in a pack
+		// takes inflating the start of its delta, would take most of the
+		// time of comparing two trees.
+		out.Size = -1
 	case ModeSymlink:
 		target, err := r.target(e)
 		out.Target, out.Size = target, int64(len(target))
@@ -225,6 +239,15 @@ func (r *Root) Stat(rel string) (*stat.Stat, error) {
 	e, err := r.Entry(rel, false)
 	if err != nil {
 		return nil, err
+	}
+	if e.Size < 0 {
+		id, err := r.lookup(rel)
+		if err != nil {
+			return nil, r.pathError("lstat", rel, err)
+		}
+		if e.Size, err = r.repo.Size(id.ID); err != nil {
+			return nil, r.pathError("lstat", rel, err)
+		}
 	}
 	return &stat.Stat{Mode: e.Mode, Size: e.Size, Target: e.Target}, nil
 }

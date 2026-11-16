@@ -78,9 +78,18 @@ func TestRoot(t *testing.T) {
 		{"dir/sub/d", unix.S_IFREG | 0o644, 600000, ""},
 		{"link", unix.S_IFLNK | 0o777, 3, "dir"},
 	} {
+		// A file's size is left to Stat, as the scan compares its ID.
+		size := tc.size
+		if tc.mode&unix.S_IFMT == unix.S_IFREG {
+			size = -1
+		}
 		e, err := root.Entry(tc.rel, false)
-		if err != nil || e.Mode != tc.mode || e.Size != tc.size || e.Target != tc.target || !e.Mtime.IsZero() {
+		if err != nil || e.Mode != tc.mode || e.Size != size || e.Target != tc.target || !e.Mtime.IsZero() {
 			t.Errorf("Entry(%q): %+v, %v", tc.rel, e, err)
+		}
+		st, err := root.Stat(tc.rel)
+		if err != nil || st.Mode != tc.mode || st.Size != tc.size || st.Target != tc.target {
+			t.Errorf("Stat(%q): %+v, %v", tc.rel, st, err)
 		}
 	}
 	for _, tc := range []struct {
@@ -213,5 +222,33 @@ func TestScanCheckout(t *testing.T) {
 	}
 	if got["dir/sub/d"] != '=' {
 		t.Errorf("entries %v", got)
+	}
+}
+
+// Blobs missing, as from a partial clone, are not read to compare trees:
+// only where a file is shown.
+func TestScanMissingBlobs(t *testing.T) {
+	r, first, second := twoCommits(t)
+	for _, rev := range []string{"HEAD:a.txt", "HEAD~:a.txt", "HEAD:dir/b.txt"} {
+		if err := os.Remove(loosePath(filepath.Join(r.dir, ".git", "objects"), r.id(rev))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo := r.open()
+	defer repo.Close()
+	left, err := NewRoot(repo, first, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := NewRoot(repo, second, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := scanned(t, left, right, scan.DefaultAttrs)
+	if got["a.txt"] != '|' || got["dir/b.txt"] != '=' {
+		t.Errorf("marks %v", got)
+	}
+	if _, err := right.Stat("a.txt"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Stat of a missing blob: %v", err)
 	}
 }

@@ -34,7 +34,8 @@ type Root interface {
 	// Stat reads all the panels show of the entry at rel, without
 	// following a symlink.
 	Stat(rel string) (*stat.Stat, error)
-	// ReadDir returns the names in the directory at rel, in no order.
+	// ReadDir returns the names in the directory at rel, in no order. The
+	// slice may be shared, and must not be changed.
 	ReadDir(rel string) ([]string, error)
 	// Open opens the entry at rel for reading if it is a regular file,
 	// following a final symlink if follow. It never waits on a FIFO or
@@ -46,7 +47,10 @@ type Root interface {
 // cheaper to read.
 type Entry struct {
 	// Mode is the type and permission bits, as st_mode; 0 if unknown.
-	Mode     uint32
+	Mode uint32
+	// Size is -1 for a regular file whose size costs to read, which a root
+	// of ContentIDs may leave unknown: it is compared by its ID instead.
+	// Stat reads it.
 	Size     int64
 	Uid, Gid uint32
 	// Rdev is a device's number.

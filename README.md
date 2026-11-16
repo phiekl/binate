@@ -55,7 +55,9 @@ tree.
 ### Native git object reader
 
 Use `-g` to compare two revisions or files within them. Data is read directly
-from the repository without running git or checking anything out.
+from the repository without running git or checking anything out. Files are
+compared by their object IDs without reading their contents. Two revisions of
+Linux compare in about 0.2 seconds.
 
 The panels on both sides show the commit that last changed each entry.
 
