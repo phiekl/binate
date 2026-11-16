@@ -59,7 +59,8 @@ FUZZMINIMIZETIME ?= 5s
 # Each fuzz test as package:name, as go test fuzzes one at a time.
 FUZZ_TESTS := \
 	display:FuzzContent display:FuzzContentPartial display:FuzzName display:FuzzStderr display:FuzzShellQuote \
-	term:FuzzParseKey diff:FuzzLines diff:FuzzInline
+	term:FuzzParseKey diff:FuzzLines diff:FuzzInline \
+	git:FuzzParseTree git:FuzzLooseHeader
 # All are run, failing at the end if any failed.
 fuzz:
 	failed=; for t in $(FUZZ_TESTS); do \

@@ -121,6 +121,12 @@ pseudo-terminals and skip without them.
   symlinks followed only when asked, missing entries, and opening files, and the
   action cache keeping results only of files on disk, whose versions it can
   check.
+- **git:** reading a repository as git reads it, compared, where git is
+  installed, with what git itself reads in repositories made for each test:
+  loose objects, in SHA-1 and SHA-256, checked for their header, size and zlib
+  checksum, trees, with modes normalized and names git wouldn't check out
+  refused, and commits and tags peeled to their trees. Fuzzing checks that
+  parsing trees and loose objects' headers never panics.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,
