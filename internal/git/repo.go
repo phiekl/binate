@@ -9,6 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 )
 
 // Repo reads the objects of a repository. It is safe for concurrent use.
@@ -16,12 +21,68 @@ type Repo struct {
 	format *Format
 	// dirs are the objects directories searched, the repository's first.
 	dirs []string
+	// packs are the packs in dirs, as found when opened.
+	packs []*pack
+	cache baseCache
 }
 
 // OpenRepo returns the repository whose objects directory is dir, of
-// format f.
+// format f. The packs are those there now: one added later is not read.
 func OpenRepo(dir string, f *Format) (*Repo, error) {
-	return &Repo{format: f, dirs: []string{dir}}, nil
+	r := &Repo{format: f, dirs: []string{dir}, cache: baseCache{limit: defaultCacheLimit}}
+	for _, d := range r.dirs {
+		if err := r.openPacks(d); err != nil {
+			r.Close()
+			return nil, err
+		}
+	}
+	return r, nil
+}
+
+// openPacks opens the packs in the objects directory dir. An index
+// without its pack, as one being written, is left out, as git does.
+func (r *Repo) openPacks(dir string) error {
+	names, err := readDirNames(filepath.Join(dir, "pack"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".idx") {
+			continue
+		}
+		idx := filepath.Join(dir, "pack", name)
+		if _, err := os.Lstat(strings.TrimSuffix(idx, ".idx") + ".pack"); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		p, err := openPack(r, idx)
+		if err != nil {
+			return fmt.Errorf("%s: %w", idx, err)
+		}
+		r.packs = append(r.packs, p)
+	}
+	return nil
+}
+
+func readDirNames(dir string) ([]string, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return f.Readdirnames(-1)
+}
+
+// Close closes the packs. The repository must not be read after.
+func (r *Repo) Close() {
+	for _, p := range r.packs {
+		_ = p.f.Close()
+		_ = unmap(p.idx)
+	}
+	r.packs = nil
 }
 
 // Format returns the repository's object format.
@@ -35,8 +96,29 @@ type Object struct {
 	io.ReadCloser
 }
 
+// find returns the pack holding id and where, or nil if none does.
+func (r *Repo) find(id ID) (*pack, int64, error) {
+	for _, p := range r.packs {
+		off, ok, err := p.idx.find(id)
+		if err != nil {
+			return nil, 0, err
+		}
+		if ok {
+			return p, off, nil
+		}
+	}
+	return nil, 0, nil
+}
+
 // Open opens the object id.
 func (r *Repo) Open(id ID) (Object, error) {
+	p, off, err := r.find(id)
+	if err != nil {
+		return Object{}, err
+	}
+	if p != nil {
+		return p.open(off, id)
+	}
 	for _, dir := range r.dirs {
 		obj, err := openLoose(dir, id)
 		if !errors.Is(err, ErrNotFound) {
@@ -46,14 +128,55 @@ func (r *Repo) Open(id ID) (Object, error) {
 	return Object{}, fmt.Errorf("%s: %w", id, ErrNotFound)
 }
 
-// Info returns the type and size of the object id.
-func (r *Repo) Info(id ID) (Type, int64, error) {
+// read returns the type and content of the object id, a delta's base
+// depth deltas down, kept in the cache if in a pack: it must not be
+// changed.
+func (r *Repo) read(id ID, depth int) (Type, []byte, error) {
+	p, off, err := r.find(id)
+	if err != nil {
+		return 0, nil, err
+	}
+	if p != nil {
+		return p.read(off, id, depth)
+	}
+	return r.Read(id, maxObject)
+}
+
+// info returns the type and size of the object id, a delta's base depth
+// deltas down.
+func (r *Repo) info(id ID, depth int) (Type, int64, error) {
+	p, off, err := r.find(id)
+	if err != nil {
+		return 0, 0, err
+	}
+	if p != nil {
+		return p.info(off, id, depth)
+	}
 	obj, err := r.Open(id)
 	if err != nil {
 		return 0, 0, err
 	}
 	_ = obj.Close()
 	return obj.Type, obj.Size, nil
+}
+
+// Size returns the size of the object id: what Info returns, but faster
+// for an object made of deltas, as its type is not looked up.
+func (r *Repo) Size(id ID) (int64, error) {
+	p, off, err := r.find(id)
+	if err != nil {
+		return 0, err
+	}
+	if p != nil {
+		return p.size(off, id)
+	}
+	_, size, err := r.info(id, 0)
+	return size, err
+}
+
+// Info returns the type and size of the object id.
+func (r *Repo) Info(id ID) (Type, int64, error) {
+	return r.info(id, 0)
 }
 
 // Read returns the type and content of the object id, which must not be

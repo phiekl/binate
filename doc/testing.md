@@ -125,8 +125,11 @@ pseudo-terminals and skip without them.
   installed, with what git itself reads in repositories made for each test:
   loose objects, in SHA-1 and SHA-256, checked for their header, size and zlib
   checksum, trees, with modes normalized and names git wouldn't check out
-  refused, and commits and tags peeled to their trees. Fuzzing checks that
-  parsing trees and loose objects' headers never panics.
+  refused, and commits and tags peeled to their trees; objects in packs, before
+  loose ones, stored whole or as deltas at offsets or named, with large offsets,
+  an index truncated while mapped and objects missing as errors. Fuzzing checks
+  that parsing trees and loose objects' headers, and deltas, pack entries'
+  headers and indexes never panics.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,
