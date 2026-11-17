@@ -22,11 +22,16 @@ var ErrNotRegular = errors.New("no longer a regular file")
 // waits on a FIFO or opens a terminal put in its place; with follow false,
 // it doesn't follow a symlink either.
 func OpenRegular(path string, follow bool) (*os.File, error) {
+	return OpenRegularAt(unix.AT_FDCWD, path, follow)
+}
+
+// OpenRegularAt is OpenRegular relative to an open directory.
+func OpenRegularAt(dir int, path string, follow bool) (*os.File, error) {
 	flags := unix.O_RDONLY | unix.O_NONBLOCK | unix.O_CLOEXEC | unix.O_NOCTTY
 	if !follow {
 		flags |= unix.O_NOFOLLOW
 	}
-	fd, err := unix.Open(path, flags, 0)
+	fd, err := unix.Openat(dir, path, flags, 0)
 	if err != nil {
 		return nil, err
 	}

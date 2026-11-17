@@ -154,6 +154,9 @@ func parseSignatureTime(date string) (time.Time, error) {
 // takes a second or so in a large repository.
 const maxHistory = 100_000
 
+// A short walk costs less than loading and checking the commit graph.
+const historyGraphAfter = 8
+
 // ErrHistoryTooLong is the error of a path not changed within the last
 // maxHistory commits walked.
 var ErrHistoryTooLong = fmt.Errorf("not changed in the last %d commits", maxHistory)
@@ -181,6 +184,7 @@ func (r *Repo) LastChange(ctx context.Context, start ID, path string) (ID, *Comm
 	if len(way) <= len(names) {
 		return ID{}, nil, fmt.Errorf("%s does not exist in %s", path, id)
 	}
+	var graph commitGraph
 	for n := 0; ; n++ {
 		if n%256 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -189,6 +193,41 @@ func (r *Repo) LastChange(ctx context.Context, start ID, path string) (ID, *Comm
 		}
 		if n == maxHistory {
 			return ID{}, nil, ErrHistoryTooLong
+		}
+		if n == historyGraphAfter {
+			graph, err = r.historyGraph(ctx)
+			if err != nil {
+				return ID{}, nil, err
+			}
+		}
+		if len(graph) != 0 {
+			var layer *graphLayer
+			var row uint32
+			fault := safely(func() {
+				layer, row = graph.find(id)
+				if layer != nil && layer.tree(row) != c.Tree {
+					layer = nil
+				}
+			})
+			var last ID
+			var walkErr error
+			if fault == nil && layer != nil {
+				last, walkErr = r.lastChangeInGraph(ctx, graph, layer, row, n, path, names, way)
+			}
+			if fault != nil || errors.Is(walkErr, errGraphRead) {
+				graph = nil // Ignore a broken optional index for this walk.
+			} else if walkErr != nil {
+				return ID{}, nil, walkErr
+			} else if !last.IsZero() {
+				if last == id {
+					return id, c, nil
+				}
+				info, err := r.ReadCommit(last)
+				if err != nil {
+					return ID{}, nil, err
+				}
+				return last, info, nil
+			}
 		}
 		found := false
 		for _, p := range c.Parents {
@@ -209,6 +248,75 @@ func (r *Repo) LastChange(ctx context.Context, start ID, path string) (ID, *Comm
 			return id, c, nil
 		}
 	}
+}
+
+var errGraphRead = errors.New("cannot read the commit graph")
+
+func (r *Repo) lastChangeInGraph(ctx context.Context, graph commitGraph, layer *graphLayer, row uint32, n int, path string, names []string, way []TreeEntry) (ID, error) {
+	entry := way[len(way)-1]
+	var keys bloomKeys
+	// Git's filters can omit empty subtree changes and ignored submodule
+	// changes. Compare the entries directly for both modes.
+	if entry.Mode != ModeTree && entry.Mode != ModeSubmodule {
+		keys = newBloomKeys(path)
+	}
+	for ; n < maxHistory; n++ {
+		if n%256 == 0 {
+			if err := ctx.Err(); err != nil {
+				return ID{}, err
+			}
+		}
+		found := false
+		first := true
+		for pos := range layer.parents(row) {
+			if pos >= layer.end || pos == layer.start+row {
+				return ID{}, errGraphRead
+			}
+			parent := layer
+			if pos < layer.start {
+				for i := len(graph) - 1; i >= 0; i-- {
+					if pos >= graph[i].start {
+						parent = graph[i]
+						break
+					}
+				}
+			}
+			p := pos - parent.start
+			var unchanged bool
+			var tree ID
+			if err := safely(func() {
+				unchanged = first && layer.bloom.excludes(row, keys)
+				if !unchanged {
+					tree = parent.tree(p)
+				}
+			}); err != nil {
+				return ID{}, errGraphRead
+			}
+			if unchanged {
+				// Keep the last inspected tree trail. Its final entry is
+				// still equal to the one in the parent.
+				layer, row, found = parent, p, true
+				break
+			}
+			first = false
+			pway, err := r.walkPath(tree, names, way)
+			if err != nil {
+				return ID{}, err
+			}
+			if len(pway) == len(way) && pway[len(pway)-1] == entry {
+				layer, row, way, found = parent, p, pway, true
+				break
+			}
+		}
+		if !found {
+			var id ID
+			if err := safely(func() { id = layer.id(row) }); err != nil {
+				return ID{}, errGraphRead
+			}
+			return id, nil
+		}
+	}
+	return ID{}, ErrHistoryTooLong
 }
 
 // walkPath returns the entries on the way to the path of names from tree:

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/unix"
 
@@ -34,6 +35,11 @@ type Repo struct {
 	// trees are the trees read as a Root's directories, by ID, shared
 	// between the roots, as two revisions' trees are mostly the same.
 	trees treeCache
+
+	graphMu      sync.Mutex
+	graphLoading chan struct{}
+	graphReady   bool
+	graph        commitGraph
 }
 
 // OpenRepo returns the repository whose objects directory is dir, of
@@ -191,13 +197,15 @@ func readDirNames(dir string) ([]string, error) {
 	return f.Readdirnames(-1)
 }
 
-// Close closes the packs. The repository must not be read after.
+// Close closes the packs and commit graph. Call it after all reads finish.
 func (r *Repo) Close() {
 	for _, p := range r.packs {
 		_ = p.f.Close()
 		_ = unmap(p.idx)
 	}
 	r.packs = nil
+	r.graph.close()
+	r.graph = nil
 }
 
 // Format returns the repository's object format.

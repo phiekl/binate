@@ -172,13 +172,19 @@ times or owners, which are never compared, whatever **--compare** asks:
 recorded, and paths as git names them, as **main:src/a.c**, and the commit that
 last changed an entry, as **git log -1 --** _path_ finds it: from the revision's
 commit, a parent with the entry the same is followed, the first such of a merge,
-until a commit has none. That commit is looked for in at most 100000 commits,
-which may take a second in a large repository. A revision naming a tree or a
-blob, not through a commit, has no history to show. Files are compared by their
-blob's object name, without being read: two files are the same exactly when
-their blobs are. Symlinks are compared by their targets, and not followed. A
-submodule, a commit of another repository, is not read: it shows as **sub**, and
-two are compared by their commits, as contents, marked **|** where they differ.
+until a commit has none. That commit is looked for in at most 100000 commits.
+A commit graph speeds up longer walks by supplying the object names of
+parents and trees. Without a graph, a long walk may take a second in a
+large repository. Shallow repositories always walk without a graph.
+Changed-path filters skip tree reads when a file is unchanged from the
+first parent. To write a graph with filters, run
+**git commit-graph write --reachable --changed-paths**.
+A revision naming a tree or a blob, not through a commit, has no history to
+show. Files are compared by their blob's object name, without being read:
+two files are the same exactly when their blobs are. Symlinks are compared by
+their targets, and not followed. A submodule, a commit of another repository,
+is not read: it shows as **sub**, and two are compared by their commits, as
+contents, marked **|** where they differ.
 Its panel shows the commit as its type, and no size or mode. An object missing
 from the repository, as one a partial clone left out, is an error where it is
 read: a tree on its entry, and a file only in the panels and when its
