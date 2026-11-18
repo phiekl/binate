@@ -99,9 +99,12 @@ next arguments are *left* and *right* even if they start with a dash.
 - **-g**, **--git**: Take *left* and *right* as revisions of the git repository
   of the current directory, or of **-C**, such as **main**, **HEAD~2** or
   **v1.0:src**, and compare their trees, or files. Regular files are read only
-  within the repository. Give **.** for the work tree on one side. A missing
-  *right* defaults to **.**, and a missing *left* defaults to **HEAD**. See
-  [Git](#git).
+  within the repository. Give **.** for the work tree on one side, or **:** for
+  the index. A missing *right* defaults to **.**, and a missing *left* defaults
+  to **HEAD**. See [Git](#git).
+
+- **--cached**: With **-g**, compare *left*, or **HEAD** if missing, with the
+  index, as **git diff --cached** does. The same as giving **:** as *right*.
 
 - **-C**, **--directory** *directory*: With **-g**, find the repository from
   *directory* instead of the current directory, as **git -C** does: revisions'
@@ -244,6 +247,23 @@ in the index, as in Git. An untracked directory whose **.git** is a valid git
 directory, a symlink to one or a file naming one is shown as a submodule at its
 HEAD, with **(no commits)** if it has none, as Git shows it as one entry. Both
 sides of the comparison are read-only.
+
+### Index
+
+Give **:** on either side for the index, which holds what is staged for the
+next commit. **agitate --cached**, or **binate -g HEAD :**, compares **HEAD**
+with the index, as **git diff --cached** does. **agitate --cached main**
+compares **main** with it instead. **agitate :** compares the index with the
+work tree, as **git diff** does, along with untracked files. The revision
+opposite the index must name a full tree, and the repository needs a
+discovered work tree. Before the first commit, **HEAD** is an empty tree here
+too.
+
+The index's entries are named as Git names them, as **:src/a.c**, and are
+compared by their blob IDs, as a revision's are. Their panels show the path,
+type, size and mode. A file added with **git add -N** is left out, as Git
+compares it as not staged. A path with a merge conflict has no version staged
+and shows as **unmerged path**. A rescan reads the index again.
 
 ### Commits
 

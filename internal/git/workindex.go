@@ -73,14 +73,25 @@ type workIndex struct {
 	tree pathTree
 }
 
-func parseWorkIndex(f *Format, data []byte) (workIndex, error) {
-	index := workIndex{files: make(map[string]Mode)}
+// indexEntry is an entry of the index, as walkIndex reads it.
+type indexEntry struct {
+	name  string
+	mode  Mode
+	id    ID
+	stage uint16
+	// skipWorktree and intentToAdd are the extended flags of an entry
+	// Git compares from the index, and of one added with git add -N.
+	skipWorktree, intentToAdd bool
+}
+
+// walkIndex checks the index data and calls fn with each entry, in order.
+func walkIndex(f *Format, data []byte, fn func(indexEntry)) error {
 	if len(data) < 12+f.size || string(data[:4]) != "DIRC" {
-		return workIndex{}, errors.New("invalid index header")
+		return errors.New("invalid index header")
 	}
 	version := binary.BigEndian.Uint32(data[4:])
 	if version < 2 || version > 4 {
-		return workIndex{}, fmt.Errorf("unsupported index version %d", version)
+		return fmt.Errorf("unsupported index version %d", version)
 	}
 	end := len(data) - f.size
 	checksum := data[end:]
@@ -89,7 +100,7 @@ func parseWorkIndex(f *Format, data []byte) (workIndex, error) {
 		h := f.new()
 		_, _ = h.Write(data)
 		if !bytes.Equal(h.Sum(nil), checksum) {
-			return workIndex{}, errors.New("invalid index checksum")
+			return errors.New("invalid index checksum")
 		}
 	}
 	count := binary.BigEndian.Uint32(data[8:])
@@ -97,16 +108,17 @@ func parseWorkIndex(f *Format, data []byte) (workIndex, error) {
 	var prev string
 	var expanded int
 	var unnamed bool
+	var entries []indexEntry
 	for range count {
-		name, mode, stage, skip, used, err := readIndexEntry(f, version, data, prev)
+		name, mode, stage, ext, used, err := readIndexEntry(f, version, data, prev)
 		if err != nil {
-			return workIndex{}, err
+			return err
 		}
 		entry := data[:used]
 		data, prev = data[used:], name
 		expanded += len(name)
 		if expanded > maxWorkIndex {
-			return workIndex{}, errors.New("expanded index paths too large")
+			return errors.New("expanded index paths too large")
 		}
 		// Split-index replacements can have empty names. Read their
 		// entries so that the extension below can report the format.
@@ -115,98 +127,116 @@ func parseWorkIndex(f *Format, data []byte) (workIndex, error) {
 			continue
 		}
 		if !validIndexPath(name) {
-			return workIndex{}, fmt.Errorf("invalid index path %q", name)
+			return fmt.Errorf("invalid index path %q", name)
 		}
-		if _, tracked := index.files[name]; !tracked || stage == 0 {
-			index.files[name] = mode
-			id, _ := IDFromBytes(f, entry[indexStatBytes:indexStatBytes+f.size])
-			if mode == ModeSubmodule {
-				if index.gitlinks == nil {
-					index.gitlinks = make(map[string]ID)
-				}
-				index.gitlinks[name] = id
-			}
-			if skip && stage == 0 {
-				if index.skipped == nil {
-					index.skipped = make(map[string]ID)
-				}
-				index.skipped[name] = id
-				index.skipTree.add(name)
-			}
-		}
-		index.tree.add(name)
+		id, _ := IDFromBytes(f, entry[indexStatBytes:indexStatBytes+f.size])
+		entries = append(entries, indexEntry{
+			name: name, mode: mode, id: id, stage: stage,
+			skipWorktree: ext&0x4000 != 0, intentToAdd: ext&0x2000 != 0,
+		})
 	}
 	for len(data) > 0 {
 		if len(data) < 8 {
-			return workIndex{}, errors.New("truncated index extension")
+			return errors.New("truncated index extension")
 		}
 		signature := string(data[:4])
 		size := binary.BigEndian.Uint32(data[4:])
 		data = data[8:]
 		if uint64(size) > uint64(len(data)) {
-			return workIndex{}, errors.New("truncated index extension")
+			return errors.New("truncated index extension")
 		}
 		switch signature {
 		case "link":
-			return workIndex{}, errors.New("split index is not supported")
+			return errors.New("split index is not supported")
 		case "sdir":
-			return workIndex{}, errors.New("sparse index is not supported")
+			return errors.New("sparse index is not supported")
 		}
 		if signature[0] < 'A' || signature[0] > 'Z' {
-			return workIndex{}, fmt.Errorf("unsupported index extension %q", signature)
+			return fmt.Errorf("unsupported index extension %q", signature)
 		}
 		data = data[size:]
 	}
 	if unnamed {
-		return workIndex{}, errors.New("empty path in index")
+		return errors.New("empty path in index")
+	}
+	// Only once the whole index is known to be one that is read.
+	for _, e := range entries {
+		fn(e)
+	}
+	return nil
+}
+
+func parseWorkIndex(f *Format, data []byte) (workIndex, error) {
+	index := workIndex{files: make(map[string]Mode)}
+	err := walkIndex(f, data, func(e indexEntry) {
+		if _, tracked := index.files[e.name]; !tracked || e.stage == 0 {
+			index.files[e.name] = e.mode
+			if e.mode == ModeSubmodule {
+				if index.gitlinks == nil {
+					index.gitlinks = make(map[string]ID)
+				}
+				index.gitlinks[e.name] = e.id
+			}
+			if e.skipWorktree && e.stage == 0 {
+				if index.skipped == nil {
+					index.skipped = make(map[string]ID)
+				}
+				index.skipped[e.name] = e.id
+				index.skipTree.add(e.name)
+			}
+		}
+		index.tree.add(e.name)
+	})
+	if err != nil {
+		return workIndex{}, err
 	}
 	return index, nil
 }
 
-// readIndexEntry reads an entry and whether it is skip-worktree.
-func readIndexEntry(f *Format, version uint32, data []byte, prev string) (name string, mode Mode, stage uint16, skip bool, used int, err error) {
+// readIndexEntry reads an entry and its extended flags.
+func readIndexEntry(f *Format, version uint32, data []byte, prev string) (name string, mode Mode, stage uint16, ext uint16, used int, err error) {
 	off := indexStatBytes + f.size + 2
 	if len(data) < off {
-		return "", 0, 0, false, 0, errors.New("truncated index entry")
+		return "", 0, 0, 0, 0, errors.New("truncated index entry")
 	}
 	mode = Mode(binary.BigEndian.Uint32(data[24:]))
 	if mode&0o170000 == ModeTree {
-		return "", 0, 0, false, 0, errors.New("sparse index is not supported")
+		return "", 0, 0, 0, 0, errors.New("sparse index is not supported")
 	}
 	flags := binary.BigEndian.Uint16(data[off-2:])
 	if flags&0x4000 != 0 {
 		if version == 2 || len(data) < off+2 {
-			return "", 0, 0, false, 0, errors.New("invalid extended index entry flags")
+			return "", 0, 0, 0, 0, errors.New("invalid extended index entry flags")
 		}
-		skip = binary.BigEndian.Uint16(data[off:])&0x4000 != 0
+		ext = binary.BigEndian.Uint16(data[off:])
 		off += 2
 	}
 	prefix := ""
 	if version == 4 {
 		drop, n, err := indexPathPrefix(data[off:], len(prev))
 		if err != nil {
-			return "", 0, 0, false, 0, err
+			return "", 0, 0, 0, 0, err
 		}
 		off += n
 		prefix = prev[:len(prev)-drop]
 	}
 	n := bytes.IndexByte(data[off:], 0)
 	if n < 0 {
-		return "", 0, 0, false, 0, errors.New("unterminated index path")
+		return "", 0, 0, 0, 0, errors.New("unterminated index path")
 	}
 	if min(len(prefix)+n, 0xfff) != int(flags&0xfff) {
-		return "", 0, 0, false, 0, errors.New("invalid index path length")
+		return "", 0, 0, 0, 0, errors.New("invalid index path length")
 	}
 	name = prefix + string(data[off:off+n])
 	used = off + n + 1
 	if version < 4 {
 		padded := (used + 7) &^ 7
 		if padded > len(data) || len(bytes.Trim(data[used:padded], "\x00")) != 0 {
-			return "", 0, 0, false, 0, errors.New("invalid index entry padding")
+			return "", 0, 0, 0, 0, errors.New("invalid index entry padding")
 		}
 		used = padded
 	}
-	return name, mode, (flags >> 12) & 3, skip, used, nil
+	return name, mode, (flags >> 12) & 3, ext, used, nil
 }
 
 // indexPathPrefix decodes the number of bytes removed from the previous

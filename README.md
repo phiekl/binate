@@ -65,6 +65,10 @@ The right side defaults to the work tree, and the left defaults to `HEAD`.
 Binate starts at the repository's top and includes tracked files and untracked
 files that Git's ignore rules allow.
 
+Give `:` for the index, which holds what is staged. `agitate --cached` compares
+`HEAD` with the index, as `git diff --cached` does, and `agitate :` compares the
+index with the work tree, as `git diff` does.
+
 The panels on both sides show the commit that last changed each entry. From the
 action menu, `a`, you can show that commit's message or a summary of the files
 it changed, or open the trees from before and after it side by side to see

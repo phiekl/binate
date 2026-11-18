@@ -160,6 +160,12 @@ func (s *Set) Hide(names ...string) {
 	}
 }
 
+// Given reports whether the flag or argument name was on the command line,
+// rather than left at its default.
+func (s *Set) Given(name string) bool {
+	return s.mustLookupAny(name).changed
+}
+
 // DenyEmpty makes Parse reject a string flag or the argument given an empty
 // value.
 func (s *Set) DenyEmpty(name string) {

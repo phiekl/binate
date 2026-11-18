@@ -16,6 +16,7 @@ import (
 
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/diff"
+	"pxy.se/go/binate/internal/scan"
 	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/term"
 )
@@ -199,6 +200,8 @@ func TestEditRefusals(t *testing.T) {
 		{"a directory", "a directory", []string{"Neither side is a regular file."}},
 		{"a directory", "a symlink", []string{"Neither side is a regular file:", "The left side is a directory.", "The right side is a symlink."}},
 		{"missing", notRegular, []string{"Neither side is a regular file."}},
+		{notOnDisk, inIndex, []string{"Neither side can be edited:", "The left side is in a git revision.", "The right side is in the git index."}},
+		{inIndex, "a directory", []string{"Neither side can be edited:", "The left side is in the git index.", "The right side is a directory."}},
 	} {
 		_, got := a.Edit([2]EditSide{{Why: tt.l}, {Why: tt.r}}, "", nil)
 		if !slices.Equal(got, tt.want) {
@@ -206,6 +209,23 @@ func TestEditRefusals(t *testing.T) {
 		}
 	}
 }
+
+// A side in the index is said to be, not in a revision, and with nothing
+// editable, setting an editor wouldn't help.
+func TestEditIndex(t *testing.T) {
+	if got := whyNotEditable(indexRoot{}, scan.File); got != inIndex {
+		t.Errorf("why a file in the index can't be edited = %q", got)
+	}
+	_, got := (&App{}).Edit([2]EditSide{{Why: notOnDisk}, {Why: inIndex}}, "", nil)
+	if len(got) == 0 || got[0] != "Neither side can be edited:" {
+		t.Errorf("without an editor: %q", got)
+	}
+}
+
+// indexRoot is a side in an index.
+type indexRoot struct{ source.Root }
+
+func (indexRoot) IsIndex() bool { return true }
 
 func TestEditPopupKeys(t *testing.T) {
 	a := &App{HasEditor: true, screen: term.NewScreen(100, 30)}

@@ -183,7 +183,7 @@ func (c *child) run() (code int) {
 		if c.repo, err = git.Discover(top, dir, os.Getenv); err != nil {
 			return fail("%v", err)
 		}
-		if c.in.hasWorkTree() && c.repo.WorkTree == "" {
+		if (c.in.hasWorkTree() || c.in.hasIndex()) && c.repo.WorkTree == "" {
 			return fail("the repository has no work tree")
 		}
 	} else {
@@ -256,15 +256,26 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 	}
 	var roots [2]source.Root
 	work := -1
+	// Opposite the work tree or the index, a revision is of the whole
+	// repository.
+	local := c.in.hasWorkTree() || c.in.hasIndex()
 	for i, side := range []input{c.in.left, c.in.right} {
-		if side.kind == inputWorkTree {
+		switch side.kind {
+		case inputWorkTree:
 			work = i
+			continue
+		case inputIndex:
+			index, err := repo.OpenIndex()
+			if err != nil {
+				return [2]source.Root{}, err
+			}
+			roots[i] = index
 			continue
 		}
 		target, err := repo.Resolve(side.path)
-		if err != nil && c.in.hasWorkTree() && (side.path == "HEAD" || side.path == "@") {
-			// Before the first commit, compare an empty tree with the
-			// work tree, as git status lists every file as new.
+		if err != nil && local && (side.path == "HEAD" || side.path == "@") {
+			// Before the first commit, compare an empty tree, as git
+			// status lists every file as new.
 			if unborn, uerr := repo.Unborn(); uerr == nil && unborn {
 				c.gitFiles[i] = git.NewTargetRoot(repo.Repo, git.Target{Mode: git.ModeTree}, "(no commits)")
 				roots[i] = c.gitFiles[i]
@@ -274,8 +285,12 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 		if err != nil {
 			return [2]source.Root{}, err
 		}
-		if c.in.hasWorkTree() && (!target.IsTree() || target.Path != "") {
-			return [2]source.Root{}, fmt.Errorf("unable to compare %s with the work tree: the revision must name a full tree", side.path)
+		if local && (!target.IsTree() || target.Path != "") {
+			other := "the work tree"
+			if !c.in.hasWorkTree() {
+				other = "the index"
+			}
+			return [2]source.Root{}, fmt.Errorf("unable to compare %s with %s: the revision must name a full tree", side.path, other)
 		}
 		c.gitFiles[i] = git.NewTargetRoot(repo.Repo, target, side.path)
 		roots[i] = c.gitFiles[i]
@@ -286,6 +301,9 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 			return [2]source.Root{}, err
 		}
 		roots[work] = tree
+		return roots, nil
+	}
+	if c.in.hasIndex() {
 		return roots, nil
 	}
 	l, r := c.gitFiles[0], c.gitFiles[1]

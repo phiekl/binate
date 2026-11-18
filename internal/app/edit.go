@@ -61,7 +61,17 @@ const notRegular = "not a regular file"
 // revision, can't be edited.
 const notOnDisk = "in a git revision"
 
+// inIndex is why a side in the git index, which is no revision, can't be
+// edited.
+const inIndex = "in the git index"
+
 const readOnlyWorkTree = "in the read-only work tree"
+
+// inGit reports whether why is that of a side in a git revision or the
+// index, which no editor can edit.
+func inGit(why string) bool {
+	return why == notOnDisk || why == inIndex
+}
 
 // onDisk reports whether root is in the file system.
 func onDisk(root source.Root) bool {
@@ -70,6 +80,9 @@ func onDisk(root source.Root) bool {
 }
 
 func editRestriction(root source.Root) string {
+	if x, ok := root.(source.Index); ok && x.IsIndex() {
+		return inIndex
+	}
 	disk, ok := root.(source.DiskRoot)
 	if !ok {
 		return notOnDisk
@@ -102,6 +115,9 @@ func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []st
 	if sides[0].Why == notOnDisk && sides[1].Why == notOnDisk {
 		return nil, []string{"Files in git revisions can't be edited."}
 	}
+	if inGit(sides[0].Why) && inGit(sides[1].Why) {
+		return nil, []string{"Neither side can be edited:", "The left side is " + sides[0].Why + ".", "The right side is " + sides[1].Why + "."}
+	}
 	if sides[0].Why != "" && sides[1].Why != "" &&
 		(sides[0].Why == readOnlyWorkTree || sides[1].Why == readOnlyWorkTree) {
 		return nil, []string{"Files in the work tree can't be edited in this comparison."}
@@ -123,7 +139,7 @@ func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []st
 	}
 	why := "Neither side is a regular file"
 	l, r := sides[0].Why, sides[1].Why
-	if l == notOnDisk || r == notOnDisk {
+	if inGit(l) || inGit(r) {
 		return nil, []string{"Neither side can be edited:", "The left side is " + l + ".", "The right side is " + r + "."}
 	}
 	if l == r || l == notRegular || r == notRegular {

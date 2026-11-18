@@ -46,8 +46,11 @@ See [**binate-manual**(7)](manual.md) for the full reference.
   repository of the current directory, or of **-C**, such as **main**,
   **HEAD~2** or **v1.0:src**. Use **.** opposite a full-tree revision to compare
   it with the work tree at the repository's top, including untracked files
-  allowed by Git's ignore rules. With **-g** or **agitate**, a missing *right*
-  defaults to **.**, and a missing *left* defaults to **HEAD**.
+  allowed by Git's ignore rules. Use **:** for the index, what is staged. With
+  **-g** or **agitate**, a missing *right* defaults to **.**, and a missing
+  *left* defaults to **HEAD**.
+- **--cached**: With **-g**, compare *left*, or **HEAD**, with the index, as
+  **git diff --cached** does.
 - **-C**, **--directory** *directory*: With **-g**, find the repository from
   *directory*, as **git -C** does.
 - **-h**, **--help**: Show the options and exit.

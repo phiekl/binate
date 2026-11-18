@@ -56,6 +56,13 @@ type Reloadable interface {
 	Reload() (Root, error)
 }
 
+// Index is a root of what a version control system's index has staged, as
+// git's, which is no revision. IsIndex reports true.
+type Index interface {
+	Root
+	IsIndex() bool
+}
+
 // ModeGitlink is the type, in Mode, of a git submodule: a commit of another
 // repository, named by Target, as git's S_IFGITLINK. No file has it.
 const ModeGitlink = 0o160000

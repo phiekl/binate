@@ -23,6 +23,7 @@ const (
 	inputStream                    // anything else, such as /dev/null or a pipe, read once
 	inputGit                       // a git revision, resolved by the child
 	inputWorkTree                  // the repository's work tree, resolved by the child
+	inputIndex                     // the repository's index, resolved by the child
 )
 
 // input is one side as given on the command line.
@@ -44,8 +45,11 @@ type inputs struct {
 // repository it discovers.
 func gitInputs(left, right string) inputs {
 	side := func(arg string) input {
-		if arg == "." {
+		switch arg {
+		case ".":
 			return input{path: arg, kind: inputWorkTree}
+		case ":":
+			return input{path: arg, kind: inputIndex}
 		}
 		return input{path: arg, kind: inputGit}
 	}
@@ -54,6 +58,10 @@ func gitInputs(left, right string) inputs {
 
 func (in inputs) hasWorkTree() bool {
 	return in.left.kind == inputWorkTree || in.right.kind == inputWorkTree
+}
+
+func (in inputs) hasIndex() bool {
+	return in.left.kind == inputIndex || in.right.kind == inputIndex
 }
 
 // dirMode reports whether two directories are compared.
@@ -103,7 +111,7 @@ func statInput(path string) (input, error) {
 
 // inputCodes are the letters encode gives each kind of input, in capitals
 // for a file looked up in the directory given.
-const inputCodes = "dfsgw"
+const inputCodes = "dfsgwi"
 
 // encode returns the kinds of both sides, for the child, which takes the
 // inputs as the parent resolved them rather than look again: what it

@@ -142,6 +142,11 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"-g"}, "stdin and stdout must be a terminal"},
 		{[]string{"-g", ""}, "flag/argument is empty: left"},
 		{[]string{"-g", "."}, "a work tree must be compared with a revision"},
+		{[]string{"-g", ":", ":"}, "the index must be compared with a revision or the work tree"},
+		{[]string{"--cached", dir, dir}, "--cached without --git"},
+		{[]string{"-g", "--cached", "HEAD", "HEAD"}, "--cached compares one revision with the index"},
+		{[]string{"agitate", "--cached", "HEAD", ":"}, "--cached compares one revision with the index"},
+		{[]string{"agitate", "--cached", "."}, "--cached compares one revision with the index"},
 	} {
 		var cmd *exec.Cmd
 		if len(tt.args) > 0 && tt.args[0] == "agitate" {
@@ -266,8 +271,8 @@ func TestGitName(t *testing.T) {
 	help := s.Help(80)
 	for _, want := range []string{
 		"usage: agitate [option]... [left [right]]",
-		"left git revision or . for the work tree (default \"HEAD\")",
-		"right git revision or . for the work tree (default \".\")",
+		"left revision, . (work tree) or : (index) (default \"HEAD\")",
+		"right revision, . (work tree) or : (index) (default \".\")",
 		"-C, --directory   find the repository",
 	} {
 		if !strings.Contains(help, want) {
@@ -1593,9 +1598,15 @@ func TestGitNoCommits(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "first"), []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Staged, for the index to have it too.
+	add := exec.Command("git", "add", "first")
+	add.Dir = repo
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
 	user := t.TempDir()
 	// Before the first commit, HEAD is an empty tree beside the work tree.
-	for _, args := range [][]string{{"-g"}, {"-g", "@", "."}} {
+	for _, args := range [][]string{{"-g"}, {"-g", "@", "."}, {"-g", "--cached"}} {
 		cmd := binate(t, args...)
 		cmd.Dir = repo
 		cmd.Env = append(cmd.Env, "HOME="+user, "XDG_CONFIG_HOME="+user, "GIT_CONFIG_GLOBAL=/dev/null")
@@ -1618,5 +1629,85 @@ func TestGitNoCommits(t *testing.T) {
 		if code := pt.Exit(); code != 2 {
 			t.Errorf("%q: exit status %d", args, code)
 		}
+	}
+}
+
+func TestCachedOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		argv        []string
+		left, right string
+	}{
+		{"agitate", []string{"--cached"}, "HEAD", ":"},
+		{"agitate", []string{"--cached", "main"}, "main", ":"},
+		{"binate", []string{"-g", "--cached"}, "HEAD", ":"},
+		{"agitate", []string{":"}, ":", "."},
+		{"agitate", []string{"HEAD", ":"}, "HEAD", ":"},
+	} {
+		_, o, err := parseOptions(tc.name, tc.argv)
+		if err != nil || o.left != tc.left || o.right != tc.right {
+			t.Errorf("%s %q: %q %q, %v; want %q %q", tc.name, tc.argv, o.left, o.right, err, tc.left, tc.right)
+		}
+		in := gitInputs(o.left, o.right)
+		if !in.hasIndex() {
+			t.Errorf("%s %q: no index side", tc.name, tc.argv)
+		}
+		if got, err := decodeInputs(o.left, o.right, in.encode()); err != nil || got != in {
+			t.Errorf("%s %q: decoded %+v, %v", tc.name, tc.argv, got, err)
+		}
+	}
+}
+
+func TestGitIndex(t *testing.T) {
+	repo := gitRepo(t)
+	user := t.TempDir()
+	write := func(name, text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitIn := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	// Staged and then changed again, changed only on disk, staged only,
+	// and untracked.
+	write("dir/changed", "staged\n")
+	write("added", "a\n")
+	gitIn("add", "dir/changed", "added")
+	write("dir/changed", "on disk\n")
+	write("same", "unstaged\n")
+	write("loose", "untracked\n")
+
+	for _, tc := range []struct {
+		name, want string
+		cmd        *exec.Cmd
+	}{
+		// What git diff --cached shows: the staged change and addition.
+		{"cached", "[2 identical] [1 right] [1 contents]", agitate(t, repo, "--cached")},
+		{"revision and index", "[2 identical] [1 right] [1 contents]", binate(t, "-g", "HEAD", ":")},
+		// What git diff shows, with the untracked file: what isn't staged.
+		{"index and work tree", "[2 identical] [1 right] [2 contents]", agitate(t, repo, ":")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cmd.Dir = repo
+			tc.cmd.Env = append(tc.cmd.Env, "HOME="+user, "XDG_CONFIG_HOME="+user, "GIT_CONFIG_GLOBAL=/dev/null")
+			pt := ptytest.Open(t, 100, 30)
+			pt.Start(tc.cmd)
+			offset := pt.Wait(0, enterScreen)
+			scr := pt.WaitScreen(100, 30, offset, tc.want)
+			if !strings.Contains(scr, "(index)") {
+				t.Errorf("no index side:\n%s", scr)
+			}
+			pt.Write("\x03x")
+			if code := pt.Exit(); code != 0 {
+				t.Errorf("exit status %d", code)
+			}
+		})
 	}
 }

@@ -365,3 +365,20 @@ func TestWrapWords(t *testing.T) {
 		})
 	}
 }
+
+func TestGiven(t *testing.T) {
+	var o testOpts
+	s := newTestSet(&o)
+	s.ArgDefaults(func() bool { return true }, "b")
+	if err := s.Parse([]string{"-k", "", "a"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"left": true, "right": false, "key": true, "namespace": false} {
+		if got := s.Given(name); got != want {
+			t.Errorf("Given(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if o.right != "b" {
+		t.Errorf("right = %q, want its default", o.right)
+	}
+}

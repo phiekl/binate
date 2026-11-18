@@ -710,7 +710,7 @@ func (w *WorkTree) readIgnore(rel string, gitignore bool) ([]ignorePattern, erro
 	data, err := w.readFileAt(rel, maxIgnoreFile, follow)
 	if id, ok := w.index.skipped[rel]; ok && gitignore && data == nil && err == nil {
 		if m := w.index.files[rel]; m == ModeFile || m == ModeExecutable {
-			data, err = w.readBlob(id, maxIgnoreFile)
+			data, err = w.repo.blob(id, maxIgnoreFile)
 		}
 	}
 	if err != nil {
@@ -750,7 +750,7 @@ func (w *WorkTree) indexStat(rel string, id ID) (*stat.Stat, error) {
 		st.Target = id.String()
 	case ModeSymlink:
 		var target []byte
-		target, err = w.readBlob(id, maxTarget)
+		target, err = w.repo.blob(id, maxTarget)
 		st.Target, st.Size = string(target), int64(len(target))
 	default:
 		st.Size, err = w.repo.Size(id)
@@ -763,28 +763,11 @@ func (w *WorkTree) indexStat(rel string, id ID) (*stat.Stat, error) {
 
 // openIndexed opens the skip-worktree file at rel from its blob.
 func (w *WorkTree) openIndexed(rel string, id ID) (source.File, error) {
-	mode := w.index.files[rel]
-	if mode != ModeFile && mode != ModeExecutable {
-		return nil, &fs.PathError{Op: "open", Path: w.Path(rel), Err: files.ErrNotRegular}
-	}
-	obj, err := w.repo.Open(id)
+	f, err := w.repo.openBlob(id, w.index.files[rel], path.Base(rel))
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: w.Path(rel), Err: err}
 	}
-	if obj.Type != Blob {
-		_ = obj.Close()
-		return nil, &fs.PathError{Op: "open", Path: w.Path(rel), Err: corrupt(id, "file of a %s", obj.Type)}
-	}
-	info := fileInfo{name: path.Base(rel), size: obj.Size, mode: fs.FileMode(unixMode(mode) & 0o777)}
-	return &file{Object: obj, info: info}, nil
-}
-
-func (w *WorkTree) readBlob(id ID, limit int64) ([]byte, error) {
-	typ, data, err := w.repo.Read(id, limit)
-	if err == nil && typ != Blob {
-		err = corrupt(id, "%s in place of a blob", typ)
-	}
-	return data, err
+	return f, nil
 }
 
 func (w *WorkTree) submoduleHead(rel string) (ID, error) {
