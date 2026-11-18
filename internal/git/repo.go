@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 
@@ -28,9 +29,11 @@ type Repo struct {
 	shallow map[ID]bool
 	// dirs are the objects directories searched, the repository's first.
 	dirs []string
-	// packs are the packs in dirs, as found when opened.
-	packs []*pack
-	cache baseCache
+	// packs are the packs in dirs, as found when opened or since an
+	// object was missing from them. packsMu orders the searches for more.
+	packs   atomic.Pointer[[]*pack]
+	packsMu sync.Mutex
+	cache   baseCache
 
 	// trees are the trees read as a Root's directories, by ID, shared
 	// between the roots, as two revisions' trees are mostly the same.
@@ -44,7 +47,8 @@ type Repo struct {
 
 // OpenRepo returns the repository whose objects directory is dir, of
 // format f, with the objects directories it names as alternates. The
-// packs are those there now: one added later is not read.
+// packs are those there now, and those added later are looked for when an
+// object is in none of them, as after git gc.
 func OpenRepo(dir string, f *Format) (*Repo, error) {
 	dirs, err := (*beneath)(nil).objectDirs(dir)
 	if err != nil {
@@ -57,13 +61,48 @@ func OpenRepo(dir string, f *Format) (*Repo, error) {
 // and all, are dirs.
 func openRepo(dirs []string, f *Format) (*Repo, error) {
 	r := &Repo{format: f, dirs: dirs, cache: baseCache{limit: defaultCacheLimit}, trees: treeCache{limit: defaultTreeCacheLimit}}
+	var packs []*pack
 	for _, d := range r.dirs {
-		if err := r.openPacks(d); err != nil {
+		var err error
+		if packs, err = r.openPacks(d, packs, nil); err != nil {
+			r.packs.Store(&packs)
 			r.Close()
 			return nil, err
 		}
 	}
+	r.packs.Store(&packs)
 	return r, nil
+}
+
+// packList returns the packs open.
+func (r *Repo) packList() []*pack {
+	if p := r.packs.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// reloadPacks opens the packs added to the objects directories since they
+// were listed, as git gc and git fetch write, and returns all those open.
+// Those open before stay open and read, though deleted since, as by git
+// gc. A pack that can't be opened, as one being written, is left out as
+// before.
+func (r *Repo) reloadPacks() []*pack {
+	r.packsMu.Lock()
+	defer r.packsMu.Unlock()
+	old := r.packList()
+	open := make(map[string]bool, len(old))
+	for _, p := range old {
+		open[p.path] = true
+	}
+	packs := slices.Clone(old)
+	for _, d := range r.dirs {
+		packs, _ = r.openPacks(d, packs, open)
+	}
+	if len(packs) > len(old) {
+		r.packs.Store(&packs)
+	}
+	return packs
 }
 
 // Dirs returns the objects directories read: the repository's, and its
@@ -158,15 +197,18 @@ func readAlternates(dir string) ([]string, error) {
 	return alts, nil
 }
 
-// openPacks opens the packs in the objects directory dir. An index
-// without its pack, as one being written, is left out, as git does.
-func (r *Repo) openPacks(dir string) error {
+// openPacks appends to packs those in the objects directory dir, but for
+// the indexes open names. An index without its pack, as one being
+// written, is left out, as git does. On an error, it returns packs with
+// those opened before it, unless reloading, with open set, where a pack
+// that can't be opened is left out and the rest opened.
+func (r *Repo) openPacks(dir string, packs []*pack, open map[string]bool) ([]*pack, error) {
 	names, err := readDirNames(filepath.Join(dir, "pack"))
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return packs, nil
 	}
 	if err != nil {
-		return err
+		return packs, err
 	}
 	slices.Sort(names)
 	for _, name := range names {
@@ -174,16 +216,22 @@ func (r *Repo) openPacks(dir string) error {
 			continue
 		}
 		idx := filepath.Join(dir, "pack", name)
+		if open[idx] {
+			continue
+		}
 		if _, err := os.Lstat(strings.TrimSuffix(idx, ".idx") + ".pack"); errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		p, err := openPack(r, idx)
-		if err != nil {
-			return fmt.Errorf("%s: %w", idx, err)
+		if err != nil && open != nil {
+			continue
 		}
-		r.packs = append(r.packs, p)
+		if err != nil {
+			return packs, fmt.Errorf("%s: %w", idx, err)
+		}
+		packs = append(packs, p)
 	}
-	return nil
+	return packs, nil
 }
 
 func readDirNames(dir string) ([]string, error) {
@@ -199,11 +247,11 @@ func readDirNames(dir string) ([]string, error) {
 
 // Close closes the packs and commit graph. Call it after all reads finish.
 func (r *Repo) Close() {
-	for _, p := range r.packs {
+	for _, p := range r.packList() {
 		_ = p.f.Close()
 		_ = unmap(p.idx)
 	}
-	r.packs = nil
+	r.packs.Store(nil)
 	r.graph.close()
 	r.graph = nil
 }
@@ -219,9 +267,16 @@ type Object struct {
 	io.ReadCloser
 }
 
-// find returns the pack holding id and where, or nil if none does.
+// find returns the open pack holding id and where, or nil if none does,
+// for the object to be read loose (see openLoose).
 func (r *Repo) find(id ID) (*pack, int64, error) {
-	for _, p := range r.packs {
+	return findIn(r.packList(), id)
+}
+
+// findIn returns the pack of packs holding id and where, or nil if none
+// does.
+func findIn(packs []*pack, id ID) (*pack, int64, error) {
+	for _, p := range packs {
 		off, ok, err := p.idx.find(id)
 		if err != nil {
 			return nil, 0, err
@@ -246,12 +301,22 @@ func (r *Repo) Open(id ID) (Object, error) {
 }
 
 // openLoose searches the loose objects after packs have been searched.
+// Where id isn't loose either, packs added since are searched, as Git
+// does: git gc may have packed it, and pruned its loose copy since the
+// packs were. All are, as another reader may have opened the new ones.
 func (r *Repo) openLoose(id ID) (Object, error) {
 	for _, dir := range r.dirs {
 		obj, err := openLoose(dir, id)
 		if !errors.Is(err, ErrNotFound) {
 			return obj, err
 		}
+	}
+	p, off, err := findIn(r.reloadPacks(), id)
+	if err != nil {
+		return Object{}, err
+	}
+	if p != nil {
+		return p.open(off, id)
 	}
 	return Object{}, fmt.Errorf("%s: %w", id, ErrNotFound)
 }

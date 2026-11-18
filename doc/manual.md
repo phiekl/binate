@@ -143,7 +143,9 @@ one naming a file, as **HEAD:README**, compares that file, as two files are
 compared. A tree can't be compared with a file.
 
 **binate** reads the repository itself, without running git: loose objects,
-packs and alternates, in either object format, SHA-1 or SHA-256. It reads a
+packs and alternates, in either object format, SHA-1 or SHA-256. As in Git, an
+object in none of the packs read and not loose is looked for again in packs
+added since, as after **git gc**. It reads a
 repository of a format git reads, version 0 or 1, and refuses one with an
 extension it doesn't know, or refs stored as reftable. Nothing in the
 repository's configuration is acted on, so a repository owned by another user is

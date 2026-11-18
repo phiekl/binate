@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -108,7 +109,7 @@ func TestLargeOffsets(t *testing.T) {
 	r.git("index-pack", "--index-version=2,0x40", packs[0])
 	repo := r.open()
 	defer repo.Close()
-	if len(repo.packs[0].idx.off64) == 0 {
+	if len(repo.packList()[0].idx.off64) == 0 {
 		t.Fatal("no large offsets")
 	}
 	checkAll(t, r, repo)
@@ -361,5 +362,115 @@ func TestSmallObjectCorruptPackedCommit(t *testing.T) {
 				t.Fatalf("resolve: expected corrupt object error, got %v", err)
 			}
 		})
+	}
+}
+
+// TestPacksAdded checks that objects packed after the repository was
+// opened are read, as after git gc, and the packs open before still are
+// though deleted, by each way of reading them.
+func TestPacksAdded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		read func(repo *Repo, id ID) (int64, error)
+	}{
+		{"Size", func(repo *Repo, id ID) (int64, error) { return repo.Size(id) }},
+		{"Info", func(repo *Repo, id ID) (int64, error) {
+			typ, size, err := repo.Info(id)
+			if err == nil && typ != Blob {
+				err = fmt.Errorf("a %v", typ)
+			}
+			return size, err
+		}},
+		{"Read", func(repo *Repo, id ID) (int64, error) {
+			_, data, err := repo.Read(id, 100)
+			return int64(len(data)), err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRepo(t, SHA1)
+			r.write(map[string]string{"old": "old\n"})
+			r.commit()
+			r.git("gc", "-q")
+			repo := r.open()
+			defer repo.Close()
+			r.write(map[string]string{"new": "new\n"})
+			r.commit()
+			r.git("gc", "-q", "--prune=now")
+			for _, name := range []string{"new", "old"} {
+				if size, err := tc.read(repo, r.id("HEAD:"+name)); err != nil || size != 4 {
+					t.Errorf("%s: %d, %v", name, size, err)
+				}
+			}
+			missing, err := ParseID(SHA1, strings.Repeat("ab", 20))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tc.read(repo, missing); !errors.Is(err, ErrNotFound) {
+				t.Errorf("a missing object: %v", err)
+			}
+		})
+	}
+}
+
+// TestPacksAddedConcurrently checks that readers missing an object at once,
+// after git gc, all find it, not only the one that opens the new pack.
+func TestPacksAddedConcurrently(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"old": "old\n"})
+	r.commit()
+	r.git("gc", "-q")
+	repo := r.open()
+	defer repo.Close()
+	r.write(map[string]string{"new": "new\n"})
+	r.commit()
+	r.git("gc", "-q", "--prune=now")
+	id := r.id("HEAD:new")
+	const readers = 128
+	errs := make([]error, readers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range readers {
+		wg.Go(func() {
+			<-start
+			_, errs[i] = repo.Size(id)
+		})
+	}
+	close(start)
+	wg.Wait()
+	failed := 0
+	for _, err := range errs {
+		if err != nil {
+			failed++
+		}
+	}
+	if failed > 0 {
+		t.Errorf("%d of %d readers failed: %v", failed, readers, errors.Join(errs...))
+	}
+}
+
+// TestLoosePackedMeanwhile checks that an object read loose, after the
+// packs were searched while it was, is found where git gc packed it and
+// pruned the loose copy in between.
+func TestLoosePackedMeanwhile(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"old": "old\n"})
+	r.commit()
+	r.git("gc", "-q")
+	repo := r.open()
+	defer repo.Close()
+	r.write(map[string]string{"new": "new\n"})
+	r.commit()
+	id := r.id("HEAD:new")
+	if p, _, err := repo.find(id); p != nil || err != nil {
+		t.Fatalf("packed before git gc: %v", err)
+	}
+	r.git("gc", "-q", "--prune=now")
+	obj, err := repo.openLoose(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = obj.Close()
+	if obj.Type != Blob || obj.Size != 4 {
+		t.Errorf("%v of %d bytes", obj.Type, obj.Size)
 	}
 }

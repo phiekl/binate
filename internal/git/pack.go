@@ -27,6 +27,8 @@ const (
 // pack is a pack file and its index.
 type pack struct {
 	repo *Repo
+	// path is the index's.
+	path string
 	f    *os.File
 	// end is where the entries end: before the trailing checksum.
 	end int64
@@ -50,7 +52,7 @@ func openPack(repo *Repo, idxPath string) (*pack, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &pack{repo: repo, f: f, idx: idx}
+	p := &pack{repo: repo, path: idxPath, f: f, idx: idx}
 	if err := p.check(); err != nil {
 		_ = f.Close()
 		return nil, err

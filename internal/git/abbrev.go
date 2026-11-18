@@ -68,7 +68,7 @@ func (r *Repo) findPrefix(p prefix) ([]ID, error) {
 		}
 		found = append(found, id)
 	}
-	for _, pk := range r.packs {
+	for _, pk := range r.packList() {
 		ids, err := pk.idx.withPrefix(p, r.format, 2)
 		if err != nil {
 			return nil, err
@@ -161,7 +161,7 @@ const defaultAbbrev = 7
 // same.
 func (r *Repo) Abbrev(id ID) string {
 	var count int
-	for _, pk := range r.packs {
+	for _, pk := range r.packList() {
 		count += pk.idx.n
 	}
 	n := max((bits.Len(uint(count))+1)/2, defaultAbbrev)
