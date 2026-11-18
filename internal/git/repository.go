@@ -55,14 +55,20 @@ func readLimited(path string, max int64) (string, error) {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	data, err := readBounded(f, max)
+	return string(data), err
+}
+
+// readBounded reads all of f, of at most limit bytes.
+func readBounded(f *os.File, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if int64(len(data)) > max {
-		return "", fmt.Errorf("%s: larger than %d bytes", path, max)
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: larger than %d bytes", f.Name(), limit)
 	}
-	return string(data), nil
+	return data, nil
 }
 
 // FindTop returns the top of the repository of the directory dir, beneath
@@ -75,11 +81,7 @@ func readLimited(path string, max int64) (string, error) {
 // then searches by names without reading regular files. The top can then be
 // all that is allowed before Discover reads the repository.
 func FindTop(dir string, getenv func(string) string) (string, error) {
-	dir, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return "", err
-	}
-	dir, err = filepath.Abs(dir)
+	dir, err := resolveDir(dir)
 	if err != nil {
 		return "", err
 	}
@@ -132,6 +134,21 @@ func FindTop(dir string, getenv func(string) string) (string, error) {
 	}
 }
 
+// resolveDir returns the absolute path of dir with symlinks resolved. A
+// relative dir is joined to the working directory first, which $PWD may
+// name through symlinks. Neither is cleaned before symlinks are resolved:
+// .. after a symlink leads above its target, as in Git.
+func resolveDir(dir string) (string, error) {
+	if !filepath.IsAbs(dir) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		dir = wd + string(filepath.Separator) + dir
+	}
+	return filepath.EvalSymlinks(dir)
+}
+
 // Discover finds the repository at top, as FindTop found it from the
 // directory dir, beneath it, reading nothing outside top: a repository
 // with any of its directories outside, symlinks resolved, as a linked
@@ -142,10 +159,7 @@ func Discover(top, dir string, getenv func(string) string) (*Location, error) {
 	if err != nil {
 		return nil, err
 	}
-	if dir, err = filepath.EvalSymlinks(dir); err != nil {
-		return nil, err
-	}
-	if dir, err = filepath.Abs(dir); err != nil {
+	if dir, err = resolveDir(dir); err != nil {
 		return nil, err
 	}
 	resolved, err := filepath.EvalSymlinks(top)
@@ -473,7 +487,7 @@ func repositoryFormat(c config) (*Format, error) {
 		return nil, fmt.Errorf("repository format version %d, which is not supported", version)
 	}
 	format := SHA1
-	for name, values := range c {
+	for name, values := range c.values {
 		ext, ok := strings.CutPrefix(name, "extensions.")
 		if !ok || strings.Contains(ext, ".") {
 			continue

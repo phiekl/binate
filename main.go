@@ -84,17 +84,18 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	s.Count(&o.verbose, "verbose", "v", "write debug messages (repeat for more)")
 	s.Bool(&o.version, "version", "V", "show version and exit")
 	s.Global("verbose", "version")
-	sides, directory := "%s directory or file, or revision with --git", "with --git, find the repository from directory, as git -C"
+	sides, directory := "%s directory or file, or revision or . with --git", "with --git, find the repository from directory, as git -C"
 	if gitOnly {
-		sides, directory = "%s git revision", "find the repository from directory, as git -C"
+		sides, directory = "%s git revision or . for the work tree", "find the repository from directory, as git -C"
 	}
 	s.Arg(&o.left, "left", fmt.Sprintf(sides, "left"))
 	s.Arg(&o.right, "right", fmt.Sprintf(sides, "right"))
+	s.ArgDefaults(func() bool { return gitOnly || o.git }, "HEAD", ".")
 	s.Func("compare", "c", "attributes to compare (see binate(1))", func(value string) {
 		compare = value
 	})
 	s.Bool(&o.quick, "quick", "q", "compare size and modification time")
-	s.Bool(&o.git, "git", "g", "compare two git revisions of the repository here")
+	s.Bool(&o.git, "git", "g", "compare in git mode (left defaults to HEAD, right to .)")
 	s.String(&o.directory, "directory", "C", "", directory)
 	s.Func("exclude", "x", "exclude names matching a pattern (repeatable)", func(p string) {
 		o.excludes = append(o.excludes, p)
@@ -119,7 +120,10 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 		return s, o, errors.New("--directory without --git: it names where to find the repository (for context lines, use -U)")
 	}
 	if o.git && o.quick {
-		return s, o, errors.New("--quick with --git: files in revisions are compared by their object names, without reading them")
+		return s, o, errors.New("--quick with --git: revisions don't record modification times")
+	}
+	if o.git && o.left == "." && o.right == "." {
+		return s, o, errors.New("a work tree must be compared with a revision")
 	}
 	n, err := strconv.Atoi(contextLines)
 	if err != nil || n < 0 {

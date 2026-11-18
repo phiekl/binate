@@ -197,7 +197,7 @@ func TestResultCacheSwappedWhileRead(t *testing.T) {
 
 // otherRoot is a side not in the file system, as far as the cache can
 // tell: its files have no version to check.
-type otherRoot struct{ source.Disk }
+type otherRoot struct{ source.Root }
 
 // A result on a side not in the file system is not cached.
 func TestResultCacheOnlyOnDisk(t *testing.T) {

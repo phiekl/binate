@@ -29,14 +29,15 @@ type EditSide struct {
 // whyNotEditable says why a tree entry's side of kind k in root can't be
 // edited: only an existing regular file in the file system can.
 func whyNotEditable(root source.Root, k scan.Kind) string {
-	if !onDisk(root) && k != scan.Missing {
-		return notOnDisk
+	if k == scan.Missing {
+		return "missing"
+	}
+	if why := editRestriction(root); why != "" {
+		return why
 	}
 	switch k {
 	case scan.File:
 		return ""
-	case scan.Missing:
-		return "missing"
 	case scan.Dir:
 		return "a directory"
 	case scan.Symlink:
@@ -60,10 +61,23 @@ const notRegular = "not a regular file"
 // revision, can't be edited.
 const notOnDisk = "in a git revision"
 
+const readOnlyWorkTree = "in the read-only work tree"
+
 // onDisk reports whether root is in the file system.
 func onDisk(root source.Root) bool {
-	_, ok := root.(source.Disk)
+	_, ok := root.(source.DiskRoot)
 	return ok
+}
+
+func editRestriction(root source.Root) string {
+	disk, ok := root.(source.DiskRoot)
+	if !ok {
+		return notOnDisk
+	}
+	if !disk.Editable() {
+		return readOnlyWorkTree
+	}
+	return ""
 }
 
 // EditDone is called after the editor exits, with a note on which side
@@ -87,6 +101,10 @@ func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []st
 	// Setting an editor wouldn't help.
 	if sides[0].Why == notOnDisk && sides[1].Why == notOnDisk {
 		return nil, []string{"Files in git revisions can't be edited."}
+	}
+	if sides[0].Why != "" && sides[1].Why != "" &&
+		(sides[0].Why == readOnlyWorkTree || sides[1].Why == readOnlyWorkTree) {
+		return nil, []string{"Files in the work tree can't be edited in this comparison."}
 	}
 	if !a.HasEditor {
 		return nil, []string{"Environment variable VISUAL or EDITOR must be set."}

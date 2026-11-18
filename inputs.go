@@ -18,10 +18,11 @@ import (
 type inputKind int
 
 const (
-	inputDir    inputKind = iota // a directory, compared as a tree
-	inputFile                    // a regular file, read by path
-	inputStream                  // anything else, such as /dev/null or a pipe, read once
-	inputGit                     // a git revision, resolved by the child
+	inputDir      inputKind = iota // a directory, compared as a tree
+	inputFile                      // a regular file, read by path
+	inputStream                    // anything else, such as /dev/null or a pipe, read once
+	inputGit                       // a git revision, resolved by the child
+	inputWorkTree                  // the repository's work tree, resolved by the child
 )
 
 // input is one side as given on the command line.
@@ -39,10 +40,20 @@ type inputs struct {
 	left, right input
 }
 
-// gitInputs returns the inputs of --git: two revisions, which only the
-// child, restricted, reads the repository to resolve.
+// gitInputs returns the inputs of --git. The child resolves them in the
+// repository it discovers.
 func gitInputs(left, right string) inputs {
-	return inputs{left: input{path: left, kind: inputGit}, right: input{path: right, kind: inputGit}}
+	side := func(arg string) input {
+		if arg == "." {
+			return input{path: arg, kind: inputWorkTree}
+		}
+		return input{path: arg, kind: inputGit}
+	}
+	return inputs{left: side(left), right: side(right)}
+}
+
+func (in inputs) hasWorkTree() bool {
+	return in.left.kind == inputWorkTree || in.right.kind == inputWorkTree
 }
 
 // dirMode reports whether two directories are compared.
@@ -92,7 +103,7 @@ func statInput(path string) (input, error) {
 
 // inputCodes are the letters encode gives each kind of input, in capitals
 // for a file looked up in the directory given.
-const inputCodes = "dfsg"
+const inputCodes = "dfsgw"
 
 // encode returns the kinds of both sides, for the child, which takes the
 // inputs as the parent resolved them rather than look again: what it
@@ -125,7 +136,7 @@ func decodeInputs(left, right, code string) (inputs, error) {
 			return inputs{}, fmt.Errorf("invalid input kinds %q", code)
 		}
 		sides[i].kind, sides[i].inDir = inputKind(k), c != lower
-		if sides[i].inDir && sides[i].kind == inputDir {
+		if sides[i].inDir && sides[i].kind != inputFile && sides[i].kind != inputStream {
 			return inputs{}, fmt.Errorf("invalid input kinds %q", code)
 		}
 	}

@@ -66,6 +66,7 @@ type child struct {
 	// restricted, and gitFiles the revisions' files, if files.
 	repo     *git.Location
 	gitFiles [2]*git.Root
+	ignore   git.GlobalIgnore
 }
 
 func runChild(specText string) int {
@@ -119,6 +120,9 @@ func (c *child) policy() landlock.Policy {
 	var p landlock.Policy
 	if c.repo != nil {
 		p.Dirs = append(p.Dirs, c.repo.ReadDirs()...)
+		if c.in.hasWorkTree() {
+			p.Dirs = append(p.Dirs, c.repo.WorkTree)
+		}
 	}
 	for _, side := range []input{c.in.left, c.in.right} {
 		switch side.kind {
@@ -155,12 +159,19 @@ func (c *child) run() (code int) {
 		// Before restricting the process, resolve the starting directory's
 		// symlinks, possibly reading links outside the repository, and
 		// find the top by names. Repository files are then read under a
-		// first layer allowing only the top, before the next allows only
-		// the repository. A git revision has no owners to name.
+		// first layer allowing only the top, before the next allows the
+		// git directories and, when compared, the work tree.
 		dir := cmp.Or(c.opts.directory, ".")
 		top, err := git.FindTop(dir, os.Getenv)
 		if err != nil {
 			return fail("%v", err)
+		}
+		if c.in.hasWorkTree() {
+			c.ignore, err = git.ReadGlobalIgnore(os.Getenv)
+			if err != nil {
+				return fail("reading global git ignore rules: %v", err)
+			}
+			a.Names = stat.LoadNames()
 		}
 		rules, err := landlock.Policy{Dirs: []string{top}}.Rules()
 		if err != nil {
@@ -171,6 +182,9 @@ func (c *child) run() (code int) {
 		}
 		if c.repo, err = git.Discover(top, dir, os.Getenv); err != nil {
 			return fail("%v", err)
+		}
+		if c.in.hasWorkTree() && c.repo.WorkTree == "" {
+			return fail("the repository has no work tree")
 		}
 	} else {
 		a.Names = stat.LoadNames()
@@ -233,19 +247,46 @@ func (c *child) run() (code int) {
 	return code
 }
 
-// gitRoots opens the repository and resolves the revisions: two trees,
-// returned to compare as such, or two files, kept for source to return.
+// gitRoots resolves two trees (including a work tree), or two revision
+// files, kept for source to return.
 func (c *child) gitRoots() ([2]source.Root, error) {
 	repo, err := git.Open(c.repo)
 	if err != nil {
 		return [2]source.Root{}, err
 	}
+	var roots [2]source.Root
+	work := -1
 	for i, side := range []input{c.in.left, c.in.right} {
+		if side.kind == inputWorkTree {
+			work = i
+			continue
+		}
 		target, err := repo.Resolve(side.path)
+		if err != nil && c.in.hasWorkTree() && (side.path == "HEAD" || side.path == "@") {
+			// Before the first commit, compare an empty tree with the
+			// work tree, as git status lists every file as new.
+			if unborn, uerr := repo.Unborn(); uerr == nil && unborn {
+				c.gitFiles[i] = git.NewTargetRoot(repo.Repo, git.Target{Mode: git.ModeTree}, "(no commits)")
+				roots[i] = c.gitFiles[i]
+				continue
+			}
+		}
 		if err != nil {
 			return [2]source.Root{}, err
 		}
+		if c.in.hasWorkTree() && (!target.IsTree() || target.Path != "") {
+			return [2]source.Root{}, fmt.Errorf("unable to compare %s with the work tree: the revision must name a full tree", side.path)
+		}
 		c.gitFiles[i] = git.NewTargetRoot(repo.Repo, target, side.path)
+		roots[i] = c.gitFiles[i]
+	}
+	if work >= 0 {
+		tree, err := repo.OpenWorkTree(c.ignore)
+		if err != nil {
+			return [2]source.Root{}, err
+		}
+		roots[work] = tree
+		return roots, nil
 	}
 	l, r := c.gitFiles[0], c.gitFiles[1]
 	switch {
@@ -254,7 +295,7 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 	case l.IsFile():
 		return [2]source.Root{}, nil
 	}
-	return [2]source.Root{l, r}, nil
+	return roots, nil
 }
 
 // source returns side i (0 left, 1 right) for the diff view. A stream is read

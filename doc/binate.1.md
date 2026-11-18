@@ -10,14 +10,14 @@ Inspect file and directory differences in a read-only terminal view.
 
 ```
 binate [options] left right
-binate -g [-C directory] [options] left right
-agitate [-C directory] [options] left right
+binate -g [-C directory] [options] [left [right]]
+agitate [-C directory] [options] [left [right]]
 ```
 
 **binate** shows two directory trees, or two files, side by side, and marks
 where they differ. With **-g**, or run as **agitate**, a symlink to it, they are
-trees or files of two git revisions. It never changes anything itself: the only
-way a file changes is through your own editor, which **e** opens. Scanning,
+trees or files of two git revisions, or a revision and the work tree. **binate**
+never changes files itself. **e** opens eligible files in your editor. Scanning,
 comparing and drawing run in a child process. Where available, Landlock
 restricts it from writing and running programs, within the kernel's limits.
 
@@ -44,7 +44,10 @@ See [**binate-manual**(7)](manual.md) for the full reference.
   contents. Not with **-g**.
 - **-g**, **--git**: Compare *left* and *right* as revisions of the git
   repository of the current directory, or of **-C**, such as **main**,
-  **HEAD~2** or **v1.0:src**.
+  **HEAD~2** or **v1.0:src**. Use **.** opposite a full-tree revision to compare
+  it with the work tree at the repository's top, including untracked files
+  allowed by Git's ignore rules. With **-g** or **agitate**, a missing *right*
+  defaults to **.**, and a missing *left* defaults to **HEAD**.
 - **-C**, **--directory** *directory*: With **-g**, find the repository from
   *directory*, as **git -C** does.
 - **-h**, **--help**: Show the options and exit.

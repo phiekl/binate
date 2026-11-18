@@ -10,14 +10,14 @@ Full reference for the binate file and directory difference viewer.
 
 ```
 binate [options] left right
-binate -g [-C directory] [options] left right
-agitate [-C directory] [options] left right
+binate -g [-C directory] [options] [left [right]]
+agitate [-C directory] [options] [left [right]]
 ```
 
 **binate** shows two directory trees, or two files, side by side, and marks
 where they differ. With **-g**, or run as **agitate**, a symlink to it, they are
-trees or files of two git revisions. It never changes anything itself: the only
-way a file changes is through your own editor, which **e** opens.
+trees or files of two git revisions, or a revision and the work tree. **binate**
+never changes files itself. **e** opens eligible files in your editor.
 
 It is Linux-only and needs a terminal: if stdin or stdout is not a terminal, it
 exits with an error before drawing anything. The man page,
@@ -93,13 +93,15 @@ next arguments are *left* and *right* even if they start with a dash.
   path. Repeatable.
 
 - **-q**, **--quick**: In the tree view, compare files by size and modification
-  time instead of by contents. Not with **-g**, which compares files without
-  reading them.
+  time instead of by contents. Not with **-g**, since revisions do not record
+  modification times.
 
 - **-g**, **--git**: Take *left* and *right* as revisions of the git repository
   of the current directory, or of **-C**, such as **main**, **HEAD~2** or
   **v1.0:src**, and compare their trees, or files. Regular files are read only
-  within the repository. See [Git](#git).
+  within the repository. Give **.** for the work tree on one side. A missing
+  *right* defaults to **.**, and a missing *left* defaults to **HEAD**. See
+  [Git](#git).
 
 - **-C**, **--directory** *directory*: With **-g**, find the repository from
   *directory* instead of the current directory, as **git -C** does: revisions'
@@ -118,8 +120,8 @@ next arguments are *left* and *right* even if they start with a dash.
 ## Git
 
 With **-g**, or when run as **agitate**, by a symlink of that name, *left* and
-*right* are revisions of the repository of the current directory, or of
-**-C**'s, and **binate** reads regular files only within the repository's top.
+*right* name revisions or the work tree of the repository found from the
+current directory or **-C**.
 Before applying the sandbox, it resolves symlinks along the starting directory,
 which may read links outside the repository. It then finds the top as git finds
 it, by names without reading regular files on the way: the
@@ -194,6 +196,54 @@ differences are shown, so that two revisions of a clone without blobs can be
 compared. Files in a revision can't be edited.
 
 An error resolving a revision is written before the screen is taken.
+
+### Work tree
+
+Give **.** on either side, as in **binate -g HEAD .** or **agitate . HEAD**.
+With a single revision, as in **binate -g main**, the work tree is on the right.
+With no arguments, **binate -g** and **agitate** compare **HEAD** with the work
+tree. Before the first commit, **HEAD** or **@** opposite the work tree is an
+empty tree named **(no commits)**, as **git status** then lists every file as
+new. The comparison starts at the repository's top, even when run from one of
+its subdirectories. The revision must name a full tree. The repository needs a
+discovered work tree.
+
+The work-tree side shows tracked paths that exist on disk and untracked paths
+allowed by Git's ignore rules. Rules are read from each directory's
+**.gitignore**, the common Git directory's **info/exclude**, and the user's
+global ignore file, in decreasing precedence. A deeper **.gitignore** takes
+precedence over an ancestor's. With **core.ignoreCase** set, patterns match
+ASCII letters of either case, as in Git. The global path comes from
+**core.excludesFile** set directly in the user's Git configuration, or from
+**$XDG_CONFIG_HOME/git/ignore** by default, with **~/.config** as the fallback
+for **XDG_CONFIG_HOME**. A **core.excludesFile** in the repository's own
+configuration takes precedence. The repository's file is read only within the
+top, and one outside it gives no global rules. A symlink in place of a
+**.gitignore** is ignored, while an excludes file is opened through symlinks
+that stay within the top, as Git does. As in Git, an ignore file that can't be
+read adds no rules. A tracked file in an ignored directory remains visible. Git
+metadata and untracked directories with no visible files are left out.
+
+The index determines which paths are tracked. Versions 2 through 4 in SHA-1 and
+SHA-256 repositories are supported. A split or sparse index is reported as an
+error. As in Git, a skip-worktree entry is compared as the index records it, and
+a skip-worktree **.gitignore** missing from disk is read from the index. In a
+sparse checkout, a skip-worktree file present on disk is read from disk. A
+rescan reloads the index and the repository's ignore files as part of the new
+scan, which shows an error reading them at the top. The user's global file
+outside the repository is read when the comparison starts.
+
+Files are compared by their on-disk bytes, without Git attribute filters. A
+file's executable bit is compared using the modes Git records. With
+**core.fileMode** set to false, a file's executable bit comes from the index as
+in Git, and an untracked file is not executable. Symlinks are compared by their
+targets. A checked-out submodule is compared by its HEAD when that can be read
+within the repository's top. The directory of an uninitialized submodule stands
+for its commit in the index. A submodule with no commits stands for its commit
+in the index, as in Git. An untracked directory whose **.git** is a valid git
+directory, a symlink to one or a file naming one is shown as a submodule at its
+HEAD, with **(no commits)** if it has none, as Git shows it as one entry. Both
+sides of the comparison are read-only.
 
 ### Commits
 
@@ -344,10 +394,11 @@ and block device), **sock** (socket), **sub** (a git submodule, see [Git](#git))
 and **?** (one that could not be read), in the colours **ls** gives them by
 default, an executable file in green. A directory has a **▸** or **▾** before
 its name and a **/** after it. A symlink shows its target after **->**, and a
-submodule the first 12 digits of its commit after **@**. The mark (see
-[Marks](#marks)) is shown once per row, in a column of its own between the two
-boxes. The bottom border of each box shows the selected row and the number of
-rows shown, as **3/12**.
+submodule the first 12 digits of its commit after **@**, or **(no commits)** for
+a repository in the work tree with none yet. The mark (see [Marks](#marks)) is
+shown once per row, in a column of its own between the two boxes. The bottom
+border of each box shows the selected row and the number of rows shown, as
+**3/12**.
 
 Once the initial scan finishes, all directories expand, including one-sided
 ones. Identical entries start hidden. Directories with differences below them
@@ -460,9 +511,11 @@ per row:
   modification, status change and access, and of creation, in local time to the
   second, or **—** where the file system doesn't record one.
 
-A side in a git revision shows only the path, type, size and mode, which is all
-git records, and then, if the revision names a commit, the commit that last
-changed the entry, found in the background:
+A work tree compared with a git revision shows the path, type, size, mode and
+mtime, leaving out the owner, links, inode and other times, which Git neither
+records nor compares. A side in a git revision shows only the path, type, size
+and mode, which is all git records, and then, if the revision names a commit,
+the commit that last changed the entry, found in the background:
 
 - **commit**: its object name.
 - **author**: who made the change, by name and email, as **git show** shows it.
@@ -485,11 +538,12 @@ fields are marked only when chosen for comparison (see **--compare** and
 settings, or with two files, **--compare**. The mtime is compared to the
 nanosecond, as in the tree: two that differ within the same second show as much
 of the fraction as tells them apart, as **14:10:00.4** and **14:10:00.5**. The
-more recent one is marked **(newer)**. The inode and the other times differ
-between almost any two trees, and are not marked. A side with no entry says
-**missing**, and one that can't be read says why. An entry the scan could not
-read fully starts with an **error** row, as **error │ permission denied**, and
-the other side's rows move down with it, so the fields stay side by side.
+more recent one is marked **(newer)**, unless the other side is in a git
+revision, which records no mtime. The inode and the other times differ between
+almost any two trees, and are not marked. A side with no entry says **missing**,
+and one that can't be read says why. An entry the scan could not read fully
+starts with an **error** row, as **error │ permission denied**, and the other
+side's rows move down with it, so the fields stay side by side.
 
 The panels are read in the background, without following symlinks, so a slow
 file system doesn't hold the screen. They show **…** meanwhile. A box keeps at
@@ -1040,15 +1094,17 @@ The child restricts itself with Landlock before it reads any input:
   signalled, nor an abstract unix socket outside it reached, as far as the
   kernel's Landlock ABI restricts each (see below).
 - **/etc/passwd** and **/etc/group**, which name the owners in the panels, are
-  read before the restriction, and not again; with **-g**, which shows no
-  owners, not at all.
+  read before the restriction when a disk side is shown. A work-tree
+  comparison also reads the user's global Git ignore configuration and rules
+  before restricting access.
 - With **-g**, before applying the sandbox, the child resolves symlinks along
   the starting directory, possibly reading links outside the repository, then
   finds the repository's top by names without reading regular files. It
   restricts itself to reading beneath the top before reading repository files,
-  and then further, to its git directory, and its common and
-  objects directories, also beneath it, before reading its configuration, refs
-  and objects. Both layers deny the rest, as above.
+  and then to its Git directory, common directory and object directories
+  before reading its configuration, refs and objects. The second layer
+  includes the top when comparing a work tree. Work-tree paths are opened
+  relative to that directory without following symlinks.
 
 The editor is run by the parent, and is not restricted (see
 [Editing](#editing)).

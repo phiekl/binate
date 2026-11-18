@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"pxy.se/go/binate/internal/files"
 )
 
 // Stat is an entry's metadata, read without following a symlink.
@@ -40,17 +42,25 @@ const mask = unix.STATX_BASIC_STATS | unix.STATX_BTIME
 
 // Read reads the entry at path, without following a symlink.
 func Read(path string) (*Stat, error) {
+	st, err := ReadAt(unix.AT_FDCWD, path)
+	if err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// ReadAt reads the entry at path relative to an open directory. If reading
+// a symlink's target fails, it returns the symlink's metadata and the error.
+func ReadAt(dir int, path string) (*Stat, error) {
 	var stx unix.Statx_t
-	if err := unix.Statx(unix.AT_FDCWD, path, unix.AT_SYMLINK_NOFOLLOW, mask, &stx); err != nil {
+	if err := unix.Statx(dir, path, unix.AT_SYMLINK_NOFOLLOW, mask, &stx); err != nil {
 		return nil, &os.PathError{Op: "statx", Path: path, Err: err}
 	}
 	st := fromStatx(&stx)
 	if st.Mode&unix.S_IFMT == unix.S_IFLNK {
-		target, err := os.Readlink(path)
-		if err != nil {
-			return nil, err
-		}
+		target, err := files.ReadlinkAt(dir, path)
 		st.Target = target
+		return st, err
 	}
 	return st, nil
 }

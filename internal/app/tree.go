@@ -142,6 +142,18 @@ func (t *TreeScreen) Scan() *scan.Scan {
 
 // Rescan cancels a running scan and starts another.
 func (t *TreeScreen) Rescan() {
+	roots := t.roots
+	for i, root := range roots {
+		if r, ok := root.(source.Reloadable); ok {
+			next, err := r.Reload()
+			if err != nil {
+				t.app.ShowError("Unable to rescan", errorTexts(err)...)
+				return
+			}
+			roots[i] = next
+		}
+	}
+	t.roots = roots
 	t.statGen++
 	// The new scan reads everything again.
 	t.rechecks = nil
@@ -241,6 +253,7 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 		}
 		sides[i].Path = panelPath(t.roots[i], n.Path())
 		sides[i].InRevision = !onDisk(t.roots[i])
+		sides[i].BesideRevision = onDisk(t.roots[i]) && !onDisk(t.roots[1-i])
 		sides[i].RepoPath = repoPath(t.roots[i], n.Path())
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 	}

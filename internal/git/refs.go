@@ -65,11 +65,16 @@ func isPseudoref(name string) bool {
 // refDir returns the directory holding the ref name, as a file: a work
 // tree's own refs are in its git directory, the rest in the common one.
 func (r *Repository) refDir(name string) string {
-	if isPseudoref(name) || strings.HasPrefix(name, "refs/bisect/") ||
-		strings.HasPrefix(name, "refs/worktree/") || strings.HasPrefix(name, "refs/rewritten/") {
+	if worktreeRef(name) {
 		return r.loc.GitDir
 	}
 	return r.loc.CommonDir
+}
+
+// worktreeRef reports whether the ref name is a work tree's own.
+func worktreeRef(name string) bool {
+	return isPseudoref(name) || strings.HasPrefix(name, "refs/bisect/") ||
+		strings.HasPrefix(name, "refs/worktree/") || strings.HasPrefix(name, "refs/rewritten/")
 }
 
 // maxSymref is how many symrefs are followed, as git follows them.
@@ -89,6 +94,20 @@ func (r *Repository) resolveRef(name string) (ID, error) {
 		name = target
 	}
 	return ID{}, fmt.Errorf("symrefs nested more than %d deep", maxSymref)
+}
+
+// Unborn reports whether HEAD names a branch with no commits yet, as in a
+// repository just made.
+func (r *Repository) Unborn() (bool, error) {
+	_, target, err := r.readRef("HEAD")
+	if err != nil || target == "" {
+		return false, err
+	}
+	_, err = r.resolveRef(target)
+	if errors.Is(err, errNoRef) {
+		return true, nil
+	}
+	return false, err
 }
 
 // readRef reads the ref name: its object, or the ref it points to as a

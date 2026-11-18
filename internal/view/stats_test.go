@@ -425,6 +425,37 @@ func TestPanelChange(t *testing.T) {
 	}
 }
 
+func TestPanelBesideRevision(t *testing.T) {
+	file := &stat.Stat{Mode: unix.S_IFREG | 0o644, Size: 3, Nlink: 1, Ino: 7, Mtime: time.Unix(1, 0)}
+	for _, beside := range []bool{false, true} {
+		sides := [2]StatSide{
+			{Stat: &stat.Stat{Mode: unix.S_IFREG | 0o644, Size: 3}, Entries: -1, Path: "HEAD:f", InRevision: true},
+			{Stat: file, Entries: -1, Path: "/repo/f", BesideRevision: beside},
+		}
+		scr := term.NewScreen(100, 15)
+		p := Layout(100)
+		drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", term.Style{}, colors.Default())
+		var labels []string
+		// The label before the right panel's bar, the row's last.
+		for _, row := range panelRowsText(scr) {
+			if f := strings.Fields(row[:max(strings.LastIndex(row, "│"), 0)]); len(f) > 0 {
+				labels = append(labels, f[len(f)-1])
+			}
+		}
+		want := "path type size mode owner links inode mtime ctime atime btime"
+		if beside {
+			want = "path type size mode mtime"
+		}
+		if got := strings.Join(labels, " "); got != want {
+			t.Errorf("beside revision %v: labels %q, want %q", beside, got, want)
+		}
+		// The revision has no mtime for it to be newer than.
+		if text := strings.Join(panelRowsText(scr), "\n"); strings.Contains(text, "newer") {
+			t.Errorf("beside revision %v: mtime marked newer:\n%s", beside, text)
+		}
+	}
+}
+
 func TestPanelLabelsOnDisk(t *testing.T) {
 	sides := [2]StatSide{{Stat: &stat.Stat{Mode: unix.S_IFREG}, Entries: -1, Path: "/f"}, {Missing: true, Entries: -1}}
 	scr := term.NewScreen(80, 15)
@@ -550,5 +581,12 @@ func TestPanelSubmodule(t *testing.T) {
 	}
 	if m := scr.Cell(p.Mark, 2).R; m != '|' {
 		t.Errorf("commits differing marked %q", m)
+	}
+	// A repository in the work tree with no commits has none to show.
+	sides[1].Stat = sub("")
+	scr = term.NewScreen(80, 15)
+	drawPanels(scr, p, 1, 11, sides, scan.DefaultAttrs, "", term.Style{}, colors.Default())
+	if got := panelRowsText(scr); !strings.Contains(got[0], "submodule (no commits)") {
+		t.Errorf("row 0: %q, want submodule (no commits)", got[0])
 	}
 }

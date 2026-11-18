@@ -238,7 +238,7 @@ func FuzzParseConfig(f *testing.F) {
 		if err != nil {
 			return
 		}
-		for name, values := range c {
+		for name, values := range c.values {
 			if len(values) == 0 || !strings.Contains(name, ".") {
 				t.Errorf("%q: %q", name, values)
 			}
@@ -631,5 +631,108 @@ func TestResolveUppercaseHashes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestConfigBool(t *testing.T) {
+	c, err := parseConfig("[core]\n\talone\n\tempty =\n\tquoted = \"\"\n\tyes = Yes\n\tzero = 0\n\ttwo = 2\n\tbad = maybe\n" +
+		"\talonethenfalse\n\talonethenfalse = off\n\temptythenalone =\n\temptythenalone\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := parseConfig("[core]\n\tempty\n\tyes =\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged := newConfig()
+	merged.merge(c)
+	merged.merge(later)
+	for _, tc := range []struct {
+		c    config
+		name string
+		want bool
+	}{
+		{c, "core.alone", true},
+		{c, "core.empty", false},
+		{c, "core.quoted", false},
+		{c, "core.yes", true},
+		{c, "core.zero", false},
+		{c, "core.two", true},
+		{c, "core.unset", true},
+		{c, "core.alonethenfalse", false},
+		{c, "core.emptythenalone", true},
+		{merged, "core.empty", true},
+		{merged, "core.yes", false},
+		{merged, "core.alone", true},
+	} {
+		if got, err := tc.c.bool(tc.name, true); err != nil || got != tc.want {
+			t.Errorf("%s = %v, %v, want %v", tc.name, got, err, tc.want)
+		}
+	}
+	if _, err := c.bool("core.bad", false); err == nil {
+		t.Error("read maybe as a boolean")
+	}
+}
+
+// TestDiscoverThroughSymlinkedPWD checks that a work tree started in, as
+// "." with $PWD naming it through a symlinked parent, as a shell keeps it,
+// is found with symlinks resolved, and its git directory within it.
+func TestDiscoverThroughSymlinkedPWD(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"sub/a": "one\n"})
+	r.commit()
+	link := filepath.Join(t.TempDir(), "p")
+	if err := os.Symlink(filepath.Dir(r.dir), link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ from, prefix string }{
+		{filepath.Join(link, filepath.Base(r.dir)), ""},
+		{filepath.Join(link, filepath.Base(r.dir), "sub"), "sub"},
+	} {
+		t.Chdir(tc.from)
+		t.Setenv("PWD", tc.from)
+		if wd, err := os.Getwd(); err != nil || wd != tc.from {
+			t.Fatalf("working directory %q, %v", wd, err)
+		}
+		loc, err := discover(".", noEnv)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.from, err)
+		}
+		if loc.WorkTree != r.dir || loc.Prefix != tc.prefix {
+			t.Errorf("%s: %+v", tc.from, loc)
+		}
+		rp, err := Open(loc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree, err := rp.OpenWorkTree(GlobalIgnore{})
+		if err != nil {
+			t.Errorf("%s: %v", tc.from, err)
+		} else {
+			_ = tree.Close()
+		}
+		rp.Close()
+	}
+}
+
+// TestFindTopDotDotAfterSymlink checks that .. after a symlink leads above
+// its target, as Git and the kernel take it, not back above the link.
+func TestFindTopDotDotAfterSymlink(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"sub/a": "one\n"})
+	r.commit()
+	other := t.TempDir()
+	if err := os.Symlink(filepath.Join(r.dir, "sub"), filepath.Join(other, "link")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(other)
+	t.Setenv("PWD", other)
+	for _, dir := range []string{filepath.Join(other, "link") + "/..", "link/..", "./link/../."} {
+		if top, err := FindTop(dir, noEnv); err != nil || top != r.dir {
+			t.Errorf("FindTop(%q) = %q, %v, want %q", dir, top, err, r.dir)
+		}
+		if loc, err := discover(dir, noEnv); err != nil || loc.WorkTree != r.dir || loc.Prefix != "" {
+			t.Errorf("discover(%q) = %+v, %v", dir, loc, err)
+		}
 	}
 }

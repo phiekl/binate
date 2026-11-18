@@ -46,11 +46,13 @@ type flag struct {
 
 // Set holds flags and positional arguments.
 type Set struct {
-	name      string
-	flags     []*flag
-	args      []*flag
-	help      bool
-	denyEmpty []string
+	name           string
+	flags          []*flag
+	args           []*flag
+	help           bool
+	denyEmpty      []string
+	argDefaults    []string
+	useArgDefaults func() bool
 }
 
 // NewSet returns a set named name, with -h/--help registered.
@@ -104,9 +106,8 @@ func (s *Set) add(f *flag) {
 }
 
 // Arg registers a positional argument, after those registered before it.
-// Arguments are required: Parse rejects a missing one, unless none are
-// given at all, which is ErrUsage. Flags may come before, between or after
-// arguments.
+// Arguments without defaults are required. Flags may come before,
+// between or after arguments.
 func (s *Set) Arg(p *string, name, usage string) {
 	if s.lookupArg(name) != nil {
 		panic(fmt.Sprintf("args: argument %q redefined", name))
@@ -116,6 +117,22 @@ func (s *Set) Arg(p *string, name, usage string) {
 	}
 	*p = ""
 	s.args = append(s.args, &flag{long: name, usage: usage, kind: kindString, str: p, positional: true})
+}
+
+// ArgDefaults makes the last len(values) arguments optional when enabled
+// returns true. Parse checks enabled after parsing flags.
+func (s *Set) ArgDefaults(enabled func() bool, values ...string) {
+	if len(values) > len(s.args) {
+		panic("args: more defaults than arguments")
+	}
+	s.useArgDefaults, s.argDefaults = enabled, slices.Clone(values)
+}
+
+func (s *Set) defaults() []string {
+	if s.useArgDefaults != nil && s.useArgDefaults() {
+		return s.argDefaults
+	}
+	return nil
 }
 
 func (s *Set) lookupArg(name string) *flag {
@@ -205,19 +222,24 @@ func (s *Set) Parse(argv []string) error {
 	if s.help {
 		return ErrHelp
 	}
+	defaults := s.defaults()
+	required := len(s.args) - len(defaults)
 	switch {
-	case len(positional) == 0 && len(s.args) > 0:
+	case len(positional) == 0 && required > 0:
 		return ErrUsage
 	case len(s.args) == 0 && len(positional) > 0:
 		return errors.New("no positional arguments expected")
 	case len(positional) > len(s.args):
 		last := s.args[len(s.args)-1].long
 		return fmt.Errorf("unexpected argument after %s: %s", last, positional[len(s.args)])
-	case len(positional) < len(s.args):
+	case len(positional) < required:
 		return fmt.Errorf("missing argument: %s", s.args[len(positional)].long)
 	}
 	for i, value := range positional {
 		s.args[i].set(value)
+	}
+	for i := len(positional); i < len(s.args); i++ {
+		*s.args[i].str = defaults[i-required]
 	}
 	return s.validate()
 }
@@ -344,9 +366,16 @@ func (s *Set) validate() error {
 func (s *Set) Help(columns int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "usage: %s [option]...", s.name)
-	for _, f := range s.args {
-		fmt.Fprintf(&b, " %s", f.long)
+	defaults := s.defaults()
+	required := len(s.args) - len(defaults)
+	for i, f := range s.args {
+		b.WriteByte(' ')
+		if i >= required {
+			b.WriteByte('[')
+		}
+		b.WriteString(f.long)
 	}
+	b.WriteString(strings.Repeat("]", len(defaults)))
 	b.WriteByte('\n')
 	options := slices.DeleteFunc(slices.Clone(s.flags), func(f *flag) bool { return f.hidden })
 	slices.SortFunc(options, func(a, b *flag) int {
@@ -377,7 +406,9 @@ func (s *Set) Help(columns int) string {
 			b.WriteByte('\n')
 		}
 		usage := f.usage
-		if f.kind == kindString && f.def != "" {
+		if f.positional && i >= required {
+			usage += fmt.Sprintf(" (default %q)", defaults[i-required])
+		} else if f.kind == kindString && f.def != "" {
 			usage += fmt.Sprintf(" (default %q)", f.def)
 		}
 		if !f.global && columns > len(indent) {

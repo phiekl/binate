@@ -138,7 +138,10 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"--bogus", dir, dir}, "unknown flag: --bogus"},
 		{[]string{"-g", "-q", "HEAD~", "HEAD"}, "--quick with --git"},
 		{[]string{"agitate", "-q", "HEAD~", "HEAD"}, "--quick with --git"},
-		{[]string{"agitate"}, "usage: agitate"},
+		{[]string{"agitate"}, "stdin and stdout must be a terminal"},
+		{[]string{"-g"}, "stdin and stdout must be a terminal"},
+		{[]string{"-g", ""}, "flag/argument is empty: left"},
+		{[]string{"-g", "."}, "a work tree must be compared with a revision"},
 	} {
 		var cmd *exec.Cmd
 		if len(tt.args) > 0 && tt.args[0] == "agitate" {
@@ -261,7 +264,12 @@ func TestGitName(t *testing.T) {
 	// --quick, refused with it.
 	s, _, _ := parseOptions("agitate", []string{"--help"})
 	help := s.Help(80)
-	for _, want := range []string{"usage: agitate ", "left git revision\n", "right git revision\n", "-C, --directory   find the repository"} {
+	for _, want := range []string{
+		"usage: agitate [option]... [left [right]]",
+		"left git revision or . for the work tree (default \"HEAD\")",
+		"right git revision or . for the work tree (default \".\")",
+		"-C, --directory   find the repository",
+	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("agitate's help without %q:\n%s", want, help)
 		}
@@ -1119,7 +1127,13 @@ func TestInputsEncode(t *testing.T) {
 	if got, err := decodeInputs("HEAD~", "main:dir", git.encode()); err != nil || got != git || git.encode() != "gg" {
 		t.Errorf("git: decoded %+v, %v, want %+v", got, err, git)
 	}
-	for _, code := range []string{"", "d", "ddd", "Dd", "FF", "xd"} {
+	for _, in := range []inputs{gitInputs("HEAD", "."), gitInputs(".", "HEAD")} {
+		got, err := decodeInputs(in.left.path, in.right.path, in.encode())
+		if err != nil || got != in || !got.hasWorkTree() {
+			t.Errorf("work tree: decoded %+v, %v, want %+v", got, err, in)
+		}
+	}
+	for _, code := range []string{"", "d", "ddd", "Dd", "FF", "xd", "gW"} {
 		if _, err := decodeInputs("a", "b", code); err == nil {
 			t.Errorf("decodeInputs(%q) succeeded", code)
 		}
@@ -1417,6 +1431,124 @@ func TestGitNameSession(t *testing.T) {
 	}
 }
 
+func TestGitWorkTreeDefaults(t *testing.T) {
+	repo := gitRepo(t)
+	sub := filepath.Join(repo, "dir")
+	home := t.TempDir()
+	// The work tree as a shell's $PWD names it, through a symlinked parent.
+	link := filepath.Join(home, "p")
+	if err := os.Symlink(filepath.Dir(repo), link); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(link, filepath.Base(repo))
+	for _, tc := range []struct {
+		name string
+		cmd  *exec.Cmd
+		dir  string
+		want string
+	}{
+		{"one revision", binate(t, "HEAD~", "-g"), sub, "[1 identical] [1 left] [1 right] [1 contents]"},
+		{"no revision", binate(t, "-g", "-C", sub), home, "[3 identical]"},
+		{"agitate", agitate(t, sub), sub, "[3 identical]"},
+		{"symlinked parent", agitate(t, linked), linked, "[3 identical]"},
+		{"symlinked parent below the top", agitate(t, filepath.Join(linked, "dir")), filepath.Join(linked, "dir"), "[3 identical]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cmd.Dir = tc.dir
+			tc.cmd.Env = append(tc.cmd.Env, "HOME="+home, "XDG_CONFIG_HOME="+home, "GIT_CONFIG_GLOBAL=/dev/null", "PWD="+tc.dir)
+			pt := ptytest.Open(t, 100, 30)
+			pt.Start(tc.cmd)
+			offset := pt.Wait(0, enterScreen)
+			scr := pt.WaitScreen(100, 30, offset, tc.want)
+			if !strings.HasPrefix(scr, " (git) "+repo) {
+				t.Errorf("work-tree root missing:\n%s", scr)
+			}
+			pt.Write("\x03x")
+			if code := pt.Exit(); code != 0 {
+				t.Errorf("exit status %d", code)
+			}
+		})
+	}
+}
+
+func TestGitWorkTreeSession(t *testing.T) {
+	repo := gitRepo(t)
+	user := t.TempDir()
+	global := filepath.Join(user, "ignore")
+	config := filepath.Join(user, "config")
+	write := func(name, text string) {
+		t.Helper()
+		if err := os.WriteFile(name, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(global, "global-only\n")
+	write(config, "[core]\nexcludesFile = "+global+"\n")
+	write(filepath.Join(repo, ".git", "info", "exclude"), "repo-only\n")
+	ignore := filepath.Join(repo, ".gitignore")
+	const patterns = ".gitignore\nignored\nsame\n"
+	write(ignore, patterns)
+	for _, name := range []string{"global-only", "repo-only", "ignored", "local-new"} {
+		write(filepath.Join(repo, name), "untracked\n")
+	}
+	write(filepath.Join(repo, "dir", "changed"), "staged\n")
+	stage := exec.Command("git", "add", "dir/changed")
+	stage.Dir = repo
+	if out, err := stage.CombinedOutput(); err != nil {
+		t.Fatalf("staging file: %v\n%s", err, out)
+	}
+	write(filepath.Join(repo, "dir", "changed"), "on disk\n")
+	if err := os.Chmod(filepath.Join(repo, "same"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(repo, "new")); err != nil {
+		t.Fatal(err)
+	}
+
+	sub := filepath.Join(repo, "dir")
+	for _, tc := range []struct {
+		name string
+		cmd  *exec.Cmd
+	}{
+		{"binate", binate(t, "-C", sub, "-g", "HEAD", ".")},
+		{"agitate", agitate(t, sub, ".", "HEAD")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cmd.Env = append(tc.cmd.Env, "HOME="+user, "XDG_CONFIG_HOME="+user, "GIT_CONFIG_GLOBAL="+config)
+			pt := ptytest.Open(t, 100, 30)
+			pt.Start(tc.cmd)
+			offset := pt.Wait(0, enterScreen)
+			screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
+			scr := screen("[1 identical] [1 left] [1 right] [1 contents]")
+			if !strings.Contains(scr, "local-new") || !strings.HasPrefix(scr, " (git) "+repo) {
+				t.Errorf("work-tree entries or root missing:\n%s", scr)
+			}
+			pt.Write("n")
+			screen("HEAD:dir/changed")
+			pt.Write("\r")
+			scr = screen("on disk")
+			if strings.Contains(scr, "staged") {
+				t.Errorf("diff shows staged contents:\n%s", scr)
+			}
+			if tc.name == "binate" {
+				pt.Write("\x1b")
+				screen("[1 identical] [1 left] [1 right] [1 contents]")
+				write(ignore, patterns+"local-new\n")
+				pt.Write("r")
+				scr = screen("[1 identical] [1 left] [1 contents]")
+				if strings.Contains(scr, "local-new") {
+					t.Errorf("rescanned tree still shows an ignored file:\n%s", scr)
+				}
+				write(ignore, patterns)
+			}
+			pt.Write("\x03x")
+			if code := pt.Exit(); code != 0 {
+				t.Errorf("exit status %d", code)
+			}
+		})
+	}
+}
+
 func TestGitErrors(t *testing.T) {
 	repo := gitRepo(t)
 	for _, tc := range []struct {
@@ -1427,6 +1559,10 @@ func TestGitErrors(t *testing.T) {
 		{repo, []string{"-g", "nope", "HEAD"}, "error: revision nope: unknown revision"},
 		{repo, []string{"-g", "HEAD@{1}", "HEAD"}, "not supported"},
 		{repo, []string{"-g", "HEAD", "HEAD:same"}, "unable to compare a tree with a file"},
+		{repo, []string{"-g", "HEAD:same", "."}, "the revision must name a full tree"},
+		{repo, []string{"-g", ".", "HEAD:dir"}, "the revision must name a full tree"},
+		{repo, []string{"-g", ".", "."}, "a work tree must be compared with a revision"},
+		{filepath.Join(repo, ".git"), []string{"-g", "HEAD", "."}, "the repository has no work tree"},
 		{t.TempDir(), []string{"-g", "HEAD", "HEAD"}, "not a git repository"},
 		{repo, []string{"-g", "-C", "missing", "HEAD", "HEAD"}, "missing: no such file or directory"},
 		{t.TempDir(), []string{"-g", "-C", t.TempDir(), "HEAD", "HEAD"}, "not a git repository"},
@@ -1439,6 +1575,48 @@ func TestGitErrors(t *testing.T) {
 		out := pt.Output()
 		if !strings.Contains(out, tc.want) || strings.Contains(out, enterScreen) {
 			t.Errorf("%q: output %q, want %q before any screen", tc.args, out, tc.want)
+		}
+	}
+}
+
+func TestGitNoCommits(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	gitInit := exec.Command("git", "init", "-q", "-b", "main")
+	gitInit.Dir = repo
+	gitInit.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	if out, err := gitInit.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "first"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	user := t.TempDir()
+	// Before the first commit, HEAD is an empty tree beside the work tree.
+	for _, args := range [][]string{{"-g"}, {"-g", "@", "."}} {
+		cmd := binate(t, args...)
+		cmd.Dir = repo
+		cmd.Env = append(cmd.Env, "HOME="+user, "XDG_CONFIG_HOME="+user, "GIT_CONFIG_GLOBAL=/dev/null")
+		pt := ptytest.Open(t, 100, 30)
+		pt.Start(cmd)
+		offset := pt.Wait(0, enterScreen)
+		scr := pt.WaitScreen(100, 30, offset, "[1 right]")
+		if !strings.Contains(scr, "(no commits)") || !strings.Contains(scr, "first") {
+			t.Errorf("%q: screen:\n%s", args, scr)
+		}
+		pt.Write("\x03x")
+		if code := pt.Exit(); code != 0 {
+			t.Errorf("%q: exit status %d", args, code)
+		}
+	}
+	// Without the work tree, or naming another revision, HEAD is unknown.
+	for _, args := range [][]string{{"-g", "HEAD", "HEAD"}, {"-g", "main", "."}} {
+		pt := startIn(t, repo, args...)
+		pt.Wait(0, "unknown revision")
+		if code := pt.Exit(); code != 2 {
+			t.Errorf("%q: exit status %d", args, code)
 		}
 	}
 }

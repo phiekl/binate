@@ -6,23 +6,68 @@ package git
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 // config is a git config file's variables, by their full lowercased name,
 // as "core.repositoryformatversion", or with a subsection, as
 // "remote.Origin.url": the section and key lowercased, the subsection as
-// written. Each has the values given, in order; a key alone, which git
-// reads as true, has the value "".
-type config map[string][]string
+// written. Each has the values given, in order; a key alone has the value
+// "".
+type config struct {
+	values map[string][]string
+	// bare holds the names whose last value is a key alone, which git
+	// reads as true, unlike an empty value.
+	bare map[string]bool
+}
+
+func newConfig() config {
+	return config{values: map[string][]string{}, bare: map[string]bool{}}
+}
+
+func (c config) add(name, value string, bare bool) {
+	c.values[name] = append(c.values[name], value)
+	c.bare[name] = bare
+}
 
 // get returns the last value of name, as git takes it.
 func (c config) get(name string) (string, bool) {
-	v := c[name]
+	v := c.values[name]
 	if len(v) == 0 {
 		return "", false
 	}
 	return v[len(v)-1], true
+}
+
+// merge appends the values of later, which take precedence.
+func (c config) merge(later config) {
+	for name, values := range later.values {
+		c.values[name] = append(c.values[name], values...)
+		c.bare[name] = later.bare[name]
+	}
+}
+
+// bool returns the boolean name, or def if unset, as git reads one: a key
+// alone is true, and an empty value false.
+func (c config) bool(name string, def bool) (bool, error) {
+	v, ok := c.get(name)
+	if !ok {
+		return def, nil
+	}
+	if c.bare[name] {
+		return true, nil
+	}
+	switch strings.ToLower(v) {
+	case "true", "yes", "on":
+		return true, nil
+	case "", "false", "no", "off":
+		return false, nil
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n != 0, nil
+	}
+	return false, fmt.Errorf("bad boolean config value %q for %s", v, name)
 }
 
 // configError is the error of a config file that isn't well formed.
@@ -41,7 +86,7 @@ func (e *configError) Error() string {
 // repository's format.
 func parseConfig(data string) (config, error) {
 	p := &configParser{data: data, line: 1}
-	c := config{}
+	c := newConfig()
 	section := ""
 	// A UTF-8 byte order mark is skipped, as git does.
 	p.data = strings.TrimPrefix(p.data, "\ufeff")
@@ -58,21 +103,20 @@ func parseConfig(data string) (config, error) {
 		case ch == '[':
 			s, err := p.section()
 			if err != nil {
-				return nil, err
+				return config{}, err
 			}
 			section = s
 		case isAlpha(ch):
 			if section == "" {
-				return nil, p.errorf("variable outside a section")
+				return config{}, p.errorf("variable outside a section")
 			}
-			key, value, err := p.variable()
+			key, value, bare, err := p.variable()
 			if err != nil {
-				return nil, err
+				return config{}, err
 			}
-			name := section + "." + key
-			c[name] = append(c[name], value)
+			c.add(section+"."+key, value, bare)
 		default:
-			return nil, p.errorf("unexpected %q", ch)
+			return config{}, p.errorf("unexpected %q", ch)
 		}
 	}
 }
@@ -177,8 +221,8 @@ func (p *configParser) subsection() (string, error) {
 	}
 }
 
-// variable parses "key = value", or "key" alone.
-func (p *configParser) variable() (string, string, error) {
+// variable parses "key = value", or "key" alone, and reports which.
+func (p *configParser) variable() (string, string, bool, error) {
 	start := p.pos
 	for !p.done() && (isAlnum(p.peek()) || p.peek() == '-') {
 		p.pos++
@@ -187,13 +231,13 @@ func (p *configParser) variable() (string, string, error) {
 	p.skipSpace()
 	if p.done() || p.peek() == '\n' || p.peek() == '#' || p.peek() == ';' {
 		p.skipLine()
-		return key, "", nil
+		return key, "", true, nil
 	}
 	if p.next() != '=' {
-		return "", "", p.errorf("invalid key %q", key)
+		return "", "", false, p.errorf("invalid key %q", key)
 	}
 	value, err := p.value()
-	return key, value, err
+	return key, value, false, err
 }
 
 // value parses a value up to the line's end: spaces around it and a

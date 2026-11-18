@@ -136,6 +136,10 @@ pseudo-terminals and skip without them.
   abbreviations included, as git rev-parse does. Fuzzing checks that parsing
   trees and loose objects' headers, deltas, pack entries' headers and indexes,
   and configuration and revisions never panics.
+- **git work tree:** path visibility checked against Git across index versions
+  and hash formats, nested and global ignore rules, tracked paths in ignored
+  directories, unsupported indexes, rescans, and symlink confinement. Terminal
+  tests open the diff on a file whose staged and on-disk contents differ.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,

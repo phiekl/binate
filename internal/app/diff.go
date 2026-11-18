@@ -60,10 +60,10 @@ func (src Source) editSide() EditSide {
 	switch {
 	case src.Missing:
 		es.Why = "missing"
-	case !onDisk(src.Root):
-		es.Why = notOnDisk
 	case src.Stream:
 		es.Why = notRegular
+	default:
+		es.Why = editRestriction(src.Root)
 	}
 	return es
 }
@@ -408,6 +408,7 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 		}
 		sides[i].Path = d.abs[i]
 		sides[i].InRevision = !onDisk(src.Root)
+		sides[i].BesideRevision = onDisk(src.Root) && srcs[1-i].Root != nil && !onDisk(srcs[1-i].Root)
 		if !src.Missing && !src.Stream {
 			sides[i].RepoPath = repoPath(src.Root, src.Rel)
 		}

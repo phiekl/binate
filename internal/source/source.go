@@ -43,6 +43,19 @@ type Root interface {
 	Open(rel string, follow bool) (File, error)
 }
 
+// DiskRoot is a root in the file system. Editable reports whether the
+// supervising process has a target for its regular files.
+type DiskRoot interface {
+	Root
+	Editable() bool
+}
+
+// Reloadable is a root whose listing uses metadata read for each scan.
+type Reloadable interface {
+	Root
+	Reload() (Root, error)
+}
+
 // ModeGitlink is the type, in Mode, of a git submodule: a commit of another
 // repository, named by Target, as git's S_IFGITLINK. No file has it.
 const ModeGitlink = 0o160000
@@ -143,6 +156,8 @@ type Changes interface {
 // Disk is a side in the file system, at the path given. Its errors carry
 // the path, as those of package os do.
 type Disk string
+
+func (d Disk) Editable() bool { return true }
 
 // Path returns the root joined with rel, or the root as given for "".
 func (d Disk) Path(rel string) string {

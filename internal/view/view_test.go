@@ -1210,4 +1210,10 @@ func TestTreeSubmodule(t *testing.T) {
 	if got := strings.SplitAfter(panes(scr), "\n")[0]; got != want {
 		t.Errorf("panes:\n%q\nwant:\n%q", got, want)
 	}
+	sub.R.Target = ""
+	scr = term.NewScreen(70, 8)
+	v.Draw(scr, m, TreeStatus{})
+	if got := strings.SplitAfter(panes(scr), "\n")[0]; !strings.Contains(got, "lib @ (no commits)") {
+		t.Errorf("panes:\n%q\nwant lib @ (no commits)", got)
+	}
 }

@@ -6,9 +6,10 @@ SPDX-License-Identifier: MIT
 
 # binate
 
-binate compares two directory trees side by side in the terminal, or two
-revisions of a git repository. It highlights differences in file contents and
-metadata, and opens text files in a diff view to inspect them line by line.
+binate compares two directory trees side by side in the terminal, two git
+revisions, or a revision and the work tree. It highlights differences in file
+contents and metadata, and opens text files in a diff view to inspect them line
+by line.
 
 ## Features
 
@@ -58,6 +59,11 @@ Use `-g`, or run binate as `agitate`, to compare two revisions or files within
 them. Data is read directly from the repository without running git or checking
 anything out. Files are compared by their object IDs without reading their
 contents. Two revisions of Linux compare in about 0.2 seconds.
+
+Give `.` on either side to compare a revision with the work tree on disk.
+The right side defaults to the work tree, and the left defaults to `HEAD`.
+Binate starts at the repository's top and includes tracked files and untracked
+files that Git's ignore rules allow.
 
 The panels on both sides show the commit that last changed each entry. From the
 action menu, `a`, you can show that commit's message or a summary of the files
@@ -116,6 +122,14 @@ Compare two branches of the git repository you're in:
 ```
 $ binate -g main feature
 ```
+
+Compare `HEAD` with the work tree, from anywhere in the repository:
+
+```
+$ binate -g
+```
+
+Give one revision to compare it with the work tree, as in `agitate main`.
 
 Compare the tag `v1.0` with `HEAD` in the repository at `~/src/project`:
 

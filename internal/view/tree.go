@@ -411,7 +411,7 @@ func (v *TreeView) drawSide(s *term.Screen, x, w, y int, m *tree.Model, row tree
 		tail = append(display.Plain(" -> "), display.Name(sd.Target)...)
 	case scan.Submodule:
 		// The commit, abbreviated: the panel has it whole.
-		tail = append(display.Plain(" @ "), display.Name(sd.Target[:min(len(sd.Target), 12)])...)
+		tail = append(display.Plain(" @ "), submoduleCommit(sd.Target, 12)...)
 	}
 
 	textW := w
