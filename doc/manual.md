@@ -272,7 +272,10 @@ repository's top. The directory of an uninitialized submodule stands for its
 commit in the index. A submodule with no commits stands for its commit in the
 index, as in Git. An untracked directory whose **.git** is a valid git
 directory, a symlink to one or a file naming one is shown as a submodule at its
-HEAD, with **(no commits)** if it has none, as Git shows it as one entry. Both
+HEAD, with **(no commits)** if it has none, as Git shows it as one entry. Its
+HEAD is read in its own object format, which may differ from the repository's,
+as for a SHA-256 repository in a SHA-1 work tree. Its refs may be stored as
+reftable, which the repository compared can't. Both
 sides of the comparison are read-only.
 
 ### Status

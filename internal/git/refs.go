@@ -117,7 +117,7 @@ func (r *Repository) readRef(name string) (ID, string, error) {
 	data, err := readSmall(path)
 	switch {
 	case err == nil:
-		return r.parseRef(name, data)
+		return parseRef(r.format, name, data)
 	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, files.ErrNotRegular):
 		// Not loose, as where a directory of refs is: maybe packed.
 	default:
@@ -138,8 +138,8 @@ func (r *Repository) readRef(name string) (ID, string, error) {
 
 // parseRef parses a loose ref's contents: "ref: target" of a symref, or an
 // object name followed by nothing but whitespace, or, as in FETCH_HEAD,
-// whatever follows a tab or space.
-func (r *Repository) parseRef(name, data string) (ID, string, error) {
+// whatever follows a tab or space, of format f.
+func parseRef(f *Format, name, data string) (ID, string, error) {
 	if target, ok := strings.CutPrefix(data, "ref:"); ok {
 		target = strings.TrimSpace(target)
 		if err := checkRefName(target); err != nil {
@@ -147,11 +147,11 @@ func (r *Repository) parseRef(name, data string) (ID, string, error) {
 		}
 		return ID{}, target, nil
 	}
-	hs := 2 * r.format.size
+	hs := 2 * f.size
 	if len(data) < hs || len(data) > hs && !strings.ContainsRune(" \t\r\n", rune(data[hs])) {
 		return ID{}, "", fmt.Errorf("ref %s: invalid contents", name)
 	}
-	id, err := ParseID(r.format, data[:hs])
+	id, err := ParseID(f, data[:hs])
 	if err != nil {
 		return ID{}, "", fmt.Errorf("ref %s: %w", name, err)
 	}

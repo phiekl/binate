@@ -865,11 +865,31 @@ func (w *WorkTree) submoduleHead(rel string) (ID, error) {
 	if err != nil {
 		return ID{}, err
 	}
+	// Its object format and ref storage may differ, as for an untracked
+	// repository.
+	format, reftable, err := w.gitDirFormat(common)
+	if err != nil {
+		return ID{}, err
+	}
 	name := "HEAD"
 	for range maxSymref + 1 {
 		dir := common
 		if worktreeRef(name) {
 			dir = gitDir
+		}
+		if reftable {
+			r, ok, err := w.reftableRef(dir, name, format)
+			switch {
+			case err != nil:
+				return ID{}, err
+			case !ok:
+				// With no commits, as below.
+				return w.index.gitlinks[rel], nil
+			case r.target == "":
+				return r.id, nil
+			}
+			name = r.target
+			continue
 		}
 		data, err := w.readGitFile(path.Join(dir, name), maxSmallFile)
 		if err != nil {
@@ -880,7 +900,7 @@ func (w *WorkTree) submoduleHead(rel string) (ID, error) {
 			if err != nil {
 				return ID{}, err
 			}
-			refs, err := parsePackedRefs(string(packed), w.repo.format)
+			refs, err := parsePackedRefs(string(packed), format)
 			if err != nil {
 				return ID{}, err
 			}
@@ -891,13 +911,76 @@ func (w *WorkTree) submoduleHead(rel string) (ID, error) {
 			// from its index entry, and an untracked one has none.
 			return w.index.gitlinks[rel], nil
 		}
-		id, next, err := w.repo.parseRef(name, string(data))
+		id, next, err := parseRef(format, name, string(data))
 		if err != nil || next == "" {
 			return id, err
 		}
 		name = next
 	}
 	return ID{}, fmt.Errorf("symrefs nested more than %d deep", maxSymref)
+}
+
+// gitDirFormat returns the object format of the repository whose common
+// git directory is common, from the top, as its config gives it, and
+// whether its refs are stored as reftable.
+func (w *WorkTree) gitDirFormat(common string) (*Format, bool, error) {
+	name := path.Join(common, "config")
+	data, err := w.readGitFile(name, maxSmallFile)
+	if err != nil {
+		return nil, false, err
+	}
+	if data == nil {
+		return SHA1, false, nil
+	}
+	f, reftable, err := parseFormat(string(data))
+	if err != nil {
+		return nil, false, fmt.Errorf("%s: %w", w.Path(name), err)
+	}
+	return f, reftable, nil
+}
+
+// maxReftableReads is how many times a reftable stack is read where a
+// table it lists is gone, as compaction replaces tables.
+const maxReftableReads = 3
+
+// reftableRef returns the ref name as the reftable stack of the git
+// directory dir records it, from the top, and whether it does: the newest
+// table that has it tells, and it is gone where deleted there.
+func (w *WorkTree) reftableRef(dir, name string, f *Format) (reftableRecord, bool, error) {
+	stack := path.Join(dir, "reftable")
+	for range maxReftableReads {
+		list, err := w.readGitFile(path.Join(stack, "tables.list"), maxSmallFile)
+		if err != nil {
+			return reftableRecord{}, false, err
+		}
+		tables := strings.Fields(string(list))
+		gone := false
+		for i := len(tables) - 1; i >= 0; i-- {
+			table := path.Join(stack, tables[i])
+			if checkName(tables[i]) != nil || strings.Contains(tables[i], "/") {
+				return reftableRecord{}, false, fmt.Errorf("%s: invalid table %q", w.Path(stack), tables[i])
+			}
+			data, err := w.readGitFile(table, maxPackedRefs)
+			if err != nil {
+				return reftableRecord{}, false, err
+			}
+			if data == nil {
+				gone = true
+				break
+			}
+			refs, err := parseReftable(data, f)
+			if err != nil {
+				return reftableRecord{}, false, fmt.Errorf("%s: %w", w.Path(table), err)
+			}
+			if r, ok := refs[name]; ok {
+				return r, !r.deleted, nil
+			}
+		}
+		if !gone {
+			return reftableRecord{}, false, nil
+		}
+	}
+	return reftableRecord{}, false, fmt.Errorf("%s: tables changing as read", w.Path(stack))
 }
 
 // beneath returns the path from the top of target, a path from the

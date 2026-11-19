@@ -416,6 +416,16 @@ func TestWorkTreeNestedRepository(t *testing.T) {
 	unborn := &testRepo{t: t, dir: filepath.Join(r.dir, "vendor", "unborn"), format: SHA1}
 	r.write(map[string]string{"vendor/unborn/data": "six"})
 	unborn.git("init", "-q")
+	// One of another object format, its refs loose or packed.
+	sha256 := &testRepo{t: t, dir: filepath.Join(r.dir, "vendor", "sha256"), format: SHA256}
+	r.write(map[string]string{"vendor/sha256/data": "eight"})
+	sha256.git("init", "-q", "--object-format=sha256")
+	sha256Head := sha256.commit()
+	packed := &testRepo{t: t, dir: filepath.Join(r.dir, "vendor", "sha256-packed"), format: SHA256}
+	r.write(map[string]string{"vendor/sha256-packed/data": "nine"})
+	packed.git("init", "-q", "--object-format=sha256")
+	packedHead := packed.commit()
+	packed.git("pack-refs", "--all")
 
 	var want []string
 	for _, name := range strings.Split(r.git("ls-files", "--cached", "--others", "--exclude-standard"), "\n") {
@@ -424,7 +434,7 @@ func TestWorkTreeNestedRepository(t *testing.T) {
 		}
 	}
 	slices.Sort(want)
-	if !slices.Contains(want, "vendor/foo") || !slices.Contains(want, "vendor/separate") || !slices.Contains(want, "vendor/shared") || !slices.Contains(want, "vendor/linked-refs") || !slices.Contains(want, "vendor/symlinked") || !slices.Contains(want, "vendor/absolute") || !slices.Contains(want, "vendor/unborn") || !slices.Contains(want, "vendor/no-space/file") || !slices.Contains(want, "vendor/empty/file") {
+	if !slices.Contains(want, "vendor/foo") || !slices.Contains(want, "vendor/separate") || !slices.Contains(want, "vendor/shared") || !slices.Contains(want, "vendor/linked-refs") || !slices.Contains(want, "vendor/symlinked") || !slices.Contains(want, "vendor/absolute") || !slices.Contains(want, "vendor/unborn") || !slices.Contains(want, "vendor/sha256") || !slices.Contains(want, "vendor/no-space/file") || !slices.Contains(want, "vendor/empty/file") {
 		t.Fatalf("git ls-files = %q", want)
 	}
 	// Before its parent is listed, a nested repository reads as one too.
@@ -443,7 +453,8 @@ func TestWorkTreeNestedRepository(t *testing.T) {
 	for rel, want := range map[string]ID{
 		"vendor/foo": head, "vendor/linked-refs": linkedRefsHead,
 		"vendor/symlinked": symlinkedHead, "vendor/unborn": {},
-		"vendor/absolute": absoluteHead,
+		"vendor/absolute": absoluteHead, "vendor/sha256": sha256Head,
+		"vendor/sha256-packed": packedHead,
 	} {
 		entry, err := tree.Entry(rel, false)
 		if err != nil || entry.Mode != source.ModeGitlink || entry.Target != want.String() {

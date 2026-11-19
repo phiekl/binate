@@ -447,15 +447,25 @@ func readFormat(path string) (*Format, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := parseConfig(data)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	f, reftable, err := parseFormat(data)
+	if err == nil && reftable {
+		err = errors.New("refs stored as reftable, which is not supported")
 	}
-	f, err := repositoryFormat(c)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return f, nil
+}
+
+// parseFormat returns the object format a repository's config data gives,
+// and whether its refs are stored as reftable, refusing a format it can't
+// read, as git does.
+func parseFormat(data string) (*Format, bool, error) {
+	c, err := parseConfig(data)
+	if err != nil {
+		return nil, false, err
+	}
+	return repositoryFormat(c)
 }
 
 // extensions are those git knows: whether they need format version 1,
@@ -471,22 +481,23 @@ var extensions = map[string]struct{ v1, changes bool }{
 	"refstorage":         {true, true},
 }
 
-// repositoryFormat returns the object format the config c gives, checking
-// the format version and extensions as git does: version 0 ignores
-// extensions but those of version 1; version 1 refuses unknown ones.
-func repositoryFormat(c config) (*Format, error) {
+// repositoryFormat returns the object format the config c gives, and
+// whether refs are stored as reftable, checking the format version and
+// extensions as git does: version 0 ignores extensions but those of
+// version 1; version 1 refuses unknown ones.
+func repositoryFormat(c config) (*Format, bool, error) {
 	version := 0
 	if v, ok := c.get("core.repositoryformatversion"); ok {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			return nil, fmt.Errorf("invalid core.repositoryformatversion %q", v)
+			return nil, false, fmt.Errorf("invalid core.repositoryformatversion %q", v)
 		}
 		version = n
 	}
 	if version > 1 {
-		return nil, fmt.Errorf("repository format version %d, which is not supported", version)
+		return nil, false, fmt.Errorf("repository format version %d, which is not supported", version)
 	}
-	format := SHA1
+	format, reftable := SHA1, false
 	for name, values := range c.values {
 		ext, ok := strings.CutPrefix(name, "extensions.")
 		if !ok || strings.Contains(ext, ".") {
@@ -496,24 +507,29 @@ func repositoryFormat(c config) (*Format, error) {
 		known, isKnown := extensions[ext]
 		switch {
 		case version == 0 && isKnown && known.v1:
-			return nil, fmt.Errorf("repository format version 0 with extension %s, which needs version 1", ext)
+			return nil, false, fmt.Errorf("repository format version 0 with extension %s, which needs version 1", ext)
 		case version == 0:
 			continue
 		case !isKnown:
-			return nil, fmt.Errorf("repository extension %s, which is not supported", ext)
+			return nil, false, fmt.Errorf("repository extension %s, which is not supported", ext)
 		}
 		switch ext {
 		case "objectformat":
 			f, err := ParseFormat(strings.ToLower(value))
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			format = f
 		case "refstorage":
-			if strings.ToLower(value) != "files" {
-				return nil, fmt.Errorf("refs stored as %s, which is not supported", value)
+			switch strings.ToLower(value) {
+			case "files":
+				reftable = false
+			case "reftable":
+				reftable = true
+			default:
+				return nil, false, fmt.Errorf("refs stored as %s, which is not supported", value)
 			}
 		}
 	}
-	return format, nil
+	return format, reftable, nil
 }

@@ -248,30 +248,33 @@ func FuzzParseConfig(f *testing.F) {
 
 func TestRepositoryFormat(t *testing.T) {
 	for _, tc := range []struct {
-		config string
-		want   *Format
+		config   string
+		want     *Format
+		reftable bool
 	}{
-		{"", SHA1},
-		{"[core]\nrepositoryformatversion = 0\n", SHA1},
-		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = sha256\n", SHA256},
-		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectFormat = SHA1\nrefStorage = files\n", SHA1},
-		{"[core]\nrepositoryformatversion = 1\n[extensions]\npartialclone = origin\nworktreeconfig\npreciousobjects\nnoop-v1\n", SHA1},
+		{"", SHA1, false},
+		{"[core]\nrepositoryformatversion = 0\n", SHA1, false},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = sha256\n", SHA256, false},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectFormat = SHA1\nrefStorage = files\n", SHA1, false},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\npartialclone = origin\nworktreeconfig\npreciousobjects\nnoop-v1\n", SHA1, false},
 		// Version 0 ignores extensions it doesn't know.
-		{"[core]\nrepositoryformatversion = 0\n[extensions]\nsomething = x\n", SHA1},
-		{"[core]\nrepositoryformatversion = 2\n", nil},
-		{"[core]\nrepositoryformatversion = x\n", nil},
-		{"[core]\nrepositoryformatversion = 1\n[extensions]\nsomething = x\n", nil},
-		{"[core]\nrepositoryformatversion = 1\n[extensions]\nrefstorage = reftable\n", nil},
-		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = md5\n", nil},
-		{"[core]\nrepositoryformatversion = 0\n[extensions]\nobjectformat = sha256\n", nil},
+		{"[core]\nrepositoryformatversion = 0\n[extensions]\nsomething = x\n", SHA1, false},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nrefstorage = reftable\n", SHA1, true},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = sha256\nrefstorage = Reftable\n", SHA256, true},
+		{"[core]\nrepositoryformatversion = 2\n", nil, false},
+		{"[core]\nrepositoryformatversion = x\n", nil, false},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nsomething = x\n", nil, false},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nrefstorage = other\n", nil, false},
+		{"[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = md5\n", nil, false},
+		{"[core]\nrepositoryformatversion = 0\n[extensions]\nobjectformat = sha256\n", nil, false},
 	} {
 		c, err := parseConfig(tc.config)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := repositoryFormat(c)
-		if got != tc.want || (err == nil) != (tc.want != nil) {
-			t.Errorf("%q: %v, %v", tc.config, got, err)
+		got, reftable, err := repositoryFormat(c)
+		if got != tc.want || reftable != tc.reftable || (err == nil) != (tc.want != nil) {
+			t.Errorf("%q: %v, reftable %v, %v", tc.config, got, reftable, err)
 		}
 	}
 }
