@@ -121,6 +121,7 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 	t.view.Compare = t.opts.Compare
 	t.stats.app, t.changes.app, t.previews.app = a, a, a
 	t.start()
+	t.view.StatusRight, t.view.Statuses = t.scan.StatusSide()
 	t.model = tree.New(t.scan.Root)
 	return t
 }
@@ -256,6 +257,9 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 		sides[i].BesideRevision = onDisk(t.roots[i]) && !onDisk(t.roots[1-i])
 		sides[i].RepoPath = repoPath(t.roots[i], n.Path())
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
+		if t.view.Statuses && t.view.StatusRight == (i == 1) {
+			sides[i].Status = view.NodeStatusText(n, t.view.StatusRight)
+		}
 	}
 	return sides
 }
@@ -380,7 +384,7 @@ func (t *TreeScreen) Key(k term.Key) bool {
 		return true
 	}
 	if k == term.Rune('?') {
-		t.help = view.NewHelp(view.TreeHelpFor(t.back != nil))
+		t.help = view.NewHelp(view.TreeHelpFor(t.back != nil, t.view.Statuses))
 		return true
 	}
 	if k == term.Rune('e') {

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -51,26 +53,51 @@ func (t *pathTree) isDir(rel string) bool {
 	return rel != "" && len(t.names[rel]) > 0
 }
 
-// parentDir returns the directory of rel, "" for the top.
-func parentDir(rel string) string {
-	if dir := path.Dir(rel); dir != "." {
-		return dir
-	}
-	return ""
-}
-
 // workIndex records membership and the ancestors needed to find tracked
 // entries under an ignored directory.
 type workIndex struct {
 	files    map[string]Mode
 	gitlinks map[string]ID
-	// skipped holds the objects of skip-worktree entries, which Git takes
-	// from the index rather than the disk. skipTree is the directories
+	// skipped holds the objects of skip-worktree and assume-unchanged
+	// entries, which Git takes from the index rather than the disk, and
+	// assumed those of the second only. skipTree is the directories
 	// leading to them.
 	skipped  map[string]ID
+	assumed  map[string]bool
 	skipTree pathTree
-	// tree is the directories leading to the entries.
-	tree pathTree
+	// entries are what a status is found from, by path, and tree the
+	// directories leading to them.
+	entries map[string]workEntry
+	tree    pathTree
+	// mtime is when the index was written. A file changed in the same
+	// time slot may match the stat data the index has of it, and must be
+	// read to tell.
+	mtime unix.Timespec
+}
+
+// workEntry is a path of the index as a status is found from it: its
+// staged version, or the stages of a conflict.
+type workEntry struct {
+	mode Mode
+	id   ID
+	stat indexStat
+	// stages has bit n set for each stage n of an unmerged path, 0 for one
+	// merged.
+	stages uint8
+	// intentToAdd is set for a path added with git add -N, which is not
+	// staged.
+	intentToAdd bool
+	// assumeUnchanged is set for a path marked with git update-index
+	// --assume-unchanged, which Git takes as unchanged on disk.
+	assumeUnchanged bool
+}
+
+// indexStat is what the index records of a file on disk, when it last
+// matched its staged version: each number as truncated to 32 bits.
+type indexStat struct {
+	ctimeSec, ctimeNsec uint32
+	mtimeSec, mtimeNsec uint32
+	ino, uid, gid, size uint32
 }
 
 // indexEntry is an entry of the index, as walkIndex reads it.
@@ -79,9 +106,13 @@ type indexEntry struct {
 	mode  Mode
 	id    ID
 	stage uint16
+	// assumeUnchanged is the flag of an entry Git takes as unchanged on
+	// disk, as git update-index --assume-unchanged sets.
+	assumeUnchanged bool
 	// skipWorktree and intentToAdd are the extended flags of an entry
 	// Git compares from the index, and of one added with git add -N.
 	skipWorktree, intentToAdd bool
+	stat                      indexStat
 }
 
 // walkIndex checks the index data and calls fn with each entry, in order.
@@ -110,7 +141,7 @@ func walkIndex(f *Format, data []byte, fn func(indexEntry)) error {
 	var unnamed bool
 	var entries []indexEntry
 	for range count {
-		name, mode, stage, ext, used, err := readIndexEntry(f, version, data, prev)
+		name, mode, flags, ext, used, err := readIndexEntry(f, version, data, prev)
 		if err != nil {
 			return err
 		}
@@ -130,9 +161,15 @@ func walkIndex(f *Format, data []byte, fn func(indexEntry)) error {
 			return fmt.Errorf("invalid index path %q", name)
 		}
 		id, _ := IDFromBytes(f, entry[indexStatBytes:indexStatBytes+f.size])
+		field := func(i int) uint32 { return binary.BigEndian.Uint32(entry[4*i:]) }
 		entries = append(entries, indexEntry{
-			name: name, mode: mode, id: id, stage: stage,
+			name: name, mode: mode, id: id, stage: (flags >> 12) & 3, assumeUnchanged: flags&0x8000 != 0,
 			skipWorktree: ext&0x4000 != 0, intentToAdd: ext&0x2000 != 0,
+			stat: indexStat{
+				ctimeSec: field(0), ctimeNsec: field(1),
+				mtimeSec: field(2), mtimeNsec: field(3),
+				ino: field(5), uid: field(7), gid: field(8), size: field(9),
+			},
 		})
 	}
 	for len(data) > 0 {
@@ -167,8 +204,18 @@ func walkIndex(f *Format, data []byte, fn func(indexEntry)) error {
 }
 
 func parseWorkIndex(f *Format, data []byte) (workIndex, error) {
-	index := workIndex{files: make(map[string]Mode)}
+	index := workIndex{files: make(map[string]Mode), entries: make(map[string]workEntry)}
 	err := walkIndex(f, data, func(e indexEntry) {
+		if e.stage == 0 {
+			index.entries[e.name] = workEntry{
+				mode: e.mode, id: e.id, stat: e.stat,
+				intentToAdd: e.intentToAdd, assumeUnchanged: e.assumeUnchanged,
+			}
+		} else {
+			w := index.entries[e.name]
+			w.stages |= 1 << e.stage
+			index.entries[e.name] = w
+		}
 		if _, tracked := index.files[e.name]; !tracked || e.stage == 0 {
 			index.files[e.name] = e.mode
 			if e.mode == ModeSubmodule {
@@ -177,12 +224,16 @@ func parseWorkIndex(f *Format, data []byte) (workIndex, error) {
 				}
 				index.gitlinks[e.name] = e.id
 			}
-			if e.skipWorktree && e.stage == 0 {
+			if (e.skipWorktree || e.assumeUnchanged) && e.stage == 0 {
 				if index.skipped == nil {
 					index.skipped = make(map[string]ID)
+					index.assumed = make(map[string]bool)
 				}
 				index.skipped[e.name] = e.id
 				index.skipTree.add(e.name)
+				if !e.skipWorktree {
+					index.assumed[e.name] = true
+				}
 			}
 		}
 		index.tree.add(e.name)
@@ -193,8 +244,8 @@ func parseWorkIndex(f *Format, data []byte) (workIndex, error) {
 	return index, nil
 }
 
-// readIndexEntry reads an entry and its extended flags.
-func readIndexEntry(f *Format, version uint32, data []byte, prev string) (name string, mode Mode, stage uint16, ext uint16, used int, err error) {
+// readIndexEntry reads an entry, its flags and its extended flags.
+func readIndexEntry(f *Format, version uint32, data []byte, prev string) (name string, mode Mode, flags uint16, ext uint16, used int, err error) {
 	off := indexStatBytes + f.size + 2
 	if len(data) < off {
 		return "", 0, 0, 0, 0, errors.New("truncated index entry")
@@ -203,7 +254,7 @@ func readIndexEntry(f *Format, version uint32, data []byte, prev string) (name s
 	if mode&0o170000 == ModeTree {
 		return "", 0, 0, 0, 0, errors.New("sparse index is not supported")
 	}
-	flags := binary.BigEndian.Uint16(data[off-2:])
+	flags = binary.BigEndian.Uint16(data[off-2:])
 	if flags&0x4000 != 0 {
 		if version == 2 || len(data) < off+2 {
 			return "", 0, 0, 0, 0, errors.New("invalid extended index entry flags")
@@ -236,7 +287,7 @@ func readIndexEntry(f *Format, version uint32, data []byte, prev string) (name s
 		}
 		used = padded
 	}
-	return name, mode, (flags >> 12) & 3, ext, used, nil
+	return name, mode, flags, ext, used, nil
 }
 
 // indexPathPrefix decodes the number of bytes removed from the previous

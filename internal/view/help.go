@@ -92,9 +92,24 @@ const (
 	treeEscBack = "close an action's result, end the search, clear the filter, or go back"
 )
 
+// statusHelp lists the letters of a git status, shown with the tree's
+// keys where a side has statuses.
+var statusHelp = []HelpLine{
+	{},
+	{Text: "Git status, as git status --short"},
+	{},
+	key("added, the first letter if staged and the second if not", "A"),
+	key("modified", "M"),
+	key("deleted", "D"),
+	key("type changed", "T"),
+	key("untracked", "??"),
+	key("unmerged, as both modified", "UU"),
+}
+
 // TreeHelpFor returns the tree view's keys, with Esc going back once
-// nothing else is left to close if back is set.
-func TreeHelpFor(back bool) []HelpLine {
+// nothing else is left to close if back is set, and the letters of a git
+// status if statuses is.
+func TreeHelpFor(back, statuses bool) []HelpLine {
 	lines := append([]HelpLine{}, TreeHelp...)
 	if back {
 		for i, l := range lines {
@@ -102,6 +117,9 @@ func TreeHelpFor(back bool) []HelpLine {
 				lines[i].Text = treeEscBack
 			}
 		}
+	}
+	if statuses {
+		lines = append(lines, statusHelp...)
 	}
 	return lines
 }

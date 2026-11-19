@@ -22,6 +22,10 @@ type Styles struct {
 	RightOnly  term.Style // the > mark
 	Unverified term.Style // the ? mark
 	Type       term.Style // the ! mark
+	// The letters of a git status: what is staged, and what is not or
+	// untracked, in git's colours.
+	Staged   term.Style
+	Unstaged term.Style
 	// The backgrounds of lines by state in the diff view.
 	ChangedBg   term.Style
 	LeftOnlyBg  term.Style
@@ -69,6 +73,8 @@ func Default() Styles {
 		RightOnly:  term.Style{SGR: "34"},
 		Unverified: term.Style{SGR: "35"},
 		Type:       term.Style{SGR: "1;31"},
+		Staged:     term.Style{SGR: "32"},
+		Unstaged:   term.Style{SGR: "31"},
 
 		ChangedBg:   term.Style{SGR: "48;2;34;31;24"},
 		LeftOnlyBg:  term.Style{SGR: "48;2;22;34;28"},
@@ -116,6 +122,8 @@ func NoColor() Styles {
 		RightOnly:  bold,
 		Unverified: bold,
 		Type:       bold,
+		Staged:     bold,
+		Unstaged:   bold,
 		Select:     term.Style{Attr: term.Reverse},
 		Escape:     term.Style{Attr: term.Reverse},
 		Border:     term.Style{Attr: term.Dim},
@@ -189,6 +197,8 @@ func Parse(e Env) Result {
 		"rightonly":   &r.Styles.RightOnly,
 		"unverified":  &r.Styles.Unverified,
 		"type":        &r.Styles.Type,
+		"staged":      &r.Styles.Staged,
+		"unstaged":    &r.Styles.Unstaged,
 		"changedbg":   &r.Styles.ChangedBg,
 		"leftonlybg":  &r.Styles.LeftOnlyBg,
 		"rightonlybg": &r.Styles.RightOnlyBg,

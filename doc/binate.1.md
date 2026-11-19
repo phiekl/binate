@@ -71,6 +71,11 @@ The column between the sides marks each pair:
 - **<**, **>**: On the left, or the right, side only.
 - **!**: Different types.
 
+In a git work tree, each entry's type follows its status, as **git status
+--short** gives it. The first letter is what is staged and the second what is
+not, each **A** for added, **M** modified, **D** deleted or **T** type changed.
+**??** is untracked, and **UU** and others are unmerged.
+
 ## Keys
 
 **?** lists the keys of the current screen.

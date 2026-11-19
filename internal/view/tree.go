@@ -66,7 +66,10 @@ type TreeView struct {
 	// Compare is the attributes the scan compares, whose differences the
 	// panels highlight.
 	Compare scan.Attrs
-	top     int
+	// Statuses is set if a side's entries have git statuses, shown before
+	// their types, and StatusRight if that is the right side.
+	Statuses, StatusRight bool
+	top                   int
 	// The displayed count follows scan progress between frames, rather
 	// than jumping by a whole directory's worth of entries.
 	loading     bool
@@ -262,8 +265,8 @@ func (v *TreeView) drawRow(s *term.Screen, p Panes, y int, m *tree.Model, row tr
 	if isSel {
 		bg = v.Styles.Select
 	}
-	v.drawSide(s, p.LeftX, p.LeftW, y, m, row, &n.L, bg)
-	v.drawSide(s, p.RightX, p.RightW, y, m, row, &n.R, bg)
+	v.drawSide(s, p.LeftX, p.LeftW, y, m, row, false, bg)
+	v.drawSide(s, p.RightX, p.RightW, y, m, row, true, bg)
 	gap := v.Styles.Plain.On(bg)
 	markStyle := v.rowStyle(n)
 	if n.IsDir() {
@@ -367,18 +370,55 @@ func (v *TreeView) typeLabel(sd *scan.Side) (string, term.Style) {
 	return "?", st.Plain
 }
 
-// drawSide draws a side of a row over the row's background bg.
-func (v *TreeView) drawSide(s *term.Screen, x, w, y int, m *tree.Model, row tree.Row, sd *scan.Side, bg term.Style) {
+// drawSide draws a side of a row, the left or right, over the row's
+// background bg.
+func (v *TreeView) drawSide(s *term.Screen, x, w, y int, m *tree.Model, row tree.Row, right bool, bg term.Style) {
+	n := row.Node
+	sd := n.Side(right)
 	plain, esc := v.Styles.Plain.On(bg), rowEscape(v.Styles.Escape, bg)
 	nameStyle := withoutBold(v.rowStyle(row.Node)).On(bg)
 	s.Fill(x, y, w, plain)
-	if sd.Kind == scan.Missing || w <= 0 {
+	if w <= 0 {
 		return
 	}
-	n := row.Node
+	statusSide := v.Statuses && right == v.StatusRight
+	if statusSide {
+		// The letters, as git status --short shows them, before the
+		// type.
+		staged, unstaged := statusStyles(n.Status, v.Styles)
+		if !n.Status.IsZero() && w >= statusWidth {
+			s.Set(x+1, y, rune(n.Status.Staged), 1, staged.On(bg))
+			s.Set(x+2, y, rune(n.Status.Unstaged), 1, unstaged.On(bg))
+		}
+		x, w = x+statusWidth, max(w-statusWidth, 0)
+	}
+	// An entry gone from both sides is shown on the work tree's, dimmed,
+	// as recorded.
+	gone := statusSide && n.Gone != scan.Missing
+	if gone {
+		sd = &scan.Side{Kind: n.Gone}
+		nameStyle = v.Styles.Border.On(bg)
+	}
+	if sd.Kind == scan.Missing {
+		// An empty cell says the status in words, dimmed: on the work
+		// tree's side, as which column a lone letter is in is hard to
+		// tell, and on the other, as for a file added. What is in an
+		// untracked directory is said to be once, at the directory.
+		inUntracked := n.Status.Untracked() && n.Parent != nil && n.Parent.Status.Untracked()
+		if text := NodeStatusText(n, v.StatusRight); v.Statuses && text != "" && w > 1 && !inUntracked {
+			s.Text(x+1, y, w-1, ShortenEnd(display.Plain(text), w-1), v.Styles.Border.On(bg), esc)
+		}
+		return
+	}
+	if w <= 0 {
+		return
+	}
 
 	// The type, right aligned, and a rule before the name.
 	label, labelStyle := v.typeLabel(sd)
+	if gone {
+		labelStyle = v.Styles.Border
+	}
 	labelStyle, rule := labelStyle.On(bg), v.Styles.Border.On(bg)
 	s.Label(x+typeLabelWidth-len(label), y, len(label), label, labelStyle)
 	s.Label(x+typeLabelWidth, y, w-typeLabelWidth, " │ ", rule)
@@ -393,7 +433,9 @@ func (v *TreeView) drawSide(s *term.Screen, x, w, y int, m *tree.Model, row tree
 	default:
 		lead = display.Plain(strings.Repeat("  ", row.Depth))
 		switch {
-		case sd.Kind != scan.Dir:
+		case sd.Kind != scan.Dir && (n.IsDir() || !n.HasEntries()):
+			// One with entries below it, though not a directory, can
+			// be expanded too.
 			lead = append(lead, display.Plain("  ")...)
 		case m.Expanded(n):
 			lead = append(lead, display.Plain("▾ ")...)
@@ -465,6 +507,10 @@ func countItems(c tree.Counts, st colors.Styles) []barItem {
 		{c.Mtime, "mtime", st.Mtime},
 		{c.Unverified, "unverified", st.Unverified},
 		{c.Pending, "pending", st.Plain},
+		{c.Staged, "staged", st.Staged},
+		{c.Unstaged, "unstaged", st.Unstaged},
+		{c.Untracked, "untracked", st.Unstaged},
+		{c.Unmerged, "unmerged", st.Unstaged},
 	} {
 		if k.n > 0 {
 			items = append(items, barItem{text: fmt.Sprintf("%d %s", k.n, k.label), style: k.style})

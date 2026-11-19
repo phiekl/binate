@@ -45,6 +45,11 @@ type WorkTree struct {
 	index    workIndex
 	rules    *ignoreRules
 	settings workSettings
+	// head is the tree of HEAD, the commit statuses are of.
+	head *Root
+	// attrOnce reads the attributes files that aren't a directory's.
+	attrOnce sync.Once
+	attrs    workAttributes
 }
 
 // workSettings are the configuration the work tree follows.
@@ -61,6 +66,16 @@ type workSettings struct {
 	// configuration, if set, which takes the place of the user's.
 	excludesFile    string
 	hasExcludesFile bool
+	// attributesFile is core.attributesFile from the repository's own
+	// configuration, if set, which takes the place of the user's.
+	attributesFile    string
+	hasAttributesFile bool
+	// autocrlf is set if core.autoCRLF converts line endings as Git
+	// stages files.
+	autocrlf bool
+	// drivers holds the filter drivers that filter files as Git stages
+	// them.
+	drivers map[string]bool
 }
 
 type workDirectory struct {
@@ -70,6 +85,14 @@ type workDirectory struct {
 	listOnce  sync.Once
 	names     []string
 	listErr   error
+	// attrs is the directory's .gitattributes, nil if none, and
+	// attrsErr is set if it couldn't be read.
+	attrOnce sync.Once
+	attrs    *attrFile
+	attrsErr bool
+	// filterAttrs is attrs with only what may make Git filter.
+	filterOnce  sync.Once
+	filterAttrs *attrFile
 }
 
 // OpenWorkTree opens the repository top and the metadata needed to
@@ -150,7 +173,7 @@ func (w *WorkTree) load() error {
 		return err
 	}
 	indexPath := path.Join(w.gitDir, "index")
-	data, err := w.readFile(indexPath, maxWorkIndex)
+	data, mtime, err := w.readIndex(indexPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", w.Path(indexPath), err)
 	}
@@ -158,6 +181,10 @@ func (w *WorkTree) load() error {
 		w.index = workIndex{}
 	} else if w.index, err = parseWorkIndex(w.repo.format, data); err != nil {
 		return fmt.Errorf("%s: %w", w.Path(indexPath), err)
+	}
+	w.index.mtime = mtime
+	if w.head, err = w.readHead(); err != nil {
+		return err
 	}
 
 	// Git warns about an excludes file it can't read and goes on
@@ -213,6 +240,22 @@ func (w *WorkTree) readSettings() (workSettings, error) {
 	c.merge(local)
 	var s workSettings
 	s.excludesFile, s.hasExcludesFile = local.get("core.excludesfile")
+	s.attributesFile, s.hasAttributesFile = local.get("core.attributesfile")
+	// true, as a key alone, or input converts, and anything else Git
+	// may take as converting.
+	on, err := c.bool("core.autocrlf", false)
+	s.autocrlf = on || err != nil
+	s.drivers = map[string]bool{}
+	for name, values := range c.values {
+		rest, ok := strings.CutPrefix(name, "filter.")
+		i := strings.LastIndexByte(rest, '.')
+		if !ok || i < 0 || values[len(values)-1] == "" {
+			continue
+		}
+		if key := rest[i+1:]; key == "clean" || key == "process" {
+			s.drivers[rest[:i]] = true
+		}
+	}
 	if s.fileMode, err = c.bool("core.filemode", true); err != nil {
 		return workSettings{}, err
 	}
@@ -252,10 +295,15 @@ func (w *WorkTree) Entry(rel string, _ bool) (source.Entry, error) {
 	if st == nil {
 		return source.Entry{}, err
 	}
+	return entryOf(st), err
+}
+
+// entryOf returns what the scan compares of st.
+func entryOf(st *stat.Stat) source.Entry {
 	return source.Entry{
 		Mode: st.Mode, Size: st.Size, Uid: st.Uid, Gid: st.Gid, Rdev: st.Rdev,
-		Mtime: st.Mtime, Target: st.Target,
-	}, err
+		Mtime: st.Mtime, Target: st.Target, Ino: st.Ino, Ctime: st.Ctime,
+	}
 }
 
 func (w *WorkTree) Stat(rel string) (*stat.Stat, error) {
@@ -278,6 +326,12 @@ func (w *WorkTree) Stat(rel string) (*stat.Stat, error) {
 	if id, ok := w.skipped(rel); ok {
 		return w.indexStat(rel, id)
 	}
+	return w.diskStat(rel)
+}
+
+// diskStat reads the visible entry at rel on disk, with the modes Git
+// records.
+func (w *WorkTree) diskStat(rel string) (*stat.Stat, error) {
 	// A directory of skip-worktree entries needn't be on disk.
 	absent := func(err error) bool {
 		return w.index.skipTree.isDir(rel) && errors.Is(err, fs.ErrNotExist)
@@ -668,6 +722,17 @@ func (w *WorkTree) readGitFile(rel string, limit int64) ([]byte, error) {
 }
 
 func (w *WorkTree) readFileAt(rel string, limit int64, follow following) ([]byte, error) {
+	f, err := w.openFileAt(rel, follow)
+	if f == nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return readBounded(f, limit)
+}
+
+// openFileAt opens a regular file beneath the top, or returns nil and no
+// error if it is missing.
+func (w *WorkTree) openFileAt(rel string, follow following) (*os.File, error) {
 	// Only symlinks resolved one at a time tell where ".." leads.
 	if follow != followAll && !filepath.IsLocal(rel) {
 		return nil, unix.EXDEV
@@ -695,8 +760,7 @@ func (w *WorkTree) readFileAt(rel string, limit int64, follow following) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	return readBounded(f, limit)
+	return f, nil
 }
 
 // readIgnore reads the ignore file at rel. Git reads a .gitignore without
@@ -708,7 +772,7 @@ func (w *WorkTree) readIgnore(rel string, gitignore bool) ([]ignorePattern, erro
 		follow = followNone
 	}
 	data, err := w.readFileAt(rel, maxIgnoreFile, follow)
-	if id, ok := w.index.skipped[rel]; ok && gitignore && data == nil && err == nil {
+	if id, ok := w.index.skipped[rel]; ok && !w.index.assumed[rel] && gitignore && data == nil && err == nil {
 		if m := w.index.files[rel]; m == ModeFile || m == ModeExecutable {
 			data, err = w.repo.blob(id, maxIgnoreFile)
 		}
@@ -719,12 +783,13 @@ func (w *WorkTree) readIgnore(rel string, gitignore bool) ([]ignorePattern, erro
 	return parseIgnore(string(data), w.settings.ignoreCase), nil
 }
 
-// skipped returns the object of the skip-worktree entry at rel, which Git
-// compares in place of the disk. In a sparse checkout, Git clears the flag
-// of a file present on disk.
+// skipped returns the object of the skip-worktree or assume-unchanged
+// entry at rel, which Git compares in place of the disk, as git diff does.
+// In a sparse checkout, Git clears the skip-worktree flag of a file
+// present on disk.
 func (w *WorkTree) skipped(rel string) (ID, bool) {
 	id, ok := w.index.skipped[rel]
-	if !ok || w.settings.sparse && w.exists(rel) {
+	if !ok || w.settings.sparse && !w.index.assumed[rel] && w.exists(rel) {
 		return ID{}, false
 	}
 	return id, true
@@ -740,7 +805,8 @@ func (w *WorkTree) exists(rel string) bool {
 	return unix.Fstatat(int(dir.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW) == nil
 }
 
-// indexStat returns the skip-worktree entry at rel as the index records it.
+// indexStat returns the skip-worktree or assume-unchanged entry at rel as
+// the index records it.
 func (w *WorkTree) indexStat(rel string, id ID) (*stat.Stat, error) {
 	mode := w.index.files[rel]
 	st := &stat.Stat{Mode: unixMode(mode)}
@@ -761,7 +827,8 @@ func (w *WorkTree) indexStat(rel string, id ID) (*stat.Stat, error) {
 	return st, nil
 }
 
-// openIndexed opens the skip-worktree file at rel from its blob.
+// openIndexed opens the skip-worktree or assume-unchanged file at rel from
+// its blob.
 func (w *WorkTree) openIndexed(rel string, id ID) (source.File, error) {
 	f, err := w.repo.openBlob(id, w.index.files[rel], path.Base(rel))
 	if err != nil {

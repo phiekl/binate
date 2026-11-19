@@ -158,6 +158,14 @@ func (r *Repository) parseRef(name, data string) (ID, string, error) {
 	return id, "", nil
 }
 
+// withFreshRefs returns r reading its packed refs again, once, as for a
+// rescan after git pack-refs.
+func (r *Repository) withFreshRefs() *Repository {
+	fresh := *r
+	fresh.packed = &packedRefs{path: r.packed.path, format: r.packed.format}
+	return &fresh
+}
+
 // packedRefs is the packed-refs file, read once when first needed.
 type packedRefs struct {
 	path   string

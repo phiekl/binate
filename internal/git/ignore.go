@@ -5,6 +5,7 @@
 package git
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -139,27 +140,36 @@ func parseIgnore(data string, fold bool) []ignorePattern {
 			continue
 		}
 		line, include := strings.CutPrefix(line, "!")
-		dirOnly := strings.HasSuffix(line, "/")
-		if dirOnly {
-			line = line[:len(line)-1]
-		}
-		basename := !strings.Contains(line, "/")
-		line, _ = strings.CutPrefix(line, "/")
-		if line == "" {
+		p, ok := newIgnorePattern(line, fold)
+		if !ok {
 			continue
 		}
-		p := ignorePattern{basename: basename, dirOnly: dirOnly, include: include, fold: fold}
-		if strings.ContainsAny(line, "*?[\\") {
-			p.expr = compileIgnore(line, fold)
-			if p.expr == nil {
-				continue
-			}
-		} else {
-			p.literal = line
-		}
+		p.include = include
 		patterns = append(patterns, p)
 	}
 	return patterns
+}
+
+// newIgnorePattern compiles one pattern, as of an ignore or attributes
+// file, matching letters of either case if fold is set. It reports false
+// for one that matches nothing.
+func newIgnorePattern(line string, fold bool) (ignorePattern, bool) {
+	dirOnly := strings.HasSuffix(line, "/")
+	if dirOnly {
+		line = line[:len(line)-1]
+	}
+	basename := !strings.Contains(line, "/")
+	line, _ = strings.CutPrefix(line, "/")
+	if line == "" {
+		return ignorePattern{}, false
+	}
+	p := ignorePattern{basename: basename, dirOnly: dirOnly, fold: fold}
+	if strings.ContainsAny(line, "*?[\\") {
+		p.expr = compileIgnore(line, fold)
+		return p, p.expr != nil
+	}
+	p.literal = line
+	return p, true
 }
 
 func trimIgnoreSpaces(line string) string {
@@ -351,6 +361,12 @@ type GlobalIgnore struct {
 	config   config
 	// home expands "~/" in the repository's core.excludesFile.
 	home string
+	// userAttributes and systemAttributes are the texts of the user's and
+	// the system's attributes files, the first taking precedence, and the
+	// Err fields are set where one couldn't be read. A core.attributesFile
+	// the repository's configuration sets takes the user's place.
+	userAttributes, systemAttributes       string
+	userAttributesErr, systemAttributesErr bool
 }
 
 // ReadGlobalIgnore reads user-level configuration and the user-selected
@@ -361,6 +377,9 @@ func ReadGlobalIgnore(getenv func(string) string) (GlobalIgnore, error) {
 		xdg = filepath.Join(home, ".config")
 	}
 	var configs []string
+	if getenv("GIT_CONFIG_NOSYSTEM") == "" {
+		configs = append(configs, cmp.Or(getenv("GIT_CONFIG_SYSTEM"), "/etc/gitconfig"))
+	}
 	if name := getenv("GIT_CONFIG_GLOBAL"); name != "" {
 		// /dev/null is commonly used to disable user configuration.
 		if name != os.DevNull {
@@ -394,6 +413,20 @@ func ReadGlobalIgnore(getenv func(string) string) (GlobalIgnore, error) {
 		user.merge(c)
 	}
 	g := GlobalIgnore{config: user, home: home}
+	var userAttributes string
+	if name, ok := user.get("core.attributesfile"); ok {
+		userAttributes = expandHome(name, home)
+	} else if xdg != "" {
+		userAttributes = filepath.Join(xdg, "git", "attributes")
+	}
+	if userAttributes != "" && userAttributes != os.DevNull {
+		text, err := readUserFile(userAttributes)
+		g.userAttributes, g.userAttributesErr = text, err != nil
+	}
+	if getenv("GIT_ATTR_NOSYSTEM") == "" {
+		text, err := readUserFile("/etc/gitattributes")
+		g.systemAttributes, g.systemAttributesErr = text, err != nil
+	}
 	if exclude == "" || exclude == os.DevNull {
 		return g, nil
 	}

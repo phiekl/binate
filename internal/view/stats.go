@@ -105,6 +105,9 @@ type StatSide struct {
 	// Change, if set, is the commit that last changed the entry, of a
 	// side with a history.
 	Change *Change
+	// Status, if set, is the entry's git status in words, of a side in a
+	// work tree.
+	Status string
 }
 
 // Change is the commit that last changed an entry, or why it isn't known.
@@ -171,6 +174,9 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	}
 	if sd.ScanErr != nil {
 		rows = append(rows, statRow{label: "error", value: display.Name(sd.ScanErr.Error()), failed: true})
+	}
+	if sd.Status != "" {
+		rows = append(rows, statRow{label: "git", value: display.Plain(sd.Status)})
 	}
 	note := func(text string, failed bool) []statRow {
 		return append(rows, statRow{value: display.Name(text), failed: failed})

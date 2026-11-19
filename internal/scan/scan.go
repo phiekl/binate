@@ -117,6 +117,29 @@ type Node struct {
 	// content is the result of comparing a pair of files' contents, kept
 	// for Reclassify, or Pending if they haven't been.
 	content State
+	// Status is the pair's status on the side with statuses (see
+	// Scan.StatusSide), as a git work tree's, zero for none or until
+	// read.
+	Status source.Status
+	// statusBelow is set for a directory with a status below it.
+	statusBelow bool
+	// listed is the entry of the side with statuses as listed, kept
+	// until its status is read.
+	listed *source.Entry
+	// Gone, unless Missing, is the type of an entry on neither side but
+	// recorded by the side with statuses, as a file deleted in the work
+	// tree, shown for its status.
+	Gone Kind
+	// below is set for an entry with entries recorded below it by the side
+	// with statuses, which may be shown for their statuses though it isn't
+	// a directory on either side, as a file staged in place of one.
+	below bool
+}
+
+// HasStatus reports whether n has a status, or for a directory, whether
+// anything below it has.
+func (n *Node) HasStatus() bool {
+	return !n.Status.IsZero() || n.statusBelow
 }
 
 // BothDirs reports whether n is a directory on both sides.
@@ -129,7 +152,12 @@ func (n *Node) BothDirs() bool {
 // (Meta), '#' for its mtime, or '*' for more than one of them. A
 // directory on both sides is marked by itself alone, not what is below
 // it: by its attributes, '?' if a side could not be listed, or else '='.
+// One gone from both sides has none.
 func (n *Node) Mark() rune {
+	if n.Gone != Missing {
+		// Nothing to compare.
+		return ' '
+	}
 	if n.BothDirs() {
 		switch {
 		case n.Own != 0:
@@ -176,9 +204,17 @@ func (n *Node) Path() string {
 	return n.Parent.Path() + "/" + n.Name
 }
 
-// IsDir reports whether either side is a directory, which may hold entries.
+// IsDir reports whether either side is a directory, which may hold
+// entries, or one gone is (see Node.Gone).
 func (n *Node) IsDir() bool {
-	return n.L.Kind == Dir || n.R.Kind == Dir
+	return n.L.Kind == Dir || n.R.Kind == Dir || n.Gone == Dir
+}
+
+// HasEntries reports whether n may hold entries: it is a directory, or
+// entries are recorded below it, as below a file staged in place of a
+// directory.
+func (n *Node) HasEntries() bool {
+	return n.IsDir() || n.below
 }
 
 // Side returns the left (false) or right (true) side.
@@ -344,6 +380,10 @@ type Scan struct {
 	left  source.Root
 	right source.Root
 	opts  Options
+	// statuses is the side with statuses, if either has, and statusRight
+	// whether it is the right side.
+	statuses    source.Statuses
+	statusRight bool
 
 	mu      sync.Mutex
 	scanned atomic.Int64
@@ -388,12 +428,23 @@ func Start(left, right source.Root, opts Options, notify func(done bool)) *Scan 
 		notify:  notify,
 	}
 	s.qcond = sync.NewCond(&s.qmu)
+	if st, ok := right.(source.Statuses); ok {
+		s.statuses, s.statusRight = st, true
+	} else if st, ok := left.(source.Statuses); ok {
+		s.statuses = st
+	}
 	s.Root.L = statSide(left, "", true)
 	s.Root.R = statSide(right, "", true)
 	s.Root.Own = attrsDiffer(&s.Root.L, &s.Root.R, opts.Compare)
 	s.push(s.Root)
 	go s.run()
 	return s
+}
+
+// StatusSide reports whether a side's entries have statuses, and if so
+// whether it is the right side.
+func (s *Scan) StatusSide() (right, ok bool) {
+	return s.statusRight, s.statuses != nil
 }
 
 // Lock locks the tree against the scan.
@@ -486,10 +537,15 @@ func (s *Scan) work() {
 
 		p := n.Path()
 		s.current.Store(&p)
-		if n.IsDir() || n.Parent == nil {
+		// A file may have entries recorded below it too (see below).
+		if n.HasEntries() || n.Parent == nil {
 			s.list(n)
-		} else {
+		}
+		if n.L.Kind != Dir && n.R.Kind != Dir && n.Parent != nil && n.State == Pending {
 			s.compareFiles(n, &comparer)
+		}
+		if s.statuses != nil && n.Parent != nil {
+			s.readStatus(n, p)
 		}
 
 		s.qmu.Lock()
@@ -522,6 +578,8 @@ func childPath(dir, name string) string {
 type entry struct {
 	l, r     Side
 	inL, inR bool
+	// listed is the entry of the side with statuses.
+	listed *source.Entry
 }
 
 // list reads both sides of a directory node, pairs the entries, and queues
@@ -545,7 +603,7 @@ func (s *Scan) list(n *Node) {
 			if s.excluded(name) {
 				continue
 			}
-			sd := statSide(root, childPath(dir, name), false)
+			sd, raw := readSide(root, childPath(dir, name), false)
 			emu.Lock()
 			e := entries[name]
 			if e == nil {
@@ -558,6 +616,9 @@ func (s *Scan) list(n *Node) {
 			} else {
 				e.l, e.inL = sd, true
 			}
+			if s.statuses != nil && right == s.statusRight && raw.Mode != 0 {
+				e.listed = &raw
+			}
 			emu.Unlock()
 		}
 	}
@@ -565,18 +626,36 @@ func (s *Scan) list(n *Node) {
 	go read(false, &lErr)
 	go read(true, &rErr)
 	wg.Wait()
+	// Entries recorded for statuses, on neither side, are shown for them.
+	gone, below := map[string]Kind{}, map[string]bool{}
+	if s.statuses != nil {
+		for _, r := range s.statuses.Recorded(dir) {
+			if s.excluded(r.Name) {
+				continue
+			}
+			below[r.Name] = r.Below
+			if _, ok := entries[r.Name]; !ok {
+				entries[r.Name] = &entry{}
+				gone[r.Name] = kindOf(r.Mode)
+				s.scanned.Add(1)
+			}
+		}
+	}
 
 	// A name missing from a side that could not be listed may be there:
 	// that side is unknown, not missing, as is everything below it.
 	lUnlisted, rUnlisted := unlisted(&n.L, lErr), unlisted(&n.R, rErr)
 	children := make([]*Node, 0, len(entries))
 	for name, e := range entries {
-		c := &Node{Name: name, Parent: n, L: e.l, R: e.r}
+		c := &Node{Name: name, Parent: n, L: e.l, R: e.r, listed: e.listed, Gone: gone[name], below: below[name]}
 		if !e.inL && lUnlisted != nil {
 			c.L = Side{Kind: Unknown, Err: lUnlisted}
 		}
 		if !e.inR && rUnlisted != nil {
 			c.R = Side{Kind: Unknown, Err: rUnlisted}
+		}
+		if c.L.Kind != Missing || c.R.Kind != Missing {
+			c.Gone = Missing
 		}
 		children = append(children, c)
 	}
@@ -596,11 +675,53 @@ func (s *Scan) list(n *Node) {
 	s.mu.Unlock()
 
 	for _, c := range children {
-		if c.IsDir() || c.State == Pending {
+		// With statuses, every entry has one to read.
+		if c.HasEntries() || c.State == Pending || s.statuses != nil {
 			s.push(c)
 		}
 	}
 	s.notify(false)
+}
+
+// readStatus reads the status of the node n at p from the entry listed
+// on the side with statuses, or none if that side is missing. A side that
+// could not be read has no status, not even one read before, and an error
+// reading one is the side's.
+func (s *Scan) readStatus(n *Node, p string) {
+	s.mu.Lock()
+	listed, kind := n.listed, n.Side(s.statusRight).Kind
+	n.listed = nil
+	if kind == Unknown {
+		n.Status = source.Status{}
+	}
+	s.mu.Unlock()
+	if kind == Unknown || kind != Missing && listed == nil {
+		return
+	}
+	status, err := s.statuses.Status(s.ctx, p, listed)
+	if s.ctx.Err() != nil {
+		// Canceled, as for a rescan.
+		return
+	}
+	s.mu.Lock()
+	n.Status = status
+	if err != nil {
+		sd := n.Side(s.statusRight)
+		sd.Err = errors.Join(sd.Err, files.UnwrapPath(err))
+	}
+	s.mu.Unlock()
+	s.notify(false)
+}
+
+// recordedKind returns the type the side with statuses records n as, or a
+// file's if it records none.
+func (s *Scan) recordedKind(n *Node) Kind {
+	for _, r := range s.statuses.Recorded(n.Parent.Path()) {
+		if r.Name == n.Name {
+			return kindOf(r.Mode)
+		}
+	}
+	return File
 }
 
 // NotListedError is the error of a side whose directory could not be
@@ -670,14 +791,22 @@ func sortNodes(nodes []*Node) {
 // statSide reads the entry at rel in root without following a symlink,
 // or following it for a root.
 func statSide(root source.Root, rel string, follow bool) Side {
+	sd, _ := readSide(root, rel, follow)
+	return sd
+}
+
+// readSide is statSide, also returning the entry as read, with no Mode if
+// none was.
+func readSide(root source.Root, rel string, follow bool) (Side, source.Entry) {
 	e, err := root.Entry(rel, follow)
 	if e.Mode == 0 {
 		if errors.Is(err, unix.ENOENT) {
-			return Side{Kind: Missing}
+			return Side{Kind: Missing}, e
 		}
-		return Side{Kind: Unknown, Err: files.UnwrapPath(err)}
+		return Side{Kind: Unknown, Err: files.UnwrapPath(err)}, e
 	}
 	sd := Side{
+		Kind:  kindOf(e.Mode),
 		Size:  e.Size,
 		Mtime: e.Mtime,
 		Rdev:  e.Rdev,
@@ -685,28 +814,38 @@ func statSide(root source.Root, rel string, follow bool) Side {
 		Uid:   e.Uid,
 		Gid:   e.Gid,
 	}
-	switch e.Mode & unix.S_IFMT {
-	case unix.S_IFDIR:
-		sd.Kind, sd.Size = Dir, 0
-	case unix.S_IFREG:
-		sd.Kind = File
-	case unix.S_IFLNK:
-		sd.Kind = Symlink
+	switch sd.Kind {
+	case Dir:
+		sd.Size = 0
+	case Symlink:
 		sd.Target, sd.Err = e.Target, files.UnwrapPath(err)
-	case unix.S_IFIFO:
-		sd.Kind = FIFO
-	case unix.S_IFSOCK:
-		sd.Kind = Socket
-	case unix.S_IFCHR:
-		sd.Kind = CharDev
-	case unix.S_IFBLK:
-		sd.Kind = BlockDev
-	case source.ModeGitlink:
-		sd.Kind, sd.Target = Submodule, e.Target
-	default:
-		sd.Kind = Unknown
+	case Submodule:
+		sd.Target = e.Target
 	}
-	return sd
+	return sd, e
+}
+
+// kindOf returns the type of an entry of mode, as st_mode.
+func kindOf(mode uint32) Kind {
+	switch mode & unix.S_IFMT {
+	case unix.S_IFDIR:
+		return Dir
+	case unix.S_IFREG:
+		return File
+	case unix.S_IFLNK:
+		return Symlink
+	case unix.S_IFIFO:
+		return FIFO
+	case unix.S_IFSOCK:
+		return Socket
+	case unix.S_IFCHR:
+		return CharDev
+	case unix.S_IFBLK:
+		return BlockDev
+	case source.ModeGitlink:
+		return Submodule
+	}
+	return Unknown
 }
 
 // attrsDiffer returns the attributes in set that every type has, such as
@@ -943,12 +1082,16 @@ func readFull(f io.Reader, buf []byte) (int, error) {
 // entry is unverified or a side could not be listed, else pending if any
 // entry is, else the same.
 func Aggregate(n *Node) State {
-	if !n.IsDir() && n.Parent != nil {
+	if !n.HasEntries() && n.Parent != nil {
 		return n.State
 	}
 	childStates := make([]State, len(n.Children))
+	n.statusBelow = false
 	for i, c := range n.Children {
 		childStates[i] = Aggregate(c)
+		if c.State != Ignored && c.HasStatus() {
+			n.statusBelow = true
+		}
 	}
 	if n.Parent != nil && (n.L.Kind != Dir || n.R.Kind != Dir) {
 		// One-sided, or opposite another type: classify decided.
@@ -1027,7 +1170,9 @@ func (s *Scan) Recheck(p string) {
 	}
 	var comparer contentComparer
 	for {
-		probe := &Node{Name: n.Name, Parent: n.Parent, L: statSide(s.left, p, false), R: statSide(s.right, p, false)}
+		l, lRaw := readSide(s.left, p, false)
+		r, rRaw := readSide(s.right, p, false)
+		probe := &Node{Name: n.Name, Parent: n.Parent, L: l, R: r}
 		classify(probe, opts)
 		content, lErr, rErr := Pending, error(nil), error(nil)
 		if probe.State == Pending && !probe.IsDir() {
@@ -1047,13 +1192,37 @@ func (s *Scan) Recheck(p string) {
 			continue
 		}
 		n.L, n.R, n.content = probe.L, probe.R, content
+		if n.L.Kind != Missing || n.R.Kind != Missing {
+			// Back on a side, as a file restored.
+			n.Gone = Missing
+		}
+		n.listed = nil
+		raw := lRaw
+		if s.statusRight {
+			raw = rRaw
+		}
+		if raw.Mode != 0 {
+			n.listed = &raw
+		}
 		classify(n, s.opts)
 		n.L.Err, n.R.Err = errors.Join(n.L.Err, lErr), errors.Join(n.R.Err, rErr)
 		break
 	}
+	s.mu.Unlock()
+	gone := File
+	if s.statuses != nil {
+		s.readStatus(n, p)
+		gone = s.recordedKind(n)
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	if n.L.Kind == Missing && n.R.Kind == Missing {
-		n.Parent.Children = slices.DeleteFunc(n.Parent.Children, func(c *Node) bool { return c == n })
+		if n.Status.IsZero() {
+			n.Parent.Children = slices.DeleteFunc(n.Parent.Children, func(c *Node) bool { return c == n })
+		} else if n.Gone == Missing {
+			// Gone from both sides, but still recorded.
+			n.Gone = gone
+		}
 	}
 	countEntries(n.Parent)
 	Aggregate(s.Root)

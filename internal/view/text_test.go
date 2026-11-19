@@ -5,6 +5,7 @@
 package view
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -79,11 +80,17 @@ func TestTreeHelpFor(t *testing.T) {
 		}
 		return false
 	}
-	if l := TreeHelpFor(false); !has(l, treeEsc) || has(l, treeEscBack) {
+	if l := TreeHelpFor(false, false); !has(l, treeEsc) || has(l, treeEscBack) {
 		t.Error("Esc goes back from the first tree")
 	}
-	if l := TreeHelpFor(true); has(l, treeEsc) || !has(l, treeEscBack) {
+	if l := TreeHelpFor(true, false); has(l, treeEsc) || !has(l, treeEscBack) {
 		t.Error("Esc doesn't go back from a commit's trees")
+	}
+	untracked := func(lines []HelpLine) bool {
+		return slices.ContainsFunc(lines, func(l HelpLine) bool { return len(l.Keys) == 1 && l.Keys[0] == "??" })
+	}
+	if untracked(TreeHelpFor(false, false)) || !untracked(TreeHelpFor(false, true)) {
+		t.Error("the letters of a git status are listed only with statuses")
 	}
 	if !has(TreeHelp, treeEsc) {
 		t.Error("TreeHelp changed")

@@ -176,6 +176,12 @@ func (r *Root) lookup(rel string) (TreeEntry, error) {
 	return e, nil
 }
 
+// blobContentID returns the content ID of the file whose blob is id, of
+// format f, the same for every root of the repository.
+func blobContentID(f *Format, id ID) source.ContentID {
+	return source.ContentID{Scheme: "git-" + f.name, Sum: string(id.Bytes())}
+}
+
 // unixMode returns the mode of a file of mode m, as checked out with no
 // umask but git's.
 func unixMode(m Mode) uint32 {
@@ -299,7 +305,7 @@ func (r *Root) ContentID(rel string) (source.ContentID, bool) {
 	if err != nil || (e.Mode != ModeFile && e.Mode != ModeExecutable) {
 		return source.ContentID{}, false
 	}
-	return source.ContentID{Scheme: "git-" + r.repo.format.name, Sum: string(e.ID.Bytes())}, true
+	return blobContentID(r.repo.format, e.ID), true
 }
 
 // RepoPath returns the path of the entry at rel from the top of the

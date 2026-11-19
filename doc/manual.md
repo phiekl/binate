@@ -217,7 +217,8 @@ allowed by Git's ignore rules. Rules are read from each directory's
 global ignore file, in decreasing precedence. A deeper **.gitignore** takes
 precedence over an ancestor's. With **core.ignoreCase** set, patterns match
 ASCII letters of either case, as in Git. The global path comes from
-**core.excludesFile** set directly in the user's Git configuration, or from
+**core.excludesFile** set directly in the user's Git configuration or the
+system's, **/etc/gitconfig** unless **GIT_CONFIG_NOSYSTEM** is set, or from
 **$XDG_CONFIG_HOME/git/ignore** by default, with **~/.config** as the fallback
 for **XDG_CONFIG_HOME**. A **core.excludesFile** in the repository's own
 configuration takes precedence. The repository's file is read only within the
@@ -231,22 +232,103 @@ The index determines which paths are tracked. Versions 2 through 4 in SHA-1 and
 SHA-256 repositories are supported. A split or sparse index is reported as an
 error. As in Git, a skip-worktree entry is compared as the index records it, and
 a skip-worktree **.gitignore** missing from disk is read from the index. In a
-sparse checkout, a skip-worktree file present on disk is read from disk. A
-rescan reloads the index and the repository's ignore files as part of the new
+sparse checkout, a skip-worktree file present on disk is read from disk. A file
+marked with **git update-index --assume-unchanged** is compared as the index
+records it too, as **git diff** compares it, even in a sparse checkout and where
+deleted from disk. A **.gitignore** so marked and missing from disk adds no
+rules, as in Git. A rescan reloads the index and the repository's ignore files as part of the new
 scan, which shows an error reading them at the top. The user's global file
 outside the repository is read when the comparison starts.
 
-Files are compared by their on-disk bytes, without Git attribute filters. A
-file's executable bit is compared using the modes Git records. With
-**core.fileMode** set to false, a file's executable bit comes from the index as
-in Git, and an untracked file is not executable. Symlinks are compared by their
-targets. A checked-out submodule is compared by its HEAD when that can be read
-within the repository's top. The directory of an uninitialized submodule stands
-for its commit in the index. A submodule with no commits stands for its commit
-in the index, as in Git. An untracked directory whose **.git** is a valid git
+Files are compared by their on-disk bytes, without Git attribute filters.
+Opposite a revision or the index, a file whose size, times, inode and owner
+match those the index recorded when it was staged is unchanged since, as in Git,
+and is compared by its staged blob's ID without being read. Its stat data is
+read again for this just before it is compared. A file modified in the second
+the index was last written, or later, is read, as its times may not show a later
+change. As in Git, the second is whole. A file Git filters as it stages it, as
+for line endings, is always read, as its blob may hold other bytes than the
+disk. Its attributes tell, as Git assigns them from the repository's
+**info/attributes**, the **.gitattributes** files in its directory and those
+above it, on disk or else in the index, and the user's and the system's
+attributes files, with macros. A **core.attributesFile** in the repository's own
+configuration takes the place of the user's file. It is read only within the
+top, as the repository's excludes file is. One outside the top can't be read,
+and every file is then taken as filtered. Git filters a file where **text**, or else
+**crlf**, is set, **auto** or **input**, or is not unset and **eol** or
+**core.autoCRLF** is set. It also filters a file with **ident**,
+**working-tree-encoding** or a **filter** whose driver is configured to clean.
+Where an attributes file can't be read, every file is taken as filtered. A file
+whose blob's size is not its own is read too, as filters that applied when it
+was staged, and no longer, would change it. Nothing records which filters
+applied when a file was staged, and a filter that keeps a file's size and no
+longer applies can leave a difference unseen. **git status** misses it too,
+unless the file was modified in the second the index was last written. A file's
+executable bit is compared using the modes Git records. With **core.fileMode**
+set to false, a file's executable bit comes from the index as in Git, and an
+untracked file is not executable. Symlinks are compared by their targets. A
+checked-out submodule is compared by its HEAD when that can be read within the
+repository's top. The directory of an uninitialized submodule stands for its
+commit in the index. A submodule with no commits stands for its commit in the
+index, as in Git. An untracked directory whose **.git** is a valid git
 directory, a symlink to one or a file naming one is shown as a submodule at its
 HEAD, with **(no commits)** if it has none, as Git shows it as one entry. Both
 sides of the comparison are read-only.
+
+### Status
+
+Each entry of the work tree shows its status before its type, in the two letters
+**git status --short** gives it. The first says what is staged in the index
+against **HEAD**, in green, and the second what changed on disk since and is not
+staged, in red. A blank letter is no change.
+
+- **A**: added.
+- **M**: modified, in contents or executable bit.
+- **D**: deleted.
+- **T**: type changed, as a file replaced by a symlink.
+- **??**: untracked, in red. An untracked directory has it, as does everything
+  below it.
+- **DD**, **AU**, **UD**, **UA**, **DU**, **AA**, **UU**: unmerged, in red, as
+  Git names a conflict. **UU** is a file both sides of a merge modified.
+
+An entry with no status, a tracked directory or an unchanged file, shows nothing
+there. Where a side has no entry, its empty cell says the status in words,
+dimmed. A file deleted from disk has **deleted, not staged** after its letters
+on the work tree side where the **D** is second, and **deleted, staged** where
+it is first. A file not in the revision has its status in words on the
+revision's side, as **untracked** or **added, staged**. Below an untracked
+directory, only the directory says it is untracked. The panel of the work tree
+side says the status in words too, in a **git** row (see [Panels](#panels)). The
+status bar counts the entries with something staged, not staged, untracked and
+unmerged, and **?** lists the letters.
+
+Statuses are always against **HEAD**, as **git status** gives them, whichever
+revision is opposite the work tree. An entry with a status is shown even where
+the two sides are the same, as a file whose deletion is staged while it is kept
+on disk, along with the directories leading to it. It is not hidden as
+identical, nor left out of a filter of differences. An entry on neither side, as
+one in **HEAD** but not in an older revision, staged for deletion, or a file
+added to the index and then deleted from disk, is shown for its status. Its type
+and name are dimmed on the work tree's side, with no mark, and the other side
+says its status in words. It counts only by its status in the status bar.
+Entries recorded below a file staged in place of a directory are shown below it,
+and the file can be expanded as a directory is.
+
+A file whose size, times, inode and owner on disk match those the index recorded
+when it was staged is not read, as in Git. Any other is hashed as Git would hash
+it, without attribute filters, and compared with the index, and a rescan stops
+the hashing. A file modified in the second the index was last written, or later,
+is read, as it may have changed again since it was staged without its times
+showing it. A file Git may filter as it stages it (see [Work tree](#work-tree))
+is read only if modified at or after the moment, to the nanosecond, the index
+was last written. Its unfiltered bytes can't show it unchanged where Git, which
+filters it, would. A file in place of a tracked directory is untracked, and a
+directory staged in place of a file in **HEAD** has the file's deletion.
+**HEAD** and the index are read again on each rescan. Renames are not looked
+for, and a renamed file is deleted at its old path and added at its new one, as
+with **git status --no-renames**. A submodule's status follows its checked-out
+commit, not changes inside it. As in Git, a file marked with **git update-index
+--assume-unchanged** has no unstaged change, even where deleted from disk.
 
 ### Index
 
@@ -415,10 +497,11 @@ and **?** (one that could not be read), in the colours **ls** gives them by
 default, an executable file in green. A directory has a **▸** or **▾** before
 its name and a **/** after it. A symlink shows its target after **->**, and a
 submodule the first 12 digits of its commit after **@**, or **(no commits)** for
-a repository in the work tree with none yet. The mark (see [Marks](#marks)) is
-shown once per row, in a column of its own between the two boxes. The bottom
-border of each box shows the selected row and the number of rows shown, as
-**3/12**.
+a repository in the work tree with none yet. In a git work tree, the letters of
+each entry's status come before the type (see [Status](#status)). The mark (see
+[Marks](#marks)) is shown once per row, in a column of its own between the two
+boxes. The bottom border of each box shows the selected row and the number of
+rows shown, as **3/12**.
 
 Once the initial scan finishes, all directories expand, including one-sided
 ones. Identical entries start hidden. Directories with differences below them
@@ -431,18 +514,20 @@ whose contents differ, or of a file on one side only (see [Preview](#preview)).
 The status bar counts the pairs of the whole tree, each count in brackets and in
 the colour of its mark, leaving out those that are zero, as **[23523 items
 total] [23500 identical] [3 left] [5 right] [5 type] [4 contents] [2 attrs] [30
-mtime]**, then **unverified** and **pending**. The total counts each pair once,
-except directories present on both sides and nonempty one-sided directories,
-whose contents are counted instead. Each kind of difference counts the pairs
-that differ in it, so a pair that differs in more than one counts under each,
-and a directory on both sides counts under its own attributes. While a scan
-runs, a centered white-on-blue box replaces the status bar. Beside a spinner, it
-shows the number of entries read so far, the elapsed time, and the directory or
-file being read, relative to the roots. Entries are counted as they are read.
-The total is unknown until the scan finishes, so no percentage is shown. Short
-terminals leave out the path. Tree rows and entry panels are drawn once the scan
-finishes, when the box disappears and the status bar returns. Rescanning shows
-the box again and keeps the selection and expansion by path.
+mtime]**, then **unverified** and **pending**, and for a git work tree
+**staged**, **unstaged**, **untracked** and **unmerged** (see
+[Status](#status)). The total counts each pair once, except directories present
+on both sides and nonempty one-sided directories, whose contents are counted
+instead. Each kind of difference counts the pairs that differ in it, so a pair
+that differs in more than one counts under each, and a directory on both sides
+counts under its own attributes. While a scan runs, a centered white-on-blue box
+replaces the status bar. Beside a spinner, it shows the number of entries read
+so far, the elapsed time, and the directory or file being read, relative to the
+roots. Entries are counted as they are read. The total is unknown until the scan
+finishes, so no percentage is shown. Short terminals leave out the path. Tree
+rows and entry panels are drawn once the scan finishes, when the box disappears
+and the status bar returns. Rescanning shows the box again and keeps the
+selection and expansion by path.
 
 - **j**, **Down** / **k**, **Up**: Move the selection down or up.
 
@@ -533,9 +618,12 @@ per row:
 
 A work tree compared with a git revision shows the path, type, size, mode and
 mtime, leaving out the owner, links, inode and other times, which Git neither
-records nor compares. A side in a git revision shows only the path, type, size
-and mode, which is all git records, and then, if the revision names a commit,
-the commit that last changed the entry, found in the background:
+records nor compares. After the path, a **git** row says the entry's status in
+words, as **modified, not staged** or **added, staged, then modified, not
+staged**, and **modified, partly staged** for **MM** (see [Status](#status)). A
+side in a git revision shows only the path, type, size and mode, which is all
+git records, and then, if the revision names a commit, the commit that last
+changed the entry, found in the background:
 
 - **commit**: its object name.
 - **author**: who made the change, by name and email, as **git show** shows it.
@@ -1013,6 +1101,9 @@ The keys of **BINATE_COLORS**, with their defaults:
 - **rightonly** (34): the **>** mark.
 - **unverified** (35): the **?** mark.
 - **type** (1;31): the **!** mark.
+- **staged** (32): the first letter of a git status, what is staged.
+- **unstaged** (31): the second letter of a git status, what is not staged, and
+  both letters of an untracked or unmerged entry.
 - **changedbg**, **leftonlybg**, **rightonlybg**: the background of a line in
   the diff view marked **|**, **<** or **>**: dark yellow, green and blue. Tree
   rows have no background by state.

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/source"
 )
 
 // build makes a tree from lines of "mark path", in tree order, where a path
@@ -533,5 +534,63 @@ func TestIgnored(t *testing.T) {
 	}
 	if c, want := Count(root), (Counts{Total: 7, Same: 4, Data: 2, Unverified: 1}); c != want {
 		t.Errorf("Count = %+v, want %+v", c, want)
+	}
+}
+
+func TestStatuses(t *testing.T) {
+	root := build(`
+= kept/
+= kept/f
+= plain/
+= plain/g
+| changed
+> new
+> untracked/
+> untracked/a
+> untracked/b
+< gone
+= top
+`)
+	set := func(p, st string) { root.Find(p).Status = source.Status{Staged: st[0], Unstaged: st[1]} }
+	set("kept/f", "D ")
+	set("changed", "MM")
+	set("new", "A ")
+	set("untracked", "??")
+	set("untracked/a", "??")
+	set("untracked/b", "??")
+	set("gone", " D")
+	root.Find("top").Status = source.Status{Staged: ' ', Unstaged: ' '}
+	scan.Aggregate(root)
+	m := New(root)
+	m.ExpandAll()
+	// Identical entries with a status are shown, and their directories.
+	if got, want := paths(m.Rows()), "kept\n kept/f\nchanged\nnew\nuntracked\n untracked/a\n untracked/b\ngone"; got != want {
+		t.Errorf("rows:\n%s\nwant:\n%s", got, want)
+	}
+	m.Filtered, m.DiffsOnly = true, true
+	if got, want := paths(m.Rows()), "kept/f\nchanged\nnew\nuntracked\nuntracked/a\nuntracked/b\ngone"; got != want {
+		t.Errorf("diffs only:\n%s\nwant:\n%s", got, want)
+	}
+	gone := &scan.Node{Name: "gone", Parent: root, State: scan.Same, Gone: scan.File, Status: source.Status{Staged: 'D', Unstaged: ' '}}
+	root.Children = append(root.Children, gone)
+	c := Count(root)
+	// What is gone from both sides counts by its status alone.
+	if c.Staged != 4 || c.Unstaged != 2 || c.Untracked != 2 || c.Unmerged != 0 || c.Same != 3 || c.Total != 8 {
+		t.Errorf("Count = %+v", c)
+	}
+	set("changed", "UU")
+	if c := Count(root); c.Unmerged != 1 || c.Staged != 3 || c.Unstaged != 1 {
+		t.Errorf("Count with a conflict = %+v", c)
+	}
+}
+
+func TestCountFileWithEntriesBelow(t *testing.T) {
+	// A file on one side, with entries gone from both below it, counts as
+	// a file, and they by their statuses.
+	root := build("> repl")
+	repl := root.Find("repl")
+	repl.Children = []*scan.Node{{Name: "old", Parent: repl, State: scan.Same, Gone: scan.File, Status: source.Status{Staged: 'D', Unstaged: ' '}}}
+	if c := Count(root); c.Total != 1 || c.RightOnly != 1 || c.Staged != 1 {
+		t.Errorf("Count = %+v", c)
 	}
 }

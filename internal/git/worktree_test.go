@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 
+	"pxy.se/go/binate/internal/scan"
 	"pxy.se/go/binate/internal/source"
 )
 
@@ -577,6 +578,64 @@ func TestWorkTreeSkipWorktree(t *testing.T) {
 	tree = openWorkTreeTest(t, r, GlobalIgnore{})
 	if got := readWorkFile(t, tree, "second/f"); got != "on disk" {
 		t.Errorf("present skip-worktree file = %q", got)
+	}
+}
+
+// TestWorkTreeAssumeUnchanged checks that a file marked with git
+// update-index --assume-unchanged is compared as the index records it, as
+// git diff does, however it changed on disk, but for a .gitignore deleted,
+// whose rules Git no longer reads.
+func TestWorkTreeAssumeUnchanged(t *testing.T) {
+	r := newTestRepo(t, SHA1)
+	r.write(map[string]string{"mod": "mod\n", "del": "del\n", "exe": "exe\n", "dir/only": "only\n", "kept": "kept\n", ".gitignore": "x.log\n"})
+	r.commit()
+	r.git("update-index", "--assume-unchanged", "mod", "del", "exe", "dir/only", ".gitignore")
+	r.write(map[string]string{"mod": "changed\n", "kept": "changed\n", "x.log": "x\n"})
+	for _, name := range []string{"del", "dir", ".gitignore"} {
+		if err := os.RemoveAll(filepath.Join(r.dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(filepath.Join(r.dir, "exe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("diff", "HEAD", "--name-only"); got != "kept\n" {
+		t.Fatalf("git diff HEAD --name-only = %q", got)
+	}
+
+	tree := openWorkTreeTest(t, r, GlobalIgnore{})
+	all := r.git("ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	want := strings.Split(strings.TrimSuffix(all, "\x00"), "\x00")
+	slices.Sort(want)
+	if got := workFiles(t, tree); !slices.Equal(got, want) {
+		t.Errorf("visible paths = %q, git shows %q", got, want)
+	}
+	if got := readWorkFile(t, tree, "mod"); got != "mod\n" {
+		t.Errorf("modified file = %q", got)
+	}
+	if e, err := tree.Entry("exe", false); err != nil || e.Mode != 0o100644 {
+		t.Errorf("file made executable = %+v, %v", e, err)
+	}
+	s := scan.Start(headRoot(t, r), tree, scan.Options{Compare: scan.DefaultAttrs &^ (scan.Owner | scan.Mtime)}, nil)
+	s.Wait()
+	for p, want := range map[string]scan.State{
+		"mod": scan.Same, "del": scan.Same, "exe": scan.Same, "dir/only": scan.Same, ".gitignore": scan.Same,
+		"kept": scan.Differ, "x.log": scan.RightOnly,
+	} {
+		if n := s.Root.Find(p); n == nil || n.State != want {
+			t.Errorf("%s: %+v, want %c", p, n, want.Mark())
+		}
+	}
+
+	// In a sparse checkout too, where a skip-worktree file on disk is
+	// read from it.
+	r.git("sparse-checkout", "set", "--cone", "--no-sparse-index")
+	if got := r.git("diff", "HEAD", "--name-only", "--", "mod"); got != "" {
+		t.Fatalf("git diff HEAD --name-only -- mod = %q", got)
+	}
+	tree = openWorkTreeTest(t, r, GlobalIgnore{})
+	if got := readWorkFile(t, tree, "mod"); got != "mod\n" {
+		t.Errorf("modified file in a sparse checkout = %q", got)
 	}
 }
 

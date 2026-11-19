@@ -63,7 +63,9 @@ contents. Two revisions of Linux compare in about 0.2 seconds.
 Give `.` on either side to compare a revision with the work tree on disk.
 The right side defaults to the work tree, and the left defaults to `HEAD`.
 Binate starts at the repository's top and includes tracked files and untracked
-files that Git's ignore rules allow.
+files that Git's ignore rules allow. Each of them shows its status, as
+`git status --short` does, with `A`, `M`, `D` and `??` telling what is staged,
+what isn't and what is untracked.
 
 Give `:` for the index, which holds what is staged. `agitate --cached` compares
 `HEAD` with the index, as `git diff --cached` does, and `agitate :` compares the

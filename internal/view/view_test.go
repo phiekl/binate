@@ -1217,3 +1217,150 @@ func TestTreeSubmodule(t *testing.T) {
 		t.Errorf("panes:\n%q\nwant lib @ (no commits)", got)
 	}
 }
+
+func TestTreeStatuses(t *testing.T) {
+	root := &scan.Node{L: scan.Side{Kind: scan.Dir}, R: scan.Side{Kind: scan.Dir}, State: scan.Differ}
+	add := func(name, status string, state scan.State, l, r scan.Kind) *scan.Node {
+		n := &scan.Node{Name: name, Parent: root, State: state, L: scan.Side{Kind: l}, R: scan.Side{Kind: r}}
+		if status != "" {
+			n.Status = source.Status{Staged: status[0], Unstaged: status[1]}
+		}
+		root.Children = append(root.Children, n)
+		return n
+	}
+	add("added", "A ", scan.RightOnly, scan.Missing, scan.File)
+	add("changed", " M", scan.Differ, scan.File, scan.File)
+	add("new", "??", scan.RightOnly, scan.Missing, scan.File)
+	add("same", "", scan.Same, scan.File, scan.File)
+	add("staged", "D ", scan.LeftOnly, scan.File, scan.Missing)
+	add("unstaged", " D", scan.LeftOnly, scan.File, scan.Missing)
+	scan.Aggregate(root)
+	m := tree.New(root)
+	m.ShowSame = true
+	v := &TreeView{Styles: colors.Default(), Left: "HEAD", Right: "/r", Statuses: true, StatusRight: true}
+	scr := term.NewScreen(80, 9)
+	v.Draw(scr, m, TreeStatus{})
+	want := ` added, staged                       >  A  file │   added
+ file │   changed                    |   M file │   changed
+ untracked                           >  ?? file │   new
+ file │   same                       =     file │   same
+ file │   staged                     <  D  deleted, staged
+ file │   unstaged                   <   D deleted, not staged
+`
+	if got := panes(scr); got != want {
+		t.Errorf("panes:\n%s\nwant:\n%s", got, want)
+	}
+	wide := term.NewScreen(120, 9)
+	v.Draw(wide, m, TreeStatus{})
+	if got := lastLine(wide); !strings.Contains(got, "[2 staged] [2 unstaged] [1 untracked]") {
+		t.Errorf("status bar: %q", got)
+	}
+	// The letters in git's colours: staged in green, the rest in red.
+	p := Layout(scr.W)
+	for y, want := range map[int][2]string{1: {"32", ""}, 2: {"", "31"}, 3: {"31", "31"}} {
+		for i, w := range want {
+			// The first row is selected, over a background.
+			if c := scr.Cell(p.RightX+1+i, y); w != "" && strings.Split(c.Style.SGR, ";")[0] != w {
+				t.Errorf("row %d letter %d style %q, want %q", y, i, c.Style.SGR, w)
+			}
+		}
+	}
+
+	// Below an untracked directory, the entries are said to be at the
+	// directory alone.
+	untracked := source.Status{Staged: '?', Unstaged: '?'}
+	other := &scan.Node{L: scan.Side{Kind: scan.Dir}, R: scan.Side{Kind: scan.Dir}, State: scan.Differ}
+	dir := &scan.Node{Name: "untr", Parent: other, State: scan.RightOnly, R: scan.Side{Kind: scan.Dir}, Status: untracked}
+	dir.Children = []*scan.Node{{Name: "f", Parent: dir, State: scan.RightOnly, R: scan.Side{Kind: scan.File}, Status: untracked}}
+	other.Children = []*scan.Node{dir}
+	scan.Aggregate(other)
+	um := tree.New(other)
+	um.ExpandAll()
+	scr = term.NewScreen(80, 9)
+	v.Draw(scr, um, TreeStatus{})
+	want = ` untracked                           >  ??  dir │ ▾ untr/
+                                     >  ?? file │     f
+`
+	if got := strings.TrimRight(panes(scr), "\n") + "\n"; got != want {
+		t.Errorf("untracked directory:\n%s\nwant:\n%s", got, want)
+	}
+
+	// Gone from both sides: shown dimmed on the work tree's, its status
+	// in words on the other, with no mark.
+	goneRoot := &scan.Node{L: scan.Side{Kind: scan.Dir}, R: scan.Side{Kind: scan.Dir}, State: scan.Same}
+	goneDir := &scan.Node{Name: "dir", Parent: goneRoot, State: scan.Same, Gone: scan.Dir}
+	goneDir.Children = []*scan.Node{{Name: "f", Parent: goneDir, State: scan.Same, Gone: scan.File, Status: source.Status{Staged: 'D', Unstaged: ' '}}}
+	goneRoot.Children = []*scan.Node{goneDir}
+	scan.Aggregate(goneRoot)
+	gm := tree.New(goneRoot)
+	gm.ExpandAll()
+	scr = term.NewScreen(80, 9)
+	v.Draw(scr, gm, TreeStatus{})
+	want = `                                            dir │ ▾ dir/
+ deleted, staged                        D  file │     f
+`
+	if got := strings.TrimRight(panes(scr), "\n") + "\n"; got != want {
+		t.Errorf("gone entries:\n%s\nwant:\n%s", got, want)
+	}
+	for x := Layout(80).RightX + statusWidth + typeColumn; x < 80; x++ {
+		if c := scr.Cell(x, 2); c.R == 'f' {
+			if c.Style.SGR != colors.Default().Border.SGR {
+				t.Errorf("gone name in %q, want dimmed", c.Style.SGR)
+			}
+			break
+		}
+	}
+
+	// On the left, as for the work tree compared with a revision.
+	v.StatusRight = false
+	scr = term.NewScreen(80, 9)
+	v.Draw(scr, m, TreeStatus{})
+	if got := strings.SplitAfter(panes(scr), "\n")[1]; got != "  M file │   changed                 |  file │   changed\n" {
+		t.Errorf("left statuses: %q", got)
+	}
+}
+
+func TestStatusText(t *testing.T) {
+	for _, tc := range []struct {
+		status  string
+		present bool
+		want    string
+	}{
+		{"", true, ""},
+		{"  ", true, ""},
+		{"??", true, "untracked"},
+		{"UU", true, "unmerged, both modified"},
+		{"DU", false, "unmerged, deleted by us"},
+		{"A ", true, "added, staged"},
+		{" M", true, "modified, not staged"},
+		{"MM", true, "modified, partly staged"},
+		{"AD", false, "added, staged, then deleted, not staged"},
+		{"D ", false, "deleted, staged"},
+		{"D ", true, "deleted, staged, kept untracked"},
+		{" T", true, "type changed, not staged"},
+		{" A", true, "added, not staged"},
+	} {
+		var st source.Status
+		if tc.status != "" {
+			st = source.Status{Staged: tc.status[0], Unstaged: tc.status[1]}
+		}
+		if got := StatusText(st, tc.present); got != tc.want {
+			t.Errorf("StatusText(%q, %v) = %q, want %q", tc.status, tc.present, got, tc.want)
+		}
+	}
+}
+
+func TestNodeStatusText(t *testing.T) {
+	deleted := source.Status{Staged: 'D', Unstaged: ' '}
+	for kind, want := range map[scan.Kind]string{
+		scan.File:    "deleted, staged, kept untracked",
+		scan.Missing: "deleted, staged",
+		// A directory staged in place of the file doesn't keep it.
+		scan.Dir: "deleted, staged",
+	} {
+		n := &scan.Node{L: scan.Side{Kind: scan.File}, R: scan.Side{Kind: kind}, Status: deleted}
+		if got := NodeStatusText(n, true); got != want {
+			t.Errorf("%v on disk: %q, want %q", kind, got, want)
+		}
+	}
+}

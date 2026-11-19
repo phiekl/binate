@@ -115,8 +115,12 @@ pseudo-terminals and skip without them.
   what is below them, and reporting contents never read, each attribute compared
   or not, on files, symlinks and directories, the marks for each kind of
   difference, directories marked by their own attributes alone, including after
-  a re-check, cancelling, the path last read, and re-checking an entry after it
-  is edited, replaced by rename, or deleted on one or both sides.
+  a re-check, cancelling, the path last read, re-checking an entry after it is
+  edited, replaced by rename, or deleted on one or both sides, and statuses read
+  for every entry of the side having them, left or right, with or without its
+  entry, and again on a re-check, and entries recorded on neither side added,
+  unmarked, except those excluded, and listed below a file that has some
+  recorded below it.
 - **source:** reading through `source.Disk`: paths joined to the root, listing,
   symlinks followed only when asked, missing entries, and opening files, and the
   action cache keeping results only of files on disk, whose versions it can
@@ -138,8 +142,31 @@ pseudo-terminals and skip without them.
   and configuration and revisions never panics.
 - **git work tree:** path visibility checked against Git across index versions
   and hash formats, nested and global ignore rules, tracked paths in ignored
-  directories, unsupported indexes, rescans, and symlink confinement. Terminal
-  tests open the diff on a file whose staged and on-disk contents differ.
+  directories, unsupported indexes, rescans, and symlink confinement. Each
+  path's status is checked against **git status --porcelain** in both hash
+  formats, for staged and unstaged changes, deletions, type changes, untracked
+  and intent-to-add files, a conflict, a file rewritten unchanged and a file in
+  place of a tracked directory, a directory staged in place of a file, and a
+  file changed as the index was written is read, as is one modified earlier in
+  the second the index was written. Files unchanged since staged, and
+  skip-worktree files, have their blob's ID, and changed and intent-to-add files
+  have none, and a scan against HEAD reads the changed ones and finds them
+  different. Files have no ID where core.autoCRLF or attributes that filter apply, from
+  their directory or above it, tracked or not, info/attributes or outside the
+  repository, which the system's configuration may name, as Git assigns them,
+  with later lines, deeper files and info/attributes taking precedence, macros
+  defined at the top only, quoted patterns, and filter drivers only where
+  configured, but do where attributes only set diff drivers, are unset or
+  unspecified, or match other paths. A file filtered as staged and modified
+  earlier in the second the index was written is unchanged, as in Git, and is
+  read once attributes no longer filter it, and a
+  CRLF file committed as text differs from its LF blob, also once the attributes
+  are removed, by its blob's size, and core.autoCRLF given as a key alone is on.
+  A rescan finds HEAD again after a commit with packed refs, hashing stops once
+  canceled, and against an older revision, entries staged for deletion or added
+  and then deleted are found on neither side, and those of a directory a staged
+  file replaced below the file, also once it is deleted. Terminal tests open the
+  diff on a file whose staged and on-disk contents differ.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,
@@ -147,7 +174,9 @@ pseudo-terminals and skip without them.
   entries hidden from the rows, the filter, jumps, search and counts, the filter
   and diffs-only mode, searching forward and back with wrapping, into collapsed
   directories but not hidden identical entries, the selection after a rescan,
-  and counting.
+  counting, and entries with a git status shown though identical, with their
+  directories and in diffs-only mode, and counted by status, those on neither
+  side by status alone, and a one-sided file with entries below it as a file.
 - **app:** expanding the initial tree after the scan finishes, leaving
   directories collapsed while loading and preserving later collapses. Enter on a
   directory in the filter results reveals it without collapsing it. Edit tests
@@ -188,7 +217,11 @@ pseudo-terminals and skip without them.
   and rules between the columns, its sections with their titles between lines
   joining the rules, the selected row and moving it past titles and lines, and
   the keys it lists, with Ctrl+c in both and Esc in the diff view's only when
-  opened from a tree, the Edit popup drawn like Help without rules, its
+  opened from a tree, and the letters of a git status only with statuses, git
+  statuses before the types on either side in git's colours, said in words in an
+  empty cell on either side, once for an untracked directory, entries on neither
+  side dimmed, a deleted file kept untracked only by a file in its place, and in
+  the panel's git row, the Edit popup drawn like Help without rules, its
   selection over the path alone, with escaped and shortened paths, the Compare
   popup's rows, their boxes and highlighted letters, the diff view's panels
   following the set, the red error popup with its text wrapped at spaces, at 80

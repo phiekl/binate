@@ -100,9 +100,10 @@ func (m *Model) Rows() []Row {
 }
 
 // shown reports whether n is shown, unless in a collapsed directory: an
-// ignored entry never is, nor what is below it.
+// ignored entry never is, nor what is below it. One with a status, or a
+// directory with one below it, is shown as a difference is.
 func (m *Model) shown(n *scan.Node) bool {
-	return n.State != scan.Ignored && (m.ShowSame || n.State != scan.Same)
+	return n.State != scan.Ignored && (m.ShowSame || n.State != scan.Same || n.HasStatus())
 }
 
 func (m *Model) walk(n *scan.Node, depth int) {
@@ -111,7 +112,7 @@ func (m *Model) walk(n *scan.Node, depth int) {
 			continue
 		}
 		m.rows = append(m.rows, Row{Node: c, Depth: depth})
-		if c.IsDir() && m.Expanded(c) {
+		if c.HasEntries() && m.Expanded(c) {
 			m.walk(c, depth+1)
 		}
 	}
@@ -119,7 +120,7 @@ func (m *Model) walk(n *scan.Node, depth int) {
 
 // Matches reports whether n is a filter result.
 func (m *Model) Matches(n *scan.Node) bool {
-	if m.DiffsOnly && n.State == scan.Same {
+	if m.DiffsOnly && n.State == scan.Same && n.Status.IsZero() {
 		return false
 	}
 	return m.queryRe.match(m.Query, m.Literal, n.Name)
@@ -218,7 +219,7 @@ func (m *Model) MoveTo(top bool) {
 
 // Expand expands the selected directory.
 func (m *Model) Expand() {
-	if n := m.SelectedNode(); n != nil && n.IsDir() && !m.Filtered {
+	if n := m.SelectedNode(); n != nil && n.HasEntries() && !m.Filtered {
 		m.expanded[n.Path()] = true
 	}
 }
@@ -226,7 +227,7 @@ func (m *Model) Expand() {
 // ExpandSubtree expands the selected directory and all directories below
 // it, including one-sided directories. Unrelated directories stay as they are.
 func (m *Model) ExpandSubtree() {
-	if n := m.SelectedNode(); n != nil && n.IsDir() && !m.Filtered {
+	if n := m.SelectedNode(); n != nil && n.HasEntries() && !m.Filtered {
 		m.expanded[n.Path()] = true
 		m.expandChildren(n)
 	}
@@ -239,7 +240,7 @@ func (m *Model) Collapse() {
 	if n == nil || m.Filtered {
 		return
 	}
-	if n.IsDir() && m.Expanded(n) {
+	if n.HasEntries() && m.Expanded(n) {
 		delete(m.expanded, n.Path())
 		return
 	}
@@ -257,7 +258,7 @@ func (m *Model) CollapseSubtree() {
 	if n == nil || m.Filtered {
 		return
 	}
-	if !n.IsDir() {
+	if !n.HasEntries() {
 		if n.Parent == nil || n.Parent.Parent == nil {
 			return
 		}
@@ -275,7 +276,7 @@ func (m *Model) CollapseSubtree() {
 // Toggle expands or collapses the selected directory.
 func (m *Model) Toggle() {
 	n := m.SelectedNode()
-	if n == nil || !n.IsDir() || m.Filtered {
+	if n == nil || !n.HasEntries() || m.Filtered {
 		return
 	}
 	m.expanded[n.Path()] = !m.Expanded(n)
@@ -288,7 +289,7 @@ func (m *Model) ExpandAll() {
 
 func (m *Model) expandChildren(n *scan.Node) {
 	for _, c := range n.Children {
-		if c.IsDir() {
+		if c.HasEntries() {
 			m.expanded[c.Path()] = true
 			m.expandChildren(c)
 		}
@@ -312,7 +313,7 @@ func (m *Model) Reveal(n *scan.Node) {
 	for p := n.Parent; p != nil && p.Parent != nil; p = p.Parent {
 		m.expanded[p.Path()] = true
 	}
-	if n.State == scan.Same {
+	if n.State == scan.Same && !n.HasStatus() {
 		m.ShowSame = true
 	}
 	m.Select(n)
@@ -475,6 +476,9 @@ type Counts struct {
 	Same, LeftOnly, RightOnly int
 	Type, Data, Meta, Mtime   int
 	Unverified, Pending       int
+	// Staged, Unstaged, Untracked and Unmerged count the entries by
+	// status, but directories, whose entries are counted.
+	Staged, Unstaged, Untracked, Unmerged int
 }
 
 // Count counts the pairs below root.
@@ -494,10 +498,11 @@ func Count(root *scan.Node) Counts {
 	var walk func(*scan.Node)
 	walk = func(n *scan.Node) {
 		for _, ch := range n.Children {
-			if ch.State == scan.Ignored {
+			// One gone from both sides is shown for its status alone.
+			if ch.State == scan.Ignored || ch.Gone != scan.Missing {
 				continue
 			}
-			oneSidedDir := (ch.State == scan.LeftOnly || ch.State == scan.RightOnly) && len(ch.Children) > 0
+			oneSidedDir := (ch.State == scan.LeftOnly || ch.State == scan.RightOnly) && ch.IsDir() && len(ch.Children) > 0
 			if ch.BothDirs() {
 				own(ch.Own)
 				walk(ch)
@@ -530,5 +535,34 @@ func Count(root *scan.Node) Counts {
 		}
 	}
 	walk(root)
+	countStatuses(root, &c)
 	return c
+}
+
+// countStatuses counts the entries below n by status into c.
+func countStatuses(n *scan.Node, c *Counts) {
+	for _, ch := range n.Children {
+		if ch.State == scan.Ignored {
+			continue
+		}
+		countStatuses(ch, c)
+		st := ch.Status
+		switch {
+		case st.IsZero():
+		case st.Unmerged():
+			c.Unmerged++
+		case st.Untracked():
+			// An untracked directory's entries are.
+			if len(ch.Children) == 0 {
+				c.Untracked++
+			}
+		default:
+			if st.Staged != ' ' {
+				c.Staged++
+			}
+			if st.Unstaged != ' ' {
+				c.Unstaged++
+			}
+		}
+	}
 }

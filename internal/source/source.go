@@ -82,6 +82,10 @@ type Entry struct {
 	Mtime time.Time
 	// Target is a symlink's target, or a submodule's commit.
 	Target string
+	// Ino and Ctime are the inode and status change time of an entry on
+	// disk, which a work tree's status compares, or zero.
+	Ino   uint64
+	Ctime time.Time
 }
 
 // File is an open regular file.
@@ -188,7 +192,7 @@ func (d Disk) Entry(rel string, follow bool) (Entry, error) {
 	}
 	e := Entry{
 		Mode: st.Mode, Size: st.Size, Uid: st.Uid, Gid: st.Gid, Rdev: st.Rdev,
-		Mtime: time.Unix(st.Mtim.Unix()),
+		Mtime: time.Unix(st.Mtim.Unix()), Ino: st.Ino, Ctime: time.Unix(st.Ctim.Unix()),
 	}
 	if st.Mode&unix.S_IFMT == unix.S_IFLNK {
 		e.Target, err = os.Readlink(p)
@@ -216,4 +220,65 @@ func (d Disk) Open(rel string, follow bool) (File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// Status is an entry's state in a version control system's work tree, as
+// git status --short gives it: Staged is the letter of what is staged
+// against the last commit, and Unstaged of what is not, each ' ' for
+// nothing. An untracked entry is "??", and an unmerged one has the letters
+// of its conflict, as "UU". The zero Status is none: an entry that is
+// neither, or one not compared.
+type Status struct {
+	Staged, Unstaged byte
+}
+
+// IsZero reports whether s is no status: none to show.
+func (s Status) IsZero() bool {
+	return s.Staged == 0 && s.Unstaged == 0 || s.Staged == ' ' && s.Unstaged == ' '
+}
+
+// String returns the two letters, as git status --short shows them, or ""
+// for none.
+func (s Status) String() string {
+	if s.IsZero() {
+		return ""
+	}
+	return string([]byte{s.Staged, s.Unstaged})
+}
+
+// Untracked reports whether s is of an untracked entry.
+func (s Status) Untracked() bool { return s.Staged == '?' && s.Unstaged == '?' }
+
+// Unmerged reports whether s is of an entry with a merge conflict.
+func (s Status) Unmerged() bool {
+	switch s.String() {
+	case "DD", "AU", "UD", "UA", "DU", "AA", "UU":
+		return true
+	}
+	return false
+}
+
+// Statuses is a Root whose entries have a Status, as a git work tree's
+// files are staged or not.
+type Statuses interface {
+	Root
+	// Status returns the status of the entry at rel, given as Entry read
+	// it, or nil if the root has none: one it has not may have a status
+	// still, as a file deleted. It may read a file's contents, until ctx
+	// is canceled.
+	Status(ctx context.Context, rel string, e *Entry) (Status, error)
+	// Recorded returns the entries the directory at rel holds as recorded
+	// apart from the root, as in a commit or index, which the root may
+	// not list but may have a status, as a file deleted.
+	Recorded(rel string) []Recorded
+}
+
+// Recorded is an entry as Statuses records it: its name and the type
+// bits of its mode, as st_mode's, and whether entries are recorded below
+// it, as for a directory, whatever its mode, as for a file staged in place
+// of one.
+type Recorded struct {
+	Name  string
+	Mode  uint32
+	Below bool
 }

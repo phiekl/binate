@@ -215,7 +215,7 @@ func (x *IndexRoot) ContentID(rel string) (source.ContentID, bool) {
 	if err != nil || dir || (e.mode != ModeFile && e.mode != ModeExecutable) {
 		return source.ContentID{}, false
 	}
-	return source.ContentID{Scheme: "git-" + x.repo.format.name, Sum: string(e.id.Bytes())}, true
+	return blobContentID(x.repo.format, e.id), true
 }
 
 // RepoPath returns the path of the entry at rel from the top of the

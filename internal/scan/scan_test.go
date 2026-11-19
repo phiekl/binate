@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -695,5 +696,166 @@ func TestContentIDs(t *testing.T) {
 	s.Wait()
 	if n := s.Root.Find("same"); n.State != Unverified {
 		t.Errorf("other scheme: %c", n.State.Mark())
+	}
+}
+
+// statusRoot is a root on disk whose entries have the statuses in
+// statuses, by path, each listed or not as listed records.
+type statusRoot struct {
+	source.Disk
+	statuses map[string]string
+	listed   *sync.Map
+	// recorded are the entries recorded in each directory.
+	recorded map[string][]source.Recorded
+}
+
+func (r statusRoot) Recorded(rel string) []source.Recorded { return r.recorded[rel] }
+
+func (r statusRoot) Status(_ context.Context, rel string, e *source.Entry) (source.Status, error) {
+	r.listed.Store(rel, e != nil)
+	st := r.statuses[rel]
+	if st == "" {
+		return source.Status{}, nil
+	}
+	return source.Status{Staged: st[0], Unstaged: st[1]}, nil
+}
+
+func TestStatuses(t *testing.T) {
+	left := tree(t, map[string]string{"same": "x", "gone": "x", "kept/f": "x", "plain/f": "x"})
+	right := statusRoot{
+		Disk:     source.Disk(tree(t, map[string]string{"same": "x", "new/f": "x", "kept/f": "x", "plain/f": "x"})),
+		statuses: map[string]string{"gone": " D", "new": "??", "new/f": "??", "kept/f": "D "},
+		listed:   new(sync.Map),
+	}
+	s := Start(source.Disk(left), right, Options{}, nil)
+	s.Wait()
+	if right, ok := s.StatusSide(); !right || !ok {
+		t.Errorf("StatusSide = %v, %v", right, ok)
+	}
+	for p, want := range map[string]string{"same": "", "gone": " D", "new": "??", "new/f": "??", "kept/f": "D ", "plain/f": "", "kept": ""} {
+		if got := s.Root.Find(p).Status.String(); got != want {
+			t.Errorf("status of %s = %q, want %q", p, got, want)
+		}
+	}
+	// A path the side has not is asked about without an entry.
+	for p, want := range map[string]bool{"gone": false, "same": true, "new/f": true} {
+		if got, _ := right.listed.Load(p); got != want {
+			t.Errorf("%s listed = %v, want %v", p, got, want)
+		}
+	}
+	// Identical, but with a status, as a file whose deletion is staged.
+	for p, want := range map[string]bool{"kept": true, "kept/f": true, "plain": false, "same": false} {
+		if got := s.Root.Find(p).HasStatus(); got != want {
+			t.Errorf("%s has a status = %v, want %v", p, got, want)
+		}
+	}
+
+	// Without statuses, none are read.
+	s = scanWait(t, left, string(right.Disk), Options{})
+	if _, ok := s.StatusSide(); ok || !s.Root.Find("new/f").Status.IsZero() {
+		t.Error("statuses without a side having them")
+	}
+	// The left side may have them too.
+	s = Start(right, source.Disk(left), Options{}, nil)
+	s.Wait()
+	if right, ok := s.StatusSide(); right || !ok || s.Root.Find("new").Status.String() != "??" {
+		t.Errorf("StatusSide = %v, %v", right, ok)
+	}
+
+	// Recheck reads it again.
+	s = Start(source.Disk(left), right, Options{}, nil)
+	s.Wait()
+	right.statuses["kept/f"] = " M"
+	s.Recheck("kept/f")
+	if got := s.Root.Find("kept/f").Status.String(); got != " M" {
+		t.Errorf("status after Recheck = %q", got)
+	}
+	// One that can no longer be read has none.
+	kept := filepath.Join(string(right.Disk), "kept")
+	if err := os.RemoveAll(kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kept, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.Recheck("kept/f")
+	if n := s.Root.Find("kept/f"); n.R.Kind != Unknown || !n.Status.IsZero() {
+		t.Errorf("unreadable after Recheck: %v, status %q", n.R.Kind, n.Status.String())
+	}
+}
+
+func TestGoneEntries(t *testing.T) {
+	left := tree(t, map[string]string{"same": "x"})
+	right := statusRoot{
+		Disk:     source.Disk(tree(t, map[string]string{"same": "x"})),
+		statuses: map[string]string{"gone": "D ", "dir/f": "AD"},
+		listed:   new(sync.Map),
+		recorded: map[string][]source.Recorded{
+			"":    {{Name: "same", Mode: unix.S_IFREG}, {Name: "gone", Mode: unix.S_IFREG}, {Name: "dir", Mode: unix.S_IFDIR}, {Name: "skip.o", Mode: unix.S_IFREG}},
+			"dir": {{Name: "f", Mode: unix.S_IFREG}},
+		},
+	}
+	s := Start(source.Disk(left), right, Options{Excludes: []string{"*.o"}}, nil)
+	s.Wait()
+	if got := marks(s.Root); got != "  dir\n  dir/f\n  gone\n= same\n" {
+		t.Errorf("marks:\n%s", got)
+	}
+	for p, want := range map[string]Kind{"dir": Dir, "dir/f": File, "gone": File, "same": Missing} {
+		if n := s.Root.Find(p); n.Gone != want {
+			t.Errorf("%s gone as %v, want %v", p, n.Gone, want)
+		}
+	}
+	if got := s.Root.Find("dir/f").Status.String(); got != "AD" || !s.Root.Find("dir").HasStatus() {
+		t.Errorf("status below a directory gone: %q", got)
+	}
+
+	// Restored, it is compared again.
+	if err := os.WriteFile(filepath.Join(string(right.Disk), "gone"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.Recheck("gone")
+	if n := s.Root.Find("gone"); n.Gone != Missing || n.State != RightOnly || n.Mark() != '>' {
+		t.Errorf("restored: gone %v, %c", n.Gone, n.Mark())
+	}
+	// Deleted from both sides again, it is gone as the type recorded.
+	for _, root := range []string{left, string(right.Disk)} {
+		if err := os.Symlink("x", filepath.Join(root, "ln")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	right.statuses["ln"] = "D "
+	right.recorded[""] = append(right.recorded[""], source.Recorded{Name: "ln", Mode: unix.S_IFLNK})
+	s = Start(source.Disk(left), right, Options{Excludes: []string{"*.o"}}, nil)
+	s.Wait()
+	for _, root := range []string{left, string(right.Disk)} {
+		if err := os.Remove(filepath.Join(root, "ln")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Recheck("ln")
+	if n := s.Root.Find("ln"); n == nil || n.Gone != Symlink {
+		t.Errorf("symlink deleted from both sides: %+v", n)
+	}
+}
+
+func TestRecordedBelowFile(t *testing.T) {
+	left := tree(t, map[string]string{"same": "x"})
+	right := statusRoot{
+		Disk:     source.Disk(tree(t, map[string]string{"same": "x", "repl": "file"})),
+		statuses: map[string]string{"repl": "A ", "repl/old": "D "},
+		listed:   new(sync.Map),
+		recorded: map[string][]source.Recorded{
+			"":     {{Name: "repl", Mode: unix.S_IFREG, Below: true}},
+			"repl": {{Name: "old", Mode: unix.S_IFREG}},
+		},
+	}
+	s := Start(source.Disk(left), right, Options{}, nil)
+	s.Wait()
+	n := s.Root.Find("repl")
+	if n.IsDir() || !n.HasEntries() || n.State != RightOnly || n.Gone != Missing {
+		t.Errorf("repl: dir %v, entries %v, %c, gone %v", n.IsDir(), n.HasEntries(), n.State.Mark(), n.Gone)
+	}
+	if old := s.Root.Find("repl/old"); old == nil || old.Gone != File || old.Status.String() != "D " || !n.HasStatus() {
+		t.Errorf("repl/old: %+v", old)
 	}
 }

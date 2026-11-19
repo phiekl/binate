@@ -590,3 +590,18 @@ func TestPanelSubmodule(t *testing.T) {
 		t.Errorf("row 0: %q, want submodule (no commits)", got[0])
 	}
 }
+
+func TestStatRowsGitStatus(t *testing.T) {
+	for _, sd := range []StatSide{
+		{Path: "/r/f", Status: "deleted, not staged", Missing: true},
+		{Path: "/r/f", Status: "modified, not staged", Stat: &stat.Stat{Mode: 0o100644}, BesideRevision: true},
+	} {
+		rows := statRows(&sd, scan.DefaultAttrs, "")
+		if len(rows) < 3 || rows[1].label != "git" || display.String(rows[1].value) != sd.Status {
+			t.Errorf("rows of %+v: %+v", sd, rows)
+		}
+	}
+	if rows := statRows(&StatSide{Path: "/r/f", Missing: true}, scan.DefaultAttrs, ""); len(rows) != 2 {
+		t.Errorf("rows without a status: %+v", rows)
+	}
+}
