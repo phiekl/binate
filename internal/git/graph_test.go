@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 )
 
 func (r *testRepo) objectsDir() string {
@@ -281,6 +282,55 @@ func TestLastChangeDefersCommitGraph(t *testing.T) {
 	}
 }
 
+func TestLastChangePicksUpNewCommitGraph(t *testing.T) {
+	for _, name := range []string{"standalone", "missing split layer"} {
+		t.Run(name, func(t *testing.T) {
+			r := newTestRepo(t, SHA1)
+			r.write(map[string]string{"a": "one"})
+			changed := r.commit()
+			tip := r.addEmptyCommits(historyGraphAfter)
+			info := filepath.Join(r.objectsDir(), "info")
+			path := filepath.Join(info, "commit-graph")
+			args := []string{"commit-graph", "write", "--reachable", "--changed-paths"}
+			if name == "standalone" {
+				r.git(args...)
+			} else {
+				r.git(append(args, "--split")...)
+				dir := filepath.Join(info, "commit-graphs")
+				chain, err := os.ReadFile(filepath.Join(dir, "commit-graph-chain"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				path = filepath.Join(dir, "graph-"+strings.TrimSpace(string(chain))+".graph")
+			}
+			saved := filepath.Join(t.TempDir(), "graph")
+			if err := os.Rename(path, saved); err != nil {
+				t.Fatal(err)
+			}
+
+			synctest.Test(t, func(t *testing.T) {
+				repo := r.open()
+				defer repo.Close()
+				checkGraphLastChange(t, r, repo, "HEAD", tip, "a")
+				if len(repo.graph) != 0 {
+					t.Fatal("first lookup unexpectedly loaded a graph")
+				}
+				if err := os.Rename(saved, path); err != nil {
+					t.Fatal(err)
+				}
+				if g, err := repo.historyGraph(context.Background()); err != nil || len(g) != 0 {
+					t.Fatalf("lookup before retry delay got %d layers and error %v", len(g), err)
+				}
+				time.Sleep(graphRetryAfter)
+				checkGraphLastChange(t, r, repo, "HEAD", tip, "a")
+				if layer, _ := repo.graph.find(changed); layer == nil {
+					t.Fatal("later lookup did not load the published graph")
+				}
+			})
+		})
+	}
+}
+
 func TestCommitGraphLoadCanRetryAfterCancellation(t *testing.T) {
 	r := newTestRepo(t, SHA1)
 	tip := r.commit()
@@ -405,7 +455,7 @@ func TestCommitGraphSymlinks(t *testing.T) {
 	}
 	check := func() {
 		t.Helper()
-		if g := openCommitGraph(context.Background(), []string{r.objectsDir()}, SHA1); len(g) != 0 {
+		if g, _ := openCommitGraph(context.Background(), []string{r.objectsDir()}, SHA1); len(g) != 0 {
 			g.close()
 			t.Fatal("graph opened through a symlink")
 		}

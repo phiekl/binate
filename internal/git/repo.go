@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -40,8 +41,9 @@ type Repo struct {
 	trees treeCache
 
 	graphMu      sync.Mutex
-	graphLoading chan struct{}
+	graphLoading *graphLoad
 	graphReady   bool
+	graphRetry   time.Time
 	graph        commitGraph
 }
 

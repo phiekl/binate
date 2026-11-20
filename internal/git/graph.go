@@ -8,10 +8,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"iter"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -40,8 +42,25 @@ type graphDir struct {
 	info, split int
 }
 
-// historyGraph shares a completed load. Canceling a load leaves later walks
-// free to retry, and a waiting walk can cancel independently.
+type graphState uint8
+
+const (
+	graphMissing graphState = iota
+	graphInvalid
+	graphLoaded
+)
+
+type graphLoad struct {
+	done  chan struct{}
+	graph commitGraph
+	err   error
+}
+
+// Limit filesystem probes in repositories without a usable graph yet.
+const graphRetryAfter = time.Second
+
+// historyGraph shares a completed load. A missing graph can be looked for
+// again after a short delay. A waiting walk can cancel independently.
 func (r *Repo) historyGraph(ctx context.Context) (commitGraph, error) {
 	if len(r.shallow) != 0 {
 		return nil, ctx.Err()
@@ -51,40 +70,53 @@ func (r *Repo) historyGraph(ctx context.Context) (commitGraph, error) {
 			return nil, err
 		}
 		r.graphMu.Lock()
-		if r.graphReady {
+		if r.graphReady || time.Now().Before(r.graphRetry) {
 			g := r.graph
 			r.graphMu.Unlock()
 			return g, nil
 		}
-		if done := r.graphLoading; done != nil {
+		if load := r.graphLoading; load != nil {
 			r.graphMu.Unlock()
 			select {
-			case <-done:
+			case <-load.done:
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if load.err == nil {
+					return load.graph, nil
+				}
 				continue
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
-		done := make(chan struct{})
-		r.graphLoading = done
+		load := &graphLoad{done: make(chan struct{})}
+		r.graphLoading = load
 		r.graphMu.Unlock()
 
-		g := openCommitGraph(ctx, r.dirs, r.format)
+		g, state := openCommitGraph(ctx, r.dirs, r.format)
 		err := ctx.Err()
 		if err != nil {
 			g.close()
 			g = nil
 		}
 		r.graphMu.Lock()
-		r.graph, r.graphReady = g, err == nil
+		if err == nil {
+			if state == graphMissing {
+				r.graphRetry = time.Now().Add(graphRetryAfter)
+			} else {
+				r.graph, r.graphReady = g, true
+			}
+		}
+		load.graph, load.err = g, err
 		r.graphLoading = nil
-		close(done)
+		close(load.done)
 		r.graphMu.Unlock()
 		return g, err
 	}
 }
 
-func openCommitGraph(ctx context.Context, dirs []string, f *Format) commitGraph {
+func openCommitGraph(ctx context.Context, dirs []string, f *Format) (commitGraph, graphState) {
 	// The objects directories are already allowed. Keep all graph lookups
 	// beneath them, without following symlinks in info.
 	const flags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW
@@ -99,7 +131,7 @@ func openCommitGraph(ctx context.Context, dirs []string, f *Format) commitGraph 
 	}()
 	for _, dir := range dirs {
 		if ctx.Err() != nil {
-			return nil
+			return nil, graphMissing
 		}
 		info, err := unix.Open(filepath.Join(dir, "info"), flags, 0)
 		if err == nil {
@@ -110,37 +142,54 @@ func openCommitGraph(ctx context.Context, dirs []string, f *Format) commitGraph 
 			graphDirs = append(graphDirs, graphDir{info: info, split: split})
 		}
 	}
+	state := graphMissing
 	for _, dir := range graphDirs {
 		if ctx.Err() != nil {
-			return nil
+			return nil, graphMissing
 		}
-		if l := mapGraphLayer(ctx, dir.info, "commit-graph", f, 0, nil, ID{}); l != nil {
-			return commitGraph{l}
+		l, layerState := mapGraphLayer(ctx, dir.info, "commit-graph", f, 0, nil, ID{})
+		if l != nil {
+			return commitGraph{l}, graphLoaded
+		}
+		if layerState == graphInvalid {
+			state = graphInvalid
 		}
 		if dir.split >= 0 {
-			if g := readGraphChain(ctx, dir.split, graphDirs, f); len(g) != 0 {
-				return g
+			g, chainState := readGraphChain(ctx, dir.split, graphDirs, f)
+			if len(g) != 0 {
+				return g, graphLoaded
+			}
+			if chainState == graphInvalid {
+				state = graphInvalid
 			}
 		}
 	}
-	return nil
+	return nil, state
 }
 
-func readGraphChain(ctx context.Context, split int, dirs []graphDir, f *Format) commitGraph {
+func graphOpenFailure(err error) graphState {
+	if errors.Is(err, unix.ENOENT) {
+		return graphMissing
+	}
+	return graphInvalid
+}
+
+func readGraphChain(ctx context.Context, split int, dirs []graphDir, f *Format) (commitGraph, graphState) {
 	chain, err := files.OpenRegularAt(split, "commit-graph-chain", false)
 	if err != nil {
-		return nil
+		return nil, graphOpenFailure(err)
 	}
 	defer func() { _ = chain.Close() }()
 	// The header can name at most 255 base graphs.
 	limit := 256 * (2*f.size + 1)
 	data, err := io.ReadAll(io.LimitReader(chain, int64(limit+1)))
 	if err != nil || len(data) > limit {
-		return nil
+		return nil, graphInvalid
 	}
 	var g commitGraph
 	var bases []ID
 	var start uint32
+	state := graphInvalid // An empty chain is invalid.
 	for line := range strings.Lines(string(data)) {
 		sum, err := ParseID(f, strings.TrimSuffix(line, "\n"))
 		if err != nil {
@@ -148,14 +197,19 @@ func readGraphChain(ctx context.Context, split int, dirs []graphDir, f *Format) 
 		}
 		name := "graph-" + sum.String() + ".graph"
 		var l *graphLayer
+		state = graphMissing
 		for _, dir := range dirs {
 			if ctx.Err() != nil {
 				break
 			}
 			if dir.split >= 0 {
-				l = mapGraphLayer(ctx, dir.split, name, f, start, bases, sum)
+				var layerState graphState
+				l, layerState = mapGraphLayer(ctx, dir.split, name, f, start, bases, sum)
 				if l != nil {
 					break
+				}
+				if layerState == graphInvalid {
+					state = graphInvalid
 				}
 			}
 		}
@@ -168,26 +222,30 @@ func readGraphChain(ctx context.Context, split int, dirs []graphDir, f *Format) 
 	}
 	// A writer may replace the tip while we open it. Earlier layers
 	// still form a complete graph for the commits they cover.
-	return g
+	if len(g) != 0 {
+		return g, graphLoaded
+	}
+	// The chain may have changed before we could open its first layer.
+	return nil, state
 }
 
-func mapGraphLayer(ctx context.Context, dir int, name string, f *Format, start uint32, bases []ID, want ID) *graphLayer {
+func mapGraphLayer(ctx context.Context, dir int, name string, f *Format, start uint32, bases []ID, want ID) (*graphLayer, graphState) {
 	file, err := files.OpenRegularAt(dir, name, false)
 	if err != nil {
-		return nil
+		return nil, graphOpenFailure(err)
 	}
 	defer func() { _ = file.Close() }()
 	fi, err := file.Stat()
 	if err != nil {
-		return nil
+		return nil, graphInvalid
 	}
 	size := fi.Size()
 	if size < int64(8+12+f.size) || size > 1<<40 || int64(int(size)) != size {
-		return nil
+		return nil, graphInvalid
 	}
 	data, err := unix.Mmap(int(file.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
-		return nil
+		return nil, graphInvalid
 	}
 	var l *graphLayer
 	if err := safely(func() {
@@ -214,9 +272,9 @@ func mapGraphLayer(ctx context.Context, dir int, name string, f *Format, start u
 		}
 	}); err != nil || l == nil {
 		_ = unix.Munmap(data)
-		return nil
+		return nil, graphInvalid
 	}
-	return l
+	return l, graphLoaded
 }
 
 // parseGraphLayer checks the layout and splits the file into its chunks.
