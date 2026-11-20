@@ -151,22 +151,22 @@ pseudo-terminals and skip without them.
   the second the index was written. Files unchanged since staged, and
   skip-worktree files, have their blob's ID, and changed and intent-to-add files
   have none, and a scan against HEAD reads the changed ones and finds them
-  different. Files have no ID where core.autoCRLF or attributes that filter apply, from
-  their directory or above it, tracked or not, info/attributes or outside the
-  repository, which the system's configuration may name, as Git assigns them,
-  with later lines, deeper files and info/attributes taking precedence, macros
-  defined at the top only, quoted patterns, and filter drivers only where
-  configured, but do where attributes only set diff drivers, are unset or
-  unspecified, or match other paths. A file filtered as staged and modified
-  earlier in the second the index was written is unchanged, as in Git, and is
-  read once attributes no longer filter it, and a
-  CRLF file committed as text differs from its LF blob, also once the attributes
-  are removed, by its blob's size, and core.autoCRLF given as a key alone is on.
-  A rescan finds HEAD again after a commit with packed refs, hashing stops once
-  canceled, and against an older revision, entries staged for deletion or added
-  and then deleted are found on neither side, and those of a directory a staged
-  file replaced below the file, also once it is deleted. Terminal tests open the
-  diff on a file whose staged and on-disk contents differ.
+  different. Files have no ID where core.autoCRLF or attributes that filter
+  apply, from their directory or above it, tracked or not, info/attributes or
+  outside the repository, which the system's configuration may name, as Git
+  assigns them, with later lines, deeper files and info/attributes taking
+  precedence, macros defined at the top only, quoted patterns, and filter
+  drivers only where configured, but do where attributes only set diff drivers,
+  are unset or unspecified, or match other paths. A file filtered as staged and
+  modified earlier in the second the index was written is unchanged, as in Git,
+  and is read once attributes no longer filter it, and a CRLF file committed as
+  text differs from its LF blob, also once the attributes are removed, by its
+  blob's size, and core.autoCRLF given as a key alone is on. A rescan finds HEAD
+  again after a commit with packed refs, hashing stops once canceled, and
+  against an older revision, entries staged for deletion or added and then
+  deleted are found on neither side, and those of a directory a staged file
+  replaced below the file, also once it is deleted. Terminal tests open the diff
+  on a file whose staged and on-disk contents differ.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,

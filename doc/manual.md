@@ -236,9 +236,9 @@ sparse checkout, a skip-worktree file present on disk is read from disk. A file
 marked with **git update-index --assume-unchanged** is compared as the index
 records it too, as **git diff** compares it, even in a sparse checkout and where
 deleted from disk. A **.gitignore** so marked and missing from disk adds no
-rules, as in Git. A rescan reloads the index and the repository's ignore files as part of the new
-scan, which shows an error reading them at the top. The user's global file
-outside the repository is read when the comparison starts.
+rules, as in Git. A rescan reloads the index and the repository's ignore files
+as part of the new scan, which shows an error reading them at the top. The
+user's global file outside the repository is read when the comparison starts.
 
 Files are compared by their on-disk bytes, without Git attribute filters.
 Opposite a revision or the index, a file whose size, times, inode and owner
@@ -254,8 +254,8 @@ above it, on disk or else in the index, and the user's and the system's
 attributes files, with macros. A **core.attributesFile** in the repository's own
 configuration takes the place of the user's file. It is read only within the
 top, as the repository's excludes file is. One outside the top can't be read,
-and every file is then taken as filtered. Git filters a file where **text**, or else
-**crlf**, is set, **auto** or **input**, or is not unset and **eol** or
+and every file is then taken as filtered. Git filters a file where **text**, or
+else **crlf**, is set, **auto** or **input**, or is not unset and **eol** or
 **core.autoCRLF** is set. It also filters a file with **ident**,
 **working-tree-encoding** or a **filter** whose driver is configured to clean.
 Where an attributes file can't be read, every file is taken as filtered. A file
@@ -275,8 +275,8 @@ directory, a symlink to one or a file naming one is shown as a submodule at its
 HEAD, with **(no commits)** if it has none, as Git shows it as one entry. Its
 HEAD is read in its own object format, which may differ from the repository's,
 as for a SHA-256 repository in a SHA-1 work tree. Its refs may be stored as
-reftable, which the repository compared can't. Both
-sides of the comparison are read-only.
+reftable, which the repository compared can't. Both sides of the comparison are
+read-only.
 
 ### Status
 
@@ -1255,4 +1255,5 @@ Column widths come from Unicode's East Asian Width property, which gets some
 emoji wrong. Such characters can misalign columns. Characters with no width
 can't, since they are escaped.
 
-See also [**binate**(1)](binate.1.md), **diff**(1), **sdiff**(1) and **git-rev-parse**(1).
+See also [**binate**(1)](binate.1.md), **diff**(1), **sdiff**(1) and
+**git-rev-parse**(1).

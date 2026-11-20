@@ -135,4 +135,5 @@ not, each **A** for added, **M** modified, **D** deleted or **T** type changed.
 **0** after a normal quit, **2** on errors. The status does not say whether the
 inputs differ.
 
-See also [**binate-manual**(7)](manual.md), **diff**(1), **sdiff**(1) and **git-rev-parse**(1).
+See also [**binate-manual**(7)](manual.md), **diff**(1), **sdiff**(1) and
+**git-rev-parse**(1).
