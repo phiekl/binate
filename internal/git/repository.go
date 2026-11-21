@@ -73,8 +73,8 @@ func readBounded(f *os.File, limit int64) ([]byte, error) {
 
 // FindTop returns the top of the repository of the directory dir, beneath
 // which all of it is to be: the nearest of dir and the directories above
-// it with ".git" in it, or dir if a bare repository, or if GIT_DIR, which
-// is relative to dir, names the repository. As git, it stops at a file
+// it with ".git" in it, or dir if a bare repository. GIT_DIR is ignored:
+// binate finds the repository itself. As git, it stops at a file
 // system's boundary, unless GIT_DISCOVERY_ACROSS_FILESYSTEM is true, and
 // at a directory in GIT_CEILING_DIRECTORIES. Before the sandbox is applied,
 // it resolves symlinks along dir, which may read links outside the repository,
@@ -84,9 +84,6 @@ func FindTop(dir string, getenv func(string) string) (string, error) {
 	dir, err := resolveDir(dir)
 	if err != nil {
 		return "", err
-	}
-	if getenv("GIT_DIR") != "" {
-		return dir, nil
 	}
 	exists := func(p string) bool {
 		_, err := os.Lstat(p)
@@ -154,7 +151,7 @@ func resolveDir(dir string) (string, error) {
 // with any of its directories outside, symlinks resolved, as a linked
 // work tree's or an alternate's, is refused before anything there is
 // read.
-func Discover(top, dir string, getenv func(string) string) (*Location, error) {
+func Discover(top, dir string) (*Location, error) {
 	top, err := filepath.Abs(top)
 	if err != nil {
 		return nil, err
@@ -167,20 +164,6 @@ func Discover(top, dir string, getenv func(string) string) (*Location, error) {
 		return nil, err
 	}
 	b := &beneath{dir: top, top: resolved}
-	if gd := getenv("GIT_DIR"); gd != "" {
-		if !filepath.IsAbs(gd) {
-			gd = filepath.Join(dir, gd)
-		}
-		gd = filepath.Clean(gd)
-		if err := b.check(gd); err != nil {
-			return nil, fmt.Errorf("GIT_DIR: %w", err)
-		}
-		loc, err := b.locate(gd, "")
-		if err != nil {
-			return nil, fmt.Errorf("GIT_DIR %s: %w", gd, err)
-		}
-		return loc, nil
-	}
 	loc, err := b.discoverAt(top)
 	if err != nil {
 		return nil, err

@@ -111,8 +111,7 @@ next arguments are *left* and *right* even if they start with a dash.
 
 - **-C**, **--directory** *directory*: With **-g**, find the repository from
   *directory* instead of the current directory, as **git -C** does: revisions'
-  paths starting with **./** or **../**, and a relative **GIT_DIR**, are
-  relative to it.
+  paths starting with **./** or **../** are relative to it.
 
 - **-h**, **--help**: Show the options and exit.
 
@@ -142,13 +141,13 @@ superproject's, one apart from its work tree, as **git init --separate-git-dir**
 makes, or one with alternates elsewhere, as **git clone --reference** makes. An
 alternate that doesn't exist is skipped, as git skips it. Symlinks in the git
 directory to files, as an old repository's **HEAD**, are not read either.
-**GIT_DIR** names the repository instead, relative to the same directory, which
-is then the top, and beneath it. The repository's work tree, or its git
-directory if it is bare, is shown in a row at the top of the screen, after
-**(git)**, and linked to in full as the panels' paths are, unless the terminal
-is too short to spare it. A revision naming a commit or a tag compares its tree,
-and one naming a path, as **HEAD:src**, the tree there. A revision naming a
-file, as **HEAD:README**, is refused.
+**GIT_DIR** and **GIT_WORK_TREE** are ignored. A repository elsewhere is found
+with **-C** instead, as in **-C ~/.dotfiles**. The repository's work tree, or
+its git directory if it is bare, is shown in a row at the top of the screen,
+after **(git)**, and linked to in full as the panels' paths are, unless the
+terminal is too short to spare it. A revision naming a commit or a tag compares
+its tree, and one naming a path, as **HEAD:src**, the tree there. A revision
+naming a file, as **HEAD:README**, is refused.
 
 **binate** reads the repository itself, without running git: loose objects,
 packs and alternates, in either object format, SHA-1 or SHA-256. As in Git, an

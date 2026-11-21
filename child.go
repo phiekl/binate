@@ -160,7 +160,7 @@ func (c *child) run() (code int) {
 		if err := landlock.Restrict(c.log, rules...); err != nil {
 			return fail("restricting the process: %v", err)
 		}
-		if c.repo, err = git.Discover(top, dir, os.Getenv); err != nil {
+		if c.repo, err = git.Discover(top, dir); err != nil {
 			return fail("%v", err)
 		}
 		if (c.in.hasWorkTree() || c.in.hasIndex()) && c.repo.WorkTree == "" {

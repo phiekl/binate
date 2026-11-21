@@ -60,22 +60,16 @@ func TestDiscover(t *testing.T) {
 	if _, err := discover(t.TempDir(), noEnv); err == nil {
 		t.Error("found a repository outside one")
 	}
-
-	// GIT_DIR names the repository, relative to the directory, and no
-	// work tree is assumed; not one outside it.
-	env := func(dir string) func(string) string {
-		return func(k string) string {
-			if k == "GIT_DIR" {
-				return dir
-			}
-			return ""
+	// GIT_DIR is ignored: the repository is found from the directory.
+	elsewhere := t.TempDir()
+	gitDirEnv := func(k string) string {
+		if k == "GIT_DIR" {
+			return elsewhere
 		}
+		return ""
 	}
-	if loc, err := discover(r.dir, env(".git")); err != nil || loc.GitDir != gitDir || loc.WorkTree != "" {
-		t.Errorf("GIT_DIR: %+v, %v", loc, err)
-	}
-	if _, err := discover(t.TempDir(), env(gitDir)); !errors.Is(err, errOutside) {
-		t.Errorf("GIT_DIR outside: %v", err)
+	if loc, err := discover(r.dir, gitDirEnv); err != nil || loc.GitDir != gitDir || loc.WorkTree != r.dir {
+		t.Errorf("with GIT_DIR: %+v, %v", loc, err)
 	}
 }
 
@@ -562,7 +556,7 @@ func discover(dir string, getenv func(string) string) (*Location, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Discover(top, dir, getenv)
+	return Discover(top, dir)
 }
 
 func TestDiscoverSymlinkDirectory(t *testing.T) {

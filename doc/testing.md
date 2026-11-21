@@ -141,12 +141,12 @@ pseudo-terminals and skip without them.
   alternates, searched depth first and each once; a tree as a side of the
   comparison, with git's modes and no times or owners, two commits compared, and
   a commit and its checkout differing in nothing git records; finding a
-  repository from a directory up, bare or through a gitfile, its format and
-  configuration, refusing reftable, and resolving revisions, ambiguous
-  abbreviations included, and paths ending in a slash, `.` or `..` only as
-  trees, as git rev-parse does. Fuzzing checks that parsing trees and loose
-  objects' headers, deltas, pack entries' headers and indexes, and
-  configuration and revisions never panics.
+  repository from a directory up, bare or through a gitfile, whatever
+  `GIT_DIR` says, its format and configuration, refusing reftable, and
+  resolving revisions, ambiguous abbreviations included, and paths ending in a
+  slash, `.` or `..` only as trees, as git rev-parse does. Fuzzing checks that
+  parsing trees and loose objects' headers, deltas, pack entries' headers and
+  indexes, and configuration and revisions never panics.
 - **git work tree:** path visibility checked against Git across index versions
   and hash formats, nested and global ignore rules, tracked paths in ignored
   directories, unsupported indexes, rescans, and symlink confinement. Each
