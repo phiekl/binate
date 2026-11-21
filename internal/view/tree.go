@@ -473,7 +473,12 @@ func (v *TreeView) drawSide(s *term.Screen, x, w, y int, m *tree.Model, row tree
 	if nameW+display.Width(tail) > nameRoom {
 		tail = ShortenEnd(tail, max(nameRoom-nameW, 0))
 	}
-	used += s.Text(x+used, y, nameRoom, ShortenEnd(name, nameRoom), nameStyle, esc)
+	// Escapes in a reversed name, as one marked !, are underlined.
+	nameEsc := esc
+	if reverses(nameStyle) && !reverses(bg) {
+		nameEsc = reverseEscape(v.Styles.Escape).On(bg)
+	}
+	used += s.Text(x+used, y, nameRoom, ShortenEnd(name, nameRoom), nameStyle, nameEsc)
 	s.Text(x+used, y, textW-used, tail, plain, esc)
 }
 

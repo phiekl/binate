@@ -262,10 +262,35 @@ func reverseEscape(esc term.Style) term.Style {
 // rowEscape returns the style of an escape in a row with the background
 // bg: the selection's or a state's tint, or none.
 func rowEscape(esc, bg term.Style) term.Style {
-	if bg.Attr&term.Reverse != 0 || bg.SGR == "7" {
+	if reverses(bg) {
 		esc = reverseEscape(esc)
 	}
 	return esc.On(bg)
+}
+
+// reverses reports whether style turns on reverse video, by its
+// attributes or an SGR parameter 7 other than inside an extended colour.
+func reverses(style term.Style) bool {
+	if style.Attr&term.Reverse != 0 {
+		return true
+	}
+	on := false
+	params := strings.Split(style.SGR, ";")
+	for i := 0; i < len(params); i++ {
+		switch params[i] {
+		case "7":
+			on = true
+		case "27", "0", "":
+			on = false
+		case "38", "48", "58":
+			if i+1 < len(params) && params[i+1] == "5" {
+				i += 2
+			} else if i+1 < len(params) && params[i+1] == "2" {
+				i += 4
+			}
+		}
+	}
+	return on
 }
 
 // barItem is one item of a status bar: text shown in brackets, or a note

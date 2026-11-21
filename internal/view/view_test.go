@@ -1363,3 +1363,17 @@ func TestNodeStatusText(t *testing.T) {
 		}
 	}
 }
+
+func TestReverses(t *testing.T) {
+	for sgr, want := range map[string]bool{
+		"7": true, "1;7": true, "1;7;22": true, "7;27": false, "7;0": false,
+		"38;5;7": false, "48;2;7;7;7": false, "38;5;1;7": true, "": false, "31": false,
+	} {
+		if got := reverses(term.Style{SGR: sgr}); got != want {
+			t.Errorf("reverses(%q) = %v", sgr, got)
+		}
+	}
+	if !reverses(term.Style{Attr: term.Reverse}) {
+		t.Error("reverses(Reverse attribute) = false")
+	}
+}

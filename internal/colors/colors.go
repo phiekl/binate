@@ -234,10 +234,42 @@ func Parse(e Env) Result {
 		case !validSGR(value):
 			r.Warnings = append(r.Warnings, fmt.Sprintf(`BINATE_COLORS: invalid value "%s" for %s, which may contain only digits and ';'`, value, key))
 		default:
-			*field = term.Style{SGR: value}
+			*field = term.Style{SGR: normalSGR(value)}
 		}
 	}
 	return r
+}
+
+// normalSGR returns the SGR parameters s without leading zeros, so that
+// 07 is seen to be reverse video as 7 is, and from after the last reset,
+// 0 or an empty parameter: a reset would clear the styles a value is
+// drawn over or with, such as an escape's underline, and what comes
+// before it has no effect. The arguments of an extended colour, as
+// 38;5;0, are kept.
+func normalSGR(s string) string {
+	params := strings.Split(s, ";")
+	var out []string
+	for i := 0; i < len(params); i++ {
+		p := strings.TrimLeft(params[i], "0")
+		if p == "" {
+			out = out[:0]
+			continue
+		}
+		out = append(out, p)
+		if p != "38" && p != "48" && p != "58" || i+1 >= len(params) {
+			continue
+		}
+		n := map[string]int{"5": 2, "2": 4}[strings.TrimLeft(params[i+1], "0")]
+		for j := i + 1; j <= i+n && j < len(params); j++ {
+			if a := strings.TrimLeft(params[j], "0"); a != "" {
+				out = append(out, a)
+			} else {
+				out = append(out, "0")
+			}
+		}
+		i += n
+	}
+	return strings.Join(out, ";")
 }
 
 func validSGR(s string) bool {

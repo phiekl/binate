@@ -1126,8 +1126,10 @@ escapes unambiguous.
   parameters as the terminal takes them, so 16-colour, 256-colour (**38;5;**_N_)
   and truecolour (**38;2;**_R_**;**_G_**;**_B_) values all work. A value may
   contain only digits and **;**, so the variable can't add other escape
-  sequences. An unknown key or an invalid value prints a warning before the
-  screen opens, and the default stays. See [Colours](#colours).
+  sequences. A reset (**0**, or an empty parameter) is left out, with what comes
+  before it, as a style is drawn over others. An unknown key or an invalid value
+  prints a warning before the screen opens, and the default stays. See
+  [Colours](#colours).
 
 - **COLORTERM**, **TERM**: Whether the terminal shows truecolour, for the
   default backgrounds (see [BINATE_COLORS](#environment)).
@@ -1171,7 +1173,8 @@ The keys of **BINATE_COLORS**, with their defaults:
 - **leftonly** (31): the **<** mark.
 - **rightonly** (32): the **>** mark.
 - **unverified** (90): the **?** mark, grey.
-- **type** (1;35): the **!** mark.
+- **type** (1;35): the **!** mark. If it is in reverse video, so is the name of
+  an entry marked **!**, whose escapes are then underlined.
 - **error** (1;31): why a file can't be shown in the diff view or the preview,
   why a checksum failed, and panel fields that could not be read. A directory
   that could not be listed is a note in the tree, in plain text.

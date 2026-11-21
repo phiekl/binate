@@ -97,3 +97,18 @@ func TestFromEnv(t *testing.T) {
 		t.Errorf("truecolour %+v\n256 colours %+v", tc, c256)
 	}
 }
+
+func TestNormalSGR(t *testing.T) {
+	for in, want := range map[string]string{
+		"07": "7", "0;7": "7", ";7": "7", "1;007": "1;7", "0": "",
+		"38;5;0": "38;5;0", "048;05;016": "48;5;16", "38;2;0;0;0;7": "38;2;0;0;0;7",
+		"0;48;2;00;10;0": "48;2;0;10;0", "38": "38", "38;5": "38;5", "31;0;1": "1", "7;0": "", "7;;1": "1", "38;5;0;0;4": "4",
+	} {
+		if got := normalSGR(in); got != want {
+			t.Errorf("normalSGR(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if r := Parse(Env{Colors: "type=07:select=0;7"}); r.Styles.Type.SGR != "7" || r.Styles.Select.SGR != "7" {
+		t.Errorf("type %q, select %q", r.Styles.Type.SGR, r.Styles.Select.SGR)
+	}
+}
