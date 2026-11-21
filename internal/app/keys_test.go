@@ -495,8 +495,9 @@ func TestCompareKeys(t *testing.T) {
 		t.Errorf("Alt+m: compare %v", ts.opts.Compare)
 	}
 
-	// * turns everything on, then everything off, and on again.
-	for _, want := range []scan.Attrs{scan.AllAttrs, scan.None, scan.AllAttrs} {
+	// * turns everything off while some are on, then everything on, and
+	// off again.
+	for _, want := range []scan.Attrs{scan.None, scan.AllAttrs, scan.None, scan.AllAttrs} {
 		ts.Key(term.Rune('*'))
 		if ts.opts.Compare != want {
 			t.Errorf("*: compare %v, want %v", ts.opts.Compare, want)

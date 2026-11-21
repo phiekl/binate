@@ -1128,7 +1128,7 @@ func TestComparePopup(t *testing.T) {
 		"[x]  target    symlinks' targets",
 		"[x]  owner     user and group",
 		"[ ]  mtime     modification time",
-		"Space or a letter toggles, * toggles all, Esc closes",
+		"* turns all off, Space or a letter toggles, Esc closes",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("popup without %q:\n%s", want, text)
@@ -1181,6 +1181,22 @@ func TestComparePopup(t *testing.T) {
 	}
 	if !c.SelectKey('o') || c.Attr() != scan.Owner || c.SelectKey('z') {
 		t.Errorf("SelectKey: selected %v", c.Attr())
+	}
+
+	// The footer says what * does: all on once nothing is.
+	c.Set(scan.None, false)
+	if footer := c.Lines[len(c.Lines)-1].Text; footer != "* turns all on, Space or a letter toggles, Esc closes" {
+		t.Errorf("footer with nothing on %q", footer)
+	}
+	// A narrow box still shows it, cutting off the rest.
+	narrow := term.NewScreen(46, 24)
+	c.Draw(narrow, colors.Default())
+	if !strings.Contains(narrow.String(), "* turns all on,") {
+		t.Errorf("narrow popup:\n%s", narrow.String())
+	}
+	// Only the attributes the sides record count.
+	if CompareAll(scan.Owner, scan.Owner|scan.Mtime) != scan.AllAttrs&^(scan.Owner|scan.Mtime) || CompareAll(scan.Mode, 0) != 0 {
+		t.Error("CompareAll")
 	}
 
 	c.Selected = firstCompareRow

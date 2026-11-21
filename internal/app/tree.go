@@ -417,20 +417,14 @@ func (t *TreeScreen) Key(k term.Key) bool {
 
 // compareKey handles a key while the Compare popup is open: the keys
 // that move through Help move the selection, Space and Enter change the
-// selected row, a row's letter selects and changes it, * turns all on,
-// or all off if they are, and Esc closes the popup. Other keys are ignored.
+// selected row, a row's letter selects and changes it, * turns all off
+// if any is on, and all on if none is, and Esc closes the popup. Other keys are ignored.
 func (t *TreeScreen) compareKey(k term.Key) {
 	c := t.compare
 	switch {
 	case listKey(c.Help, t.last, k):
 	case k == term.Rune('*'):
-		// All on, or all off if they are.
-		all := scan.AllAttrs &^ t.unrecorded
-		compare := t.opts.Compare | all
-		if t.opts.Compare&all == all {
-			compare = 0
-		}
-		t.setCompare(compare, t.opts.Quick)
+		t.setCompare(view.CompareAll(t.opts.Compare, t.unrecorded), t.opts.Quick)
 		c.Set(t.opts.Compare, t.opts.Quick)
 	case k == term.Rune(' ') || k.Code == term.KeyEnter || k == term.Rune(k.Rune) && c.SelectKey(k.Rune):
 		compare, quick := t.opts.Compare, t.opts.Quick

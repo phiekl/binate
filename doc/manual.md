@@ -773,10 +773,11 @@ compares, **--compare** at first:
 **Space** or **Enter** changes the selected row. Each row also has a letter of
 its own, highlighted in its name, that selects and changes it at once: **l**
 left, **r** right, **y** type, **c** content, **a** target, **d** device, **m**
-mode, **o** owner and **t** mtime. **\*** turns them all on, or all off if they
-are. **Esc** closes the popup. Other keys are ignored. Started with **-q**, the
-**content** row shows **[q]**. Changing it leaves quick mode for good, reading
-the contents in full, as quick mode only saves reading at startup.
+mode, **o** owner and **t** mtime. **\*** turns them all off if any is on, and
+all on if none is, as the popup's last line says. **Esc** closes the popup.
+Other keys are ignored. Started with **-q**, the **content** row shows **[q]**.
+Changing it leaves quick mode for good, reading the contents in full, as quick
+mode only saves reading at startup.
 
 Each change applies at once: the scan keeps what it read of each entry, its
 size, mode, owner, times, a symlink's target, a device's number, and the result

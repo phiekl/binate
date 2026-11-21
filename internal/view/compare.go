@@ -14,8 +14,20 @@ import (
 // CompareTitle is the Compare popup's title.
 const CompareTitle = "Compare"
 
-// compareFooter says how to use the Compare popup.
-const compareFooter = "Space or a letter toggles, * toggles all, Esc closes"
+// compareFooter says how to use the Compare popup, starting with what *
+// does, which a narrow box would otherwise cut off.
+const compareFooter = "* turns all %s, Space or a letter toggles, Esc closes"
+
+// CompareAll returns what * makes compare, of sides that don't record
+// the attributes unrecorded: nothing if anything is compared, and
+// everything recorded if nothing is.
+func CompareAll(compare, unrecorded scan.Attrs) scan.Attrs {
+	all := scan.AllAttrs &^ unrecorded
+	if compare&all != 0 {
+		return 0
+	}
+	return all
+}
 
 // compareRows are the Compare popup's rows, in order, with what each
 // compares.
@@ -79,7 +91,11 @@ func (c *ComparePopup) Set(compare scan.Attrs, quick bool) {
 		}
 		lines = append(lines, l)
 	}
-	c.Lines = append(lines, HelpLine{}, HelpLine{Text: compareFooter})
+	star := "on"
+	if CompareAll(compare, c.unrecorded) == 0 {
+		star = "off"
+	}
+	c.Lines = append(lines, HelpLine{}, HelpLine{Text: fmt.Sprintf(compareFooter, star)})
 }
 
 // Attr returns the selected row's attribute.

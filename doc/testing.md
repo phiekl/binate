@@ -207,20 +207,21 @@ pseudo-terminals and skip without them.
   cover the popup's selection and refreshing the tree's panels after editing in
   the diff view. Compare tests cover toggling attributes and contents at once,
   leaving quick mode for good, each row's letter selecting and toggling it but
-  not with Alt, * turning all on and off, keys not reaching the tree, closing
-  with Esc, and scanning again for contents never read. Error popups close on
-  any key without passing it through, and Ctrl+c asks to quit. Expansion tests
-  cover L and Shift+Right, and collapse through H and Shift+Left. Filter tests
-  cover F opening the bar, Tab switching its mode, search bars ignoring Tab, and
-  bash-style editing at the ends and in the middle of words. Search tests cover
-  /, n and N, wrapping, matches in collapsed directories, skipping hidden
-  identical entries, and Esc ending the search before the filter. Outside a
-  search, n and N jump between differences, as Shift+Down and Shift+Up always
-  do. Other key tests cover the quit prompt's buttons, Ctrl+c quitting at once
-  on a terminal too small for it, gg and G, Help navigation and closing without
-  passing the key through, and Esc clearing the filter. Both screens leave q,
-  Space and Backspace unbound. A commit's screen shows the header of the side
-  whose commit it is above both boxes, and going back shows the screen's again.
+  not with Alt, * turning all off while any is on, and on when none is, keys not
+  reaching the tree, closing with Esc, and scanning again for contents never
+  read. Error popups close on any key without passing it through, and Ctrl+c
+  asks to quit. Expansion tests cover L and Shift+Right, and collapse through H
+  and Shift+Left. Filter tests cover F opening the bar, Tab switching its mode,
+  search bars ignoring Tab, and bash-style editing at the ends and in the middle
+  of words. Search tests cover /, n and N, wrapping, matches in collapsed
+  directories, skipping hidden identical entries, and Esc ending the search
+  before the filter. Outside a search, n and N jump between differences, as
+  Shift+Down and Shift+Up always do. Other key tests cover the quit prompt's
+  buttons, Ctrl+c quitting at once on a terminal too small for it, gg and G,
+  Help navigation and closing without passing the key through, and Esc clearing
+  the filter. Both screens leave q, Space and Backspace unbound. A commit's
+  screen shows the header of the side whose commit it is above both boxes, and
+  going back shows the screen's again.
 - **diff:** side-by-side alignment, line ends (CR+LF throughout, mixed, lone CR,
   no final line feed), the size limit and binary input, and in-line changes,
   including the length cap and escapes inside changes. Fuzzing checks that every
