@@ -65,15 +65,6 @@ func ReadAt(dir int, path string) (*Stat, error) {
 	return st, nil
 }
 
-// ReadFile reads what f is open on, as a pipe given on the command line.
-func ReadFile(f *os.File) (*Stat, error) {
-	var stx unix.Statx_t
-	if err := unix.Statx(int(f.Fd()), "", unix.AT_EMPTY_PATH, mask, &stx); err != nil {
-		return nil, &os.PathError{Op: "statx", Path: f.Name(), Err: err}
-	}
-	return fromStatx(&stx), nil
-}
-
 func fromStatx(stx *unix.Statx_t) *Stat {
 	ts := func(t unix.StatxTimestamp) time.Time { return time.Unix(t.Sec, int64(t.Nsec)) }
 	st := &Stat{

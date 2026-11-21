@@ -25,9 +25,8 @@ func TestParseRequest(t *testing.T) {
 		{"screen on", Request{Kind: "screen", Screen: true}},
 		{"screen off", Request{Kind: "screen"}},
 		{"suspend", Request{Kind: "suspend"}},
-		{"edit left", Request{Kind: "edit", Side: Left}},
-		{`edit right "a/b c"`, Request{Kind: "edit", Side: Right, Path: "a/b c", HasPath: true}},
-		{`edit left "new\nline\xff"`, Request{Kind: "edit", Side: Left, Path: "new\nline\xff", HasPath: true}},
+		{`edit right "a/b c"`, Request{Kind: "edit", Side: Right, Path: "a/b c"}},
+		{`edit left "new\nline\xff"`, Request{Kind: "edit", Side: Left, Path: "new\nline\xff"}},
 	} {
 		got, err := ParseRequest(tt.line)
 		if err != nil || got != tt.want {
@@ -36,7 +35,8 @@ func TestParseRequest(t *testing.T) {
 	}
 	for _, line := range []string{
 		"", "bogus", "screen", "screen maybe", "suspend now", "edit", "edit middle",
-		"edit left a/b", `edit left "unterminated`, "edit left `raw`",
+		"edit left", "edit left a/b", `edit left "unterminated`, "edit left `raw`",
+		"open", "open right",
 	} {
 		if _, err := ParseRequest(line); err == nil {
 			t.Errorf("ParseRequest(%q) accepted", line)
@@ -114,25 +114,25 @@ func TestEditPathDirectoryMode(t *testing.T) {
 		req  Request
 		want string // the path, or the start of the error after "error: "
 	}{
-		{Request{Side: Left, Path: "file", HasPath: true}, filepath.Join(r, "file")},
-		{Request{Side: Right, Path: "sub/file", HasPath: true}, filepath.Join(r, "sub", "file")},
-		{Request{Side: Left, Path: "sub/../file", HasPath: true}, filepath.Join(r, "file")},
-		{Request{Side: Left, Path: "../outside", HasPath: true}, "error: the path leads outside"},
-		{Request{Side: Left, Path: "sub/../../outside", HasPath: true}, "error: the path leads outside"},
-		{Request{Side: Left, Path: "/etc/passwd", HasPath: true}, "error: invalid path"},
-		{Request{Side: Left, Path: "", HasPath: true}, "error: invalid path"},
-		{Request{Side: Left, Path: "sub/", HasPath: true}, "error: invalid path"},
-		{Request{Side: Left, Path: "sub/..", HasPath: true}, "error: invalid path"},
-		{Request{Side: Left, Path: "link-in/x", HasPath: true}, "error: the path leads outside the compared directory or through a symlink"},
-		{Request{Side: Left, Path: "file/x", HasPath: true}, "error: failed opening the file (not a directory"},
-		{Request{Side: Left, Path: "link-in", HasPath: true}, "error: the path leads outside the compared directory or through a symlink"},
-		{Request{Side: Left, Path: "link-out", HasPath: true}, "error: the path leads outside the compared directory or through a symlink"},
-		{Request{Side: Left, Path: "sub/up/file", HasPath: true}, "error: the path leads outside the compared directory or through a symlink"},
-		{Request{Side: Left, Path: "sub", HasPath: true}, "error: the file is no longer a regular file"},
-		{Request{Side: Left, Path: "fifo", HasPath: true}, "error: the file is no longer a regular file"},
-		{Request{Side: Left, Path: "missing", HasPath: true}, "error: failed opening the file (no such file"},
-		{Request{Side: Left}, "error: no path given"},
-		{Request{Side: "middle", Path: "file", HasPath: true}, "error: invalid side"},
+		{Request{Side: Left, Path: "file"}, filepath.Join(r, "file")},
+		{Request{Side: Right, Path: "sub/file"}, filepath.Join(r, "sub", "file")},
+		{Request{Side: Left, Path: "sub/../file"}, filepath.Join(r, "file")},
+		{Request{Side: Left, Path: "../outside"}, "error: the path leads outside"},
+		{Request{Side: Left, Path: "sub/../../outside"}, "error: the path leads outside"},
+		{Request{Side: Left, Path: "/etc/passwd"}, "error: invalid path"},
+		{Request{Side: Left, Path: ""}, "error: invalid path"},
+		{Request{Side: Left, Path: "sub/"}, "error: invalid path"},
+		{Request{Side: Left, Path: "sub/.."}, "error: invalid path"},
+		{Request{Side: Left, Path: "link-in/x"}, "error: the path leads outside the compared directory or through a symlink"},
+		{Request{Side: Left, Path: "file/x"}, "error: failed opening the file (not a directory"},
+		{Request{Side: Left, Path: "link-in"}, "error: the path leads outside the compared directory or through a symlink"},
+		{Request{Side: Left, Path: "link-out"}, "error: the path leads outside the compared directory or through a symlink"},
+		{Request{Side: Left, Path: "sub/up/file"}, "error: the path leads outside the compared directory or through a symlink"},
+		{Request{Side: Left, Path: "sub"}, "error: the file is no longer a regular file"},
+		{Request{Side: Left, Path: "fifo"}, "error: the file is no longer a regular file"},
+		{Request{Side: Left, Path: "missing"}, "error: failed opening the file (no such file"},
+		{Request{Side: Left}, "error: invalid path"},
+		{Request{Side: "middle", Path: "file"}, "error: invalid side"},
 	} {
 		got, err := editPath(t, p, tt.req)
 		if err != nil {
@@ -144,30 +144,12 @@ func TestEditPathDirectoryMode(t *testing.T) {
 	}
 }
 
-func TestEditPathTwoFileMode(t *testing.T) {
-	r, _ := root(t)
-	p := &Parent{
-		Left:  Target{Path: filepath.Join(r, "file"), File: true},
-		Right: Target{Path: "/dev/null"},
-	}
-	if f, err := p.EditPath(Request{Side: Left}); err != nil || f.Name != filepath.Join(r, "file") || f.Dir != nil {
-		t.Errorf("left = %+v, %v", f, err)
-	}
-	if _, err := p.EditPath(Request{Side: Left, Path: "../outside", HasPath: true}); err == nil {
-		t.Error("a path sent in two-file mode was accepted")
-	}
-	if _, err := p.EditPath(Request{Side: Right}); err == nil {
+// TestEditPathNotRoot checks that a side that is no directory on disk,
+// as /dev/null, can't be edited.
+func TestEditPathNotRoot(t *testing.T) {
+	p := &Parent{Right: Target{Path: "/dev/null"}}
+	if _, err := p.EditPath(Request{Side: Right, Path: "file"}); err == nil {
 		t.Error("/dev/null was accepted")
-	}
-	// Replaced by a directory since startup.
-	if err := os.Remove(filepath.Join(r, "file")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(r, "file"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.EditPath(Request{Side: Left}); err == nil {
-		t.Error("a directory was accepted")
 	}
 }
 
@@ -178,12 +160,8 @@ func TestEditorArgument(t *testing.T) {
 		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		p := &Parent{Left: Target{Path: name, File: true}}
-		if f, err := p.EditPath(Request{Side: Left}); err != nil || f.Name != "./"+name {
-			t.Errorf("two-file EditPath = %+v, %v; want ./%s", f, err, name)
-		}
-		p = &Parent{Left: Target{Path: ".", Root: true}}
-		f, err := p.EditPath(Request{Side: Left, Path: name, HasPath: true})
+		p := &Parent{Left: Target{Path: ".", Root: true}}
+		f, err := p.EditPath(Request{Side: Left, Path: name})
 		if err != nil || f.Name != "./"+name {
 			t.Errorf("tree EditPath = %+v, %v; want ./%s", f, err, name)
 		}
@@ -220,13 +198,13 @@ func TestServe(t *testing.T) {
 	if err := c.Screen(true); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Edit(Left, "file", true); err != nil {
+	if err := c.Edit(Left, "file"); err != nil {
 		t.Errorf("edit: %v", err)
 	}
-	if err := c.Edit(Right, "sub/file", true); err == nil || err.Error() != "the editor exited with status 1" {
+	if err := c.Edit(Right, "sub/file"); err == nil || err.Error() != "the editor exited with status 1" {
 		t.Errorf("edit with a failing editor: %v", err)
 	}
-	if err := c.Edit(Left, "../outside", true); err == nil || !strings.Contains(err.Error(), "outside") {
+	if err := c.Edit(Left, "../outside"); err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("edit outside: %v", err)
 	}
 	if err := c.Suspend(); err != nil {
@@ -261,7 +239,7 @@ func TestServeStopsOnABadRequest(t *testing.T) {
 func TestEditorStaysInTheCheckedDirectory(t *testing.T) {
 	r, outside := root(t)
 	p := &Parent{Left: Target{Path: r, Root: true}}
-	f, err := p.EditPath(Request{Side: Left, Path: "sub/file", HasPath: true})
+	f, err := p.EditPath(Request{Side: Left, Path: "sub/file"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +276,7 @@ func TestEditorCommand(t *testing.T) {
 	r, _ := root(t)
 	t.Chdir(r)
 	p := &Parent{Left: Target{Path: ".", Root: true}}
-	f, err := p.EditPath(Request{Side: Left, Path: "sub/file", HasPath: true})
+	f, err := p.EditPath(Request{Side: Left, Path: "sub/file"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,11 +291,6 @@ func TestEditorCommand(t *testing.T) {
 	}
 	if editor[1] != "-x" || len(editor) != 2 {
 		t.Errorf("editor changed to %q", editor)
-	}
-	// Without a directory, as in two-file mode, nothing changes.
-	cmd, err = EditFile{Name: "./file"}.Command(editor)
-	if err != nil || cmd.Path != "./ed" || cmd.Dir != "" {
-		t.Errorf("two-file command %q in %q, %v", cmd.Path, cmd.Dir, err)
 	}
 }
 

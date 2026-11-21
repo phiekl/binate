@@ -138,13 +138,9 @@ var TextHelp = []HelpLine{
 	key("exit binate", "Ctrl+c"),
 }
 
-// DiffHelp returns the diff view's keys, with Esc going back to the tree if
-// back is set: the diff view opened from a tree.
-func DiffHelp(back bool) []HelpLine {
+// DiffHelp returns the diff view's keys, with Esc going back to the tree.
+func DiffHelp() []HelpLine {
 	lines := append([]HelpLine{}, diffHelp...)
-	if !back {
-		return lines
-	}
 	for i, l := range lines {
 		if l.Text == "exit binate" {
 			return append(lines[:i:i], append([]HelpLine{key("return to the tree", "Esc")}, lines[i:]...)...)

@@ -432,7 +432,13 @@ func TestResolve(t *testing.T) {
 		}
 	}
 	repo := openTest(t, r, "")
-	for rev, want := range map[string]string{"HEAD:./dir/x": "HEAD:dir/x", "HEAD:dir/../f": "", "HEAD:./dir/../f": "HEAD:f", "HEAD:./": "HEAD:", "HEAD:../f": ""} {
+	// A path ending in a slash, or a relative one in . or .., names a
+	// tree, as in git, which keeps a slash of them.
+	for rev, want := range map[string]string{
+		"HEAD:./dir/x": "HEAD:dir/x", "HEAD:dir/../f": "", "HEAD:./dir/../f": "HEAD:f", "HEAD:./": "HEAD:", "HEAD:../f": "",
+		"HEAD:f/": "", "HEAD:./f/.": "", "HEAD:./f/": "", "HEAD:./dir/x/..": "HEAD:dir", "HEAD:./dir/.": "HEAD:dir",
+		"HEAD:./f/x/..": "", "HEAD:./.": "HEAD:",
+	} {
 		got, err := repo.Resolve(rev)
 		if want == "" {
 			if err == nil {
@@ -510,36 +516,11 @@ func TestResolveAmbiguous(t *testing.T) {
 func TestTargetRoot(t *testing.T) {
 	r := revRepo(t)
 	repo := openTest(t, r, "")
-	target, err := repo.Resolve("HEAD:f")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := NewTargetRoot(repo.Repo, target, "HEAD:f")
-	if !root.IsFile() || root.Path("") != "HEAD:f" {
-		t.Errorf("file root %v %q", root.IsFile(), root.Path(""))
-	}
-	e, err := root.Entry("", false)
-	if err != nil || e.Mode&0o170000 != 0o100000 || e.Size != -1 {
-		t.Errorf("Entry: %+v, %v", e, err)
-	}
-	if st, err := root.Stat(""); err != nil || st.Size != 1 {
-		t.Errorf("Stat: %+v, %v", st, err)
-	}
-	if _, err := root.ReadDir(""); err == nil {
-		t.Error("listed a file")
-	}
-	if _, err := root.Entry("x", false); err == nil {
-		t.Error("found an entry in a file")
-	}
-	if id, ok := root.ContentID(""); !ok || id.Sum != string(target.ID.Bytes()) {
-		t.Errorf("ContentID: %v, %v", id, ok)
-	}
-
 	tree, err := repo.Resolve("HEAD:dir")
 	if err != nil {
 		t.Fatal(err)
 	}
-	root = NewTargetRoot(repo.Repo, tree, "HEAD:dir")
+	root := NewTargetRoot(repo.Repo, tree, "HEAD:dir")
 	if got := root.Path("sub/g"); got != "HEAD:dir/sub/g" {
 		t.Errorf("path %q", got)
 	}

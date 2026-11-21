@@ -6,13 +6,10 @@ package app
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
-	"time"
 
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/diff"
@@ -23,81 +20,66 @@ import (
 
 func TestLoadReportsBinarySides(t *testing.T) {
 	const binary = "Unable to show data that is not UTF-8 encoded."
-	for _, stream := range []bool{false, true} {
-		mode := "files"
-		if stream {
-			mode = "streams"
-		}
-		t.Run(mode, func(t *testing.T) {
-			for _, tt := range []struct {
-				name, left, right string
-				want              [2]string
-			}{
-				{"text", "left\n", "right\n", [2]string{}},
-				{"left binary", "\xff", "right\n", [2]string{binary, ""}},
-				{"right binary", "left\n", "\xfe", [2]string{"", binary}},
-				{"both binary", "\xff", "\xfe", [2]string{binary, binary}},
-			} {
-				t.Run(tt.name, func(t *testing.T) {
-					dir := t.TempDir()
-					source := func(name, content string) Source {
-						if stream {
-							data, err := diff.Read(strings.NewReader(content))
-							return Source{Root: source.Disk(name), Stream: true, Data: data, Err: err}
-						}
-						path := filepath.Join(dir, name)
-						if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-							t.Fatal(err)
-						}
-						return Source{Root: source.Disk(path)}
-					}
-					d := NewDiffScreen(nil, DiffConfig{
-						Styles: colors.Default(),
-						Left:   source("left", tt.left),
-						Right:  source("right", tt.right),
-					})
-					err := d.Load()
-					if tt.want == [2]string{} {
-						if err != nil {
-							t.Fatal(err)
-						}
-						return
-					}
-					if !errors.Is(err, diff.ErrBinary) {
-						t.Fatalf("Load = %v, want a binary error", err)
-					}
-					d.ShowError(err)
-					if d.view.SideErrors != tt.want || d.view.Message != "" {
-						t.Errorf("side errors %q, message %q, want %q", d.view.SideErrors, d.view.Message, tt.want)
-					}
-				})
+	for _, tt := range []struct {
+		name, left, right string
+		want              [2]string
+	}{
+		{"text", "left\n", "right\n", [2]string{}},
+		{"left binary", "\xff", "right\n", [2]string{binary, ""}},
+		{"right binary", "left\n", "\xfe", [2]string{"", binary}},
+		{"both binary", "\xff", "\xfe", [2]string{binary, binary}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			source := func(name, content string) Source {
+				path := filepath.Join(dir, name)
+				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return Source{Root: source.Disk(path)}
+			}
+			d := NewDiffScreen(nil, DiffConfig{
+				Styles: colors.Default(),
+				Left:   source("left", tt.left),
+				Right:  source("right", tt.right),
+			})
+			err := d.Load()
+			if tt.want == [2]string{} {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if !errors.Is(err, diff.ErrBinary) {
+				t.Fatalf("Load = %v, want a binary error", err)
+			}
+			d.ShowError(err)
+			if d.view.SideErrors != tt.want || d.view.Message != "" {
+				t.Errorf("side errors %q, message %q, want %q", d.view.SideErrors, d.view.Message, tt.want)
 			}
 		})
 	}
 }
 
-// A pipe read in the background that can't be shown says so instead of
-// that it is being read.
-func TestBinaryPipeReplacesReading(t *testing.T) {
-	a := testApp(80, 24)
-	d := NewDiffScreen(a, DiffConfig{
+// Nothing, as /dev/null given, is a missing side, every time it is
+// loaded, though /dev/null is there.
+func TestNothingStaysMissing(t *testing.T) {
+	left := filepath.Join(t.TempDir(), "l")
+	if err := os.WriteFile(left, []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDiffScreen(nil, DiffConfig{
 		Styles: colors.Default(),
-		Left:   Source{Root: source.Disk("a"), Stream: true, Pipe: io.NopCloser(strings.NewReader("\xff"))},
-		Right:  Source{Root: source.Disk("b"), Stream: true, Data: []byte("b\n")},
+		Left:   Source{Root: source.Disk(left)},
+		Right:  Source{Root: source.Nothing("/dev/null"), Missing: true},
 	})
-	d.Start()
-	if d.view.Message != "reading the input…" {
-		t.Fatalf("message %q while reading", d.view.Message)
-	}
-	for range 1000 {
-		if d.Tick(); d.loaded == nil {
-			break
+	for range 2 {
+		if err := d.Load(); err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(time.Millisecond)
-	}
-	want := [2]string{"Unable to show data that is not UTF-8 encoded.", ""}
-	if d.view.Message != "" || d.view.SideErrors != want {
-		t.Errorf("message %q, side errors %q", d.view.Message, d.view.SideErrors)
+		if rows := d.view.Rows; len(rows) != 1 || rows[0].Kind != diff.LeftOnly || !d.right.Missing {
+			t.Fatalf("rows %+v, right missing %v", rows, d.right.Missing)
+		}
 	}
 }
 

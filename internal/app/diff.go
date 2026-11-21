@@ -7,7 +7,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"pxy.se/go/binate/internal/files"
 	"pxy.se/go/binate/internal/scan"
 	"pxy.se/go/binate/internal/source"
-	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/term"
 	"pxy.se/go/binate/internal/view"
 )
@@ -26,26 +24,11 @@ import (
 // Source is a side of the diff view.
 type Source struct {
 	// Root and Rel are where the side is: the entry at Rel in Root, read
-	// unless the side is a stream or missing. Its path is shown.
+	// unless the side is missing. Its path is shown.
 	Root source.Root
 	Rel  string
-	// Stream is set for a side read once at startup, such as a pipe or
-	// /dev/null, whose contents are in Data, or whose error is in Err.
-	Stream bool
-	Data   []byte
-	Err    error
-	// Pipe, for a stream not read yet, is read and closed by Start, in
-	// the background: a pipe may take any time to end.
-	Pipe io.ReadCloser
-	// Stat, or StatErr, is what a stream's panel shows, read when it was
-	// opened.
-	Stat    *stat.Stat
-	StatErr error
 	// Missing is set for the absent side of a one-sided file: empty.
 	Missing bool
-	// HasRel is set in directory mode, where Rel is the entry's path from
-	// the root of the tree.
-	HasRel bool
 }
 
 // Path returns the side's path, as shown.
@@ -56,12 +39,10 @@ func (src Source) Path() string {
 // editSide returns the side as e sees it: only a file read by path can
 // be edited.
 func (src Source) editSide() EditSide {
-	es := EditSide{Path: src.Path(), Rel: src.Rel, HasRel: src.HasRel}
+	es := EditSide{Path: src.Path(), Rel: src.Rel}
 	switch {
 	case src.Missing:
 		es.Why = "missing"
-	case src.Stream:
-		es.Why = notRegular
 	default:
 		es.Why = editRestriction(src.Root)
 	}
@@ -74,14 +55,9 @@ func (src Source) Load() (diff.Text, error) {
 	switch {
 	case src.Missing:
 		return diff.Text{}, nil
-	case src.Stream:
-		if src.Err != nil {
-			return diff.Text{}, src.Err
-		}
-		return diff.Split(src.Data), nil
 	}
-	// A side given through a symlink on the command line is followed.
-	f, err := src.Root.Open(src.Rel, true)
+	// As in the tree, a symlink put in the file's place isn't followed.
+	f, err := src.Root.Open(src.Rel, false)
 	if err != nil {
 		return diff.Text{}, err
 	}
@@ -103,7 +79,7 @@ type DiffScreen struct {
 	abs  [2]string
 	help *view.Help
 	last *term.Screen
-	// back returns to the screen the diff view was opened from; nil quits.
+	// back returns to the screen the diff view was opened from.
 	back func()
 	// pendingG is set after g, which goes to the start if repeated.
 	pendingG bool
@@ -118,8 +94,6 @@ type DiffScreen struct {
 	// opts and context are what a commit's trees are compared with.
 	opts    scan.Options
 	context int
-	// loaded, while streams are read, receives them once read.
-	loaded chan [2]Source
 	// stats reads the files' metadata, again once statGen is raised, as
 	// each time they are loaded.
 	stats   statReader
@@ -135,12 +109,12 @@ type DiffConfig struct {
 	Home        string
 	Context     int
 	Left, Right Source
-	// Back returns to the screen the diff view was opened from; nil quits.
+	// Back returns to the screen the diff view was opened from.
 	Back func()
 	// Edited is called after an edit, as to compare the entry again.
 	Edited func()
-	// Compare is the attributes whose differences the panels mark: the
-	// tree's, or --compare's for two files; 0 means the default.
+	// Compare is the attributes whose differences the panels mark, the
+	// tree's; 0 means the default.
 	Compare scan.Attrs
 	// Excludes are the names left out of a commit's trees, as of the
 	// tree the diff view was opened from.
@@ -166,36 +140,6 @@ func NewDiffScreen(a *App, cfg DiffConfig) *DiffScreen {
 		context: cfg.Context,
 		stats:   statReader{app: a},
 		changes: changeReader{app: a},
-	}
-}
-
-// Start reads both sides and compares them, showing any error. Streams are
-// read in the background, and the screen says so meanwhile; only quitting
-// and suspending work until they are read.
-func (d *DiffScreen) Start() {
-	if d.left.Pipe == nil && d.right.Pipe == nil {
-		d.loadOrShow()
-		return
-	}
-	d.loaded = make(chan [2]Source, 1)
-	d.view.Message = "reading the input…"
-	go func(sides [2]Source) {
-		for i := range sides {
-			if p := sides[i].Pipe; p != nil {
-				sides[i].Data, sides[i].Err = diff.Read(p)
-				sides[i].Pipe = nil
-				_ = p.Close()
-			}
-		}
-		d.loaded <- sides
-		d.app.Wake()
-	}([2]Source{d.left, d.right})
-}
-
-// loadOrShow loads both sides, or shows why it can't.
-func (d *DiffScreen) loadOrShow() {
-	if err := d.Load(); err != nil {
-		d.ShowError(err)
 	}
 }
 
@@ -346,18 +290,8 @@ func (e *bothSidesError) Sentences() []string {
 	return []string{e.left.Sentence(), e.right.Sentence()}
 }
 
-// Tick shows the sides once streams are read.
+// Tick has nothing to do: the sides are read at once.
 func (d *DiffScreen) Tick() time.Duration {
-	if d.loaded == nil {
-		return -1
-	}
-	select {
-	case sides := <-d.loaded:
-		d.loaded = nil
-		d.left, d.right = sides[0], sides[1]
-		d.loadOrShow()
-	default:
-	}
 	return -1
 }
 
@@ -385,7 +319,7 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 	srcs := [2]*Source{&d.left, &d.right}
 	key := statKey{gen: d.statGen}
 	for i, src := range srcs {
-		if !src.Missing && !src.Stream {
+		if !src.Missing {
 			key.sides[i] = sideKey{src.Root, src.Rel}
 		}
 	}
@@ -401,15 +335,13 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 		switch {
 		case src.Missing:
 			sides[i] = view.StatSide{Missing: true, Entries: -1}
-		case src.Stream:
-			sides[i] = statSide(statResult{src.Stat, src.StatErr}, true, d.app.Names)
 		default:
 			sides[i] = statSide(got[i], done, d.app.Names)
 		}
 		sides[i].Path = d.abs[i]
 		sides[i].InRevision = !onDisk(src.Root)
 		sides[i].BesideRevision = onDisk(src.Root) && srcs[1-i].Root != nil && !onDisk(srcs[1-i].Root)
-		if !src.Missing && !src.Stream {
+		if !src.Missing {
 			sides[i].RepoPath = repoPath(src.Root, src.Rel)
 		}
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
@@ -422,7 +354,7 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 func (d *DiffScreen) changeKey() changeKey {
 	var ckey changeKey
 	for i, src := range [2]*Source{&d.left, &d.right} {
-		if !src.Missing && !src.Stream {
+		if !src.Missing {
 			ckey.sides[i] = historyKey(src.Root, src.Rel)
 		}
 	}
@@ -504,11 +436,6 @@ func (d *DiffScreen) Key(k term.Key) bool {
 	if d.help != nil {
 		return helpKey(&d.help, d.last, k)
 	}
-	// Stream inputs open directly in the diff view. While loading,
-	// only application-level keys are available.
-	if d.loaded != nil {
-		return false
-	}
 	// g waits for a second g.
 	g := d.pendingG
 	d.pendingG = false
@@ -548,16 +475,13 @@ func (d *DiffScreen) Key(k term.Key) bool {
 			v.Notice = "no more changes above"
 		}
 	case k == term.Rune('?'):
-		d.help = view.NewHelp(view.DiffHelp(d.back != nil))
+		d.help = view.NewHelp(view.DiffHelp())
 	case k == term.Rune('e'):
 		d.startEdit()
 	case k == term.Rune('a') && hasCommits(d.left.Root, d.right.Root):
 		d.actions = view.NewActionPopup(commitRows(d.changeKey()))
 	case k.Code == term.KeyEsc:
-		// Esc goes back to the tree, but never quits.
-		if d.back != nil {
-			d.back()
-		}
+		d.back()
 	default:
 		return false
 	}

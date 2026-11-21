@@ -17,11 +17,8 @@ import (
 type EditSide struct {
 	// Path is shown in the popup.
 	Path string
-	// Rel is the path relative to the side's root, sent to the parent in
-	// directory mode; HasRel is false in two-file mode, where the parent
-	// edits the file given on the command line.
-	Rel    string
-	HasRel bool
+	// Rel is the path relative to the side's root, sent to the parent.
+	Rel string
 	// Why is why the side can't be edited, or empty if it can.
 	Why string
 }
@@ -184,7 +181,7 @@ func (e *editor) run(i int, note string) {
 	}
 	es := e.sides[i]
 	err := e.app.Release(func() error {
-		return e.app.client.Edit(side, es.Rel, es.HasRel)
+		return e.app.client.Edit(side, es.Rel)
 	})
 	if err != nil {
 		e.app.ShowError(editFailed, errorTexts(err)...)

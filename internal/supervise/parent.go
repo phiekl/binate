@@ -23,15 +23,12 @@ import (
 
 // Target is a side as the parent knows it from the command line.
 type Target struct {
-	// Path is the supplied path after resolving a lone directory argument
-	// to an entry matching the other side's basename.
+	// Path is the path given.
 	Path string
-	// Root is set for a directory compared as a tree: edit requests carry
-	// a path relative to it.
+	// Root is set for a directory on disk, whose files edit requests name
+	// by their paths relative to it. A side that is not, as one of git or
+	// /dev/null, can't be edited.
 	Root bool
-	// File is set for a regular file compared on its own: edit requests
-	// carry no path, and the parent edits Path itself.
-	File bool
 }
 
 // Parent answers the child's requests.
@@ -88,32 +85,27 @@ func (p *Parent) Serve(conn io.ReadWriter) error {
 // EditFile is a file checked for editing: the editor's argument, and the
 // directory to start it in.
 type EditFile struct {
-	// Dir is the file's directory in directory mode, held open since it
-	// was checked, so that the editor starts in that very directory even
-	// if one on the way was since replaced, as by a symlink. Nil in
-	// two-file mode, where the editor starts in binate's directory.
+	// Dir is the file's directory, held open since it was checked, so
+	// that the editor starts in that very directory even if one on the
+	// way was since replaced, as by a symlink.
 	Dir *os.File
-	// Name is the editor's argument: the file's name in Dir, or else the
-	// path given on the command line, either starting with "./" if
-	// relative (see editorArg).
+	// Name is the editor's argument: the file's name in Dir, starting
+	// with "./" (see editorArg).
 	Name string
 }
 
-// Close closes Dir, if any.
+// Close closes Dir.
 func (f EditFile) Close() {
-	if f.Dir != nil {
-		_ = f.Dir.Close()
-	}
+	_ = f.Dir.Close()
 }
 
 // Command returns the command running editor, a program and its
-// arguments, on f. With Dir, it starts in /proc/self/fd/N, which the
-// kernel resolves to Dir itself, not by looking up its path again; a
-// relative program is made absolute first, as it would else be looked up
-// from Dir.
+// arguments, on f. It starts in /proc/self/fd/N, which the kernel
+// resolves to Dir itself, not by looking up its path again; a relative
+// program is made absolute first, as it would else be looked up from Dir.
 func (f EditFile) Command(editor []string) (*exec.Cmd, error) {
 	prog := editor[0]
-	if f.Dir != nil && strings.Contains(prog, "/") && !filepath.IsAbs(prog) {
+	if strings.Contains(prog, "/") && !filepath.IsAbs(prog) {
 		abs, err := filepath.Abs(prog)
 		if err != nil {
 			return nil, err
@@ -121,17 +113,14 @@ func (f EditFile) Command(editor []string) (*exec.Cmd, error) {
 		prog = abs
 	}
 	cmd := exec.Command(prog, append(slices.Clone(editor[1:]), f.Name)...)
-	if f.Dir != nil {
-		cmd.Dir = "/proc/self/fd/" + strconv.Itoa(int(f.Dir.Fd()))
-	}
+	cmd.Dir = "/proc/self/fd/" + strconv.Itoa(int(f.Dir.Fd()))
 	return cmd, nil
 }
 
 // EditPath checks an edit request and returns the file to give the editor.
-// In directory mode, the path must name a regular file inside the side's
-// root, with no ".." or symlink leading out of it; its directory is
-// returned open. In two-file mode, no path may be sent, and the side's file
-// must still be a regular file. The caller closes the result.
+// The path must name a regular file inside the side's root, with no ".."
+// or symlink leading out of it; its directory is returned open. The
+// caller closes the result.
 func (p *Parent) EditPath(req Request) (EditFile, error) {
 	var target Target
 	switch req.Side {
@@ -142,30 +131,14 @@ func (p *Parent) EditPath(req Request) (EditFile, error) {
 	default:
 		return EditFile{}, fmt.Errorf("invalid side %q", req.Side)
 	}
-	switch {
-	case target.Root:
-		if !req.HasPath {
-			return EditFile{}, errors.New("no path given")
-		}
-		dir, name, err := openBeneathDir(target.Path, req.Path)
-		if err != nil {
-			return EditFile{}, err
-		}
-		return EditFile{Dir: dir, Name: editorArg(name)}, nil
-	case target.File:
-		if req.HasPath {
-			return EditFile{}, errors.New("a path was given for a file compared on its own")
-		}
-		info, err := os.Stat(target.Path)
-		if err != nil {
-			return EditFile{}, fmt.Errorf("failed opening the file (%w)", files.UnwrapPath(err))
-		}
-		if !info.Mode().IsRegular() {
-			return EditFile{}, errNotRegular
-		}
-		return EditFile{Name: editorArg(target.Path)}, nil
+	if !target.Root {
+		return EditFile{}, errors.New("unable to edit this side")
 	}
-	return EditFile{}, errors.New("unable to edit this side")
+	dir, name, err := openBeneathDir(target.Path, req.Path)
+	if err != nil {
+		return EditFile{}, err
+	}
+	return EditFile{Dir: dir, Name: editorArg(name)}, nil
 }
 
 // errNotRegular is the error for a file no longer regular.

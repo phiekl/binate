@@ -7,9 +7,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"pxy.se/go/binate/internal/files"
 )
@@ -19,8 +22,7 @@ type inputKind int
 
 const (
 	inputDir      inputKind = iota // a directory, compared as a tree
-	inputFile                      // a regular file, read by path
-	inputStream                    // anything else, such as /dev/null or a pipe, read once
+	inputNull                      // /dev/null, nothing: an empty tree
 	inputGit                       // a git revision, resolved by the child
 	inputWorkTree                  // the repository's work tree, resolved by the child
 	inputIndex                     // the repository's index, resolved by the child
@@ -30,13 +32,9 @@ const (
 type input struct {
 	path string
 	kind inputKind
-	// inDir is set for a file looked up in the directory given, by the
-	// name of the file given opposite it.
-	inDir bool
 }
 
-// inputs holds the resolved arguments. As with diff, a lone directory
-// argument is searched for an entry matching the other side's basename.
+// inputs holds the resolved arguments.
 type inputs struct {
 	left, right input
 }
@@ -64,11 +62,6 @@ func (in inputs) hasIndex() bool {
 	return in.left.kind == inputIndex || in.right.kind == inputIndex
 }
 
-// dirMode reports whether two directories are compared.
-func (in inputs) dirMode() bool {
-	return in.left.kind == inputDir && in.right.kind == inputDir
-}
-
 func resolveInputs(left, right string) (inputs, error) {
 	l, err := statInput(left)
 	if err != nil {
@@ -78,55 +71,46 @@ func resolveInputs(left, right string) (inputs, error) {
 	if err != nil {
 		return inputs{}, err
 	}
-	switch {
-	case l.kind == inputDir && r.kind != inputDir:
-		l, err = statInput(filepath.Join(left, filepath.Base(right)))
-		l.inDir = true
-	case r.kind == inputDir && l.kind != inputDir:
-		r, err = statInput(filepath.Join(right, filepath.Base(left)))
-		r.inDir = true
-	}
-	if err != nil {
-		return inputs{}, err
-	}
-	if l.kind == inputDir && r.kind != inputDir || r.kind == inputDir && l.kind != inputDir {
-		return inputs{}, errors.New("unable to compare a directory with a file of the same name that is a directory")
+	if l.kind == inputNull && r.kind == inputNull {
+		return inputs{}, errors.New("unable to compare /dev/null with itself: give a directory")
 	}
 	return inputs{left: l, right: r}, nil
 }
 
+// statInput returns the side path names, following symlinks: a directory,
+// or /dev/null, the null device by any name, as a symlink to it, which is
+// checked without opening it. Anything else is refused, a file too.
 func statInput(path string) (input, error) {
 	info, err := os.Stat(path)
-	if err != nil {
-		return input{}, fmt.Errorf("%s: %w", path, files.UnwrapPath(err))
-	}
 	switch {
+	case err != nil:
+		return input{}, fmt.Errorf("%s: %w", path, files.UnwrapPath(err))
 	case info.IsDir():
 		return input{path: path, kind: inputDir}, nil
+	case isNull(info):
+		return input{path: path, kind: inputNull}, nil
 	case info.Mode().IsRegular():
-		return input{path: path, kind: inputFile}, nil
+		return input{}, fmt.Errorf("%s: a file, and binate compares directories: compare two files with diff", path)
 	}
-	return input{path: path, kind: inputStream}, nil
+	return input{}, fmt.Errorf("%s: not a directory, which binate compares, or /dev/null for an empty one", path)
 }
 
-// inputCodes are the letters encode gives each kind of input, in capitals
-// for a file looked up in the directory given.
-const inputCodes = "dfsgwi"
+// isNull reports whether info is of the null device, character device 1:3
+// on Linux.
+func isNull(info fs.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && info.Mode()&fs.ModeCharDevice != 0 && info.Mode()&fs.ModeDevice != 0 &&
+		unix.Major(st.Rdev) == 1 && unix.Minor(st.Rdev) == 3
+}
+
+// inputCodes are the letters encode gives each kind of input.
+const inputCodes = "dngwi"
 
 // encode returns the kinds of both sides, for the child, which takes the
 // inputs as the parent resolved them rather than look again: what it
-// would find could differ, as by then a pipe's /dev/fd name is the
-// parent's.
+// would find could differ, as a directory replaced since.
 func (in inputs) encode() string {
-	var b strings.Builder
-	for _, side := range []input{in.left, in.right} {
-		c := inputCodes[side.kind]
-		if side.inDir {
-			c -= 'a' - 'A'
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
+	return string([]byte{inputCodes[in.left.kind], inputCodes[in.right.kind]})
 }
 
 // decodeInputs returns the inputs for the arguments left and right, of the
@@ -137,25 +121,11 @@ func decodeInputs(left, right, code string) (inputs, error) {
 	}
 	sides := [2]input{{path: left}, {path: right}}
 	for i := range sides {
-		c := code[i]
-		lower := c | ('a' - 'A')
-		k := strings.IndexByte(inputCodes, lower)
+		k := strings.IndexByte(inputCodes, code[i])
 		if k < 0 {
 			return inputs{}, fmt.Errorf("invalid input kinds %q", code)
 		}
-		sides[i].kind, sides[i].inDir = inputKind(k), c != lower
-		if sides[i].inDir && sides[i].kind != inputFile && sides[i].kind != inputStream {
-			return inputs{}, fmt.Errorf("invalid input kinds %q", code)
-		}
+		sides[i].kind = inputKind(k)
 	}
-	l, r := &sides[0], &sides[1]
-	switch {
-	case l.inDir && r.inDir:
-		return inputs{}, fmt.Errorf("invalid input kinds %q", code)
-	case l.inDir:
-		l.path = filepath.Join(left, filepath.Base(right))
-	case r.inDir:
-		r.path = filepath.Join(right, filepath.Base(left))
-	}
-	return inputs{left: *l, right: *r}, nil
+	return inputs{left: sides[0], right: sides[1]}, nil
 }

@@ -232,6 +232,40 @@ func (d Disk) Open(rel string, follow bool) (File, error) {
 	return f, nil
 }
 
+// Nothing is a side with no entries, given as /dev/null, at the path
+// given, which every entry shows. Opposite a tree it is an empty tree, and
+// opposite a file a missing one, so that everything on the other side is
+// added or removed. It is never read: every entry is missing, the root
+// too.
+type Nothing string
+
+// Editable is false: there is nothing to edit.
+func (n Nothing) Editable() bool { return false }
+
+// Path returns the path given, for every entry.
+func (n Nothing) Path(string) string { return string(n) }
+
+func (n Nothing) Entry(rel string, _ bool) (Entry, error) {
+	return Entry{}, n.missing("stat", rel)
+}
+
+func (n Nothing) Stat(rel string) (*stat.Stat, error) {
+	return nil, n.missing("stat", rel)
+}
+
+func (n Nothing) ReadDir(rel string) ([]string, error) {
+	return nil, n.missing("open", rel)
+}
+
+func (n Nothing) Open(rel string, _ bool) (File, error) {
+	return nil, n.missing("open", rel)
+}
+
+// missing is the error of the entry at rel, which is not there.
+func (n Nothing) missing(op, rel string) error {
+	return &os.PathError{Op: op, Path: n.Path(rel), Err: unix.ENOENT}
+}
+
 // Status is an entry's state in a version control system's work tree, as
 // git status --short gives it: Staged is the letter of what is staged
 // against the last commit, and Unstaged of what is not, each ' ' for

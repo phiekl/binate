@@ -223,10 +223,12 @@ func TestDiffKeys(t *testing.T) {
 	r.WriteString("right\n")
 	dir := writeTestFiles(t, map[string]string{"l": "first\n" + l.String(), "r": "1st\n" + r.String()})
 	a := testApp(80, 24)
+	back := false
 	d := NewDiffScreen(a, DiffConfig{
 		Styles: colors.Default(), Context: 3,
 		Left:  Source{Root: source.Disk(filepath.Join(dir, "l"))},
 		Right: Source{Root: source.Disk(filepath.Join(dir, "r"))},
+		Back:  func() { back = true },
 	})
 	if err := d.Load(); err != nil {
 		t.Fatal(err)
@@ -254,13 +256,13 @@ func TestDiffKeys(t *testing.T) {
 	if d.view.Top != 0 {
 		t.Errorf("Shift+Up left the top at %d", d.view.Top)
 	}
-	// In two-file mode, Esc does nothing and q asks to quit.
-	d.Key(term.Key{Code: term.KeyEsc})
-	if a.quit || a.confirming {
-		t.Error("Esc quit two-file mode or asked to")
-	}
+	// q does nothing, and Esc goes back to the tree, without quitting.
 	if d.Key(term.Rune('q')) || a.confirming || a.quit {
 		t.Errorf("q: prompt %v, quit %v; want nothing", a.confirming, a.quit)
+	}
+	d.Key(term.Key{Code: term.KeyEsc})
+	if !back || a.quit || a.confirming {
+		t.Errorf("Esc: back %v, quit %v, prompt %v", back, a.quit, a.confirming)
 	}
 }
 

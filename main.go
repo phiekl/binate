@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: MIT
 
-// Command binate displays file and directory differences in a read-only
-// terminal interface. It runs as two processes: this unrestricted parent,
-// which only starts the child, runs the editor and stops the job for
-// Ctrl+z, and the child, restricted with Landlock, which does everything
-// else (see child.go).
+// Command binate displays the differences between two directories, and the
+// files in them, in a read-only terminal interface. It runs as two
+// processes: this unrestricted parent, which only starts the child, runs
+// the editor and stops the job for Ctrl+z, and the child, restricted with
+// Landlock, which does everything else (see child.go).
 package main
 
 import (
@@ -87,7 +87,7 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	s.Count(&o.verbose, "verbose", "v", "write debug messages (repeat for more)")
 	s.Bool(&o.version, "version", "V", "show version and exit")
 	s.Global("verbose", "version")
-	sides, directory := "%s directory or file, or revision, . or : with --git", "with --git, find the repository from directory, as git -C"
+	sides, directory := "%s directory, or revision, . or : with --git", "with --git, find the repository from directory, as git -C"
 	cached := "with --git, compare left, or HEAD, with the index"
 	if gitOnly {
 		sides, directory = "%s revision, . (work tree) or : (index)", "find the repository from directory, as git -C"
@@ -208,7 +208,7 @@ func runParent() int {
 	}
 	editor := editorCommand()
 	cli.Debug(log, cli.LevelDebug1, "starting", "left", in.left.path, "right", in.right.path,
-		"directories", in.dirMode(), "compare", o.compare.String(), "editor", strings.Join(editor, " "),
+		"compare", o.compare.String(), "editor", strings.Join(editor, " "),
 		"truecolor", colorEnv.TrueColor)
 
 	saved, err := term.GetState(int(os.Stdin.Fd()))
@@ -256,30 +256,16 @@ func (p *parent) run(in inputs) int {
 		cmd.Stderr = os.Stderr
 	}
 
-	// Pass the socket, and streams, such as pipes from <(cmd), opened here,
-	// where their /dev/fd names are this process's, on as descriptors 3 and
-	// up, around those this process inherited, which keep their numbers.
+	// Pass the socket on as descriptor 3 or up, around those this process
+	// inherited, which keep their numbers.
 	var files childFiles
 	defer files.close()
 	sockFD, err := files.add(theirs)
 	if err != nil {
 		return fail("passing the socket: %v", err)
 	}
-	streamFDs := []int{-1, -1}
-	for i, side := range []input{in.left, in.right} {
-		if side.kind != inputStream {
-			continue
-		}
-		f, err := os.Open(side.path)
-		if err != nil {
-			return fail("%v", err)
-		}
-		if streamFDs[i], err = files.add(f); err != nil {
-			return fail("passing %s: %v", side.path, err)
-		}
-	}
 	cmd.ExtraFiles = files.files
-	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d,%d,%d,%s", childEnv, sockFD, streamFDs[0], streamFDs[1], in.encode()))
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d,%s", childEnv, sockFD, in.encode()))
 
 	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
@@ -302,8 +288,8 @@ func (p *parent) run(in inputs) int {
 	}()
 
 	sup := &supervise.Parent{
-		Left:    target(in.left, in.dirMode()),
-		Right:   target(in.right, in.dirMode()),
+		Left:    target(in.left),
+		Right:   target(in.right),
 		Screen:  p.setScreen,
 		Edit:    p.edit,
 		Suspend: p.suspend,
@@ -375,8 +361,8 @@ func (c *childFiles) close() {
 	c.files = nil
 }
 
-func target(i input, dirMode bool) supervise.Target {
-	return supervise.Target{Path: i.path, Root: dirMode, File: !dirMode && i.kind == inputFile}
+func target(i input) supervise.Target {
+	return supervise.Target{Path: i.path, Root: i.kind == inputDir}
 }
 
 func (p *parent) setScreen(on bool) {
@@ -409,11 +395,7 @@ func (p *parent) edit(f supervise.EditFile) error {
 	}
 	_ = term.Restore(int(os.Stdin.Fd()), p.saved)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if f.Dir != nil {
-		cli.Debug(p.log, cli.LevelDebug1, "running the editor", "dir", f.Dir.Name(), "file", f.Name)
-	} else {
-		cli.Debug(p.log, cli.LevelDebug1, "running the editor", "path", f.Name)
-	}
+	cli.Debug(p.log, cli.LevelDebug1, "running the editor", "dir", f.Dir.Name(), "file", f.Name)
 	err = cmd.Run()
 	var exitErr *exec.ExitError
 	var pathErr *os.PathError

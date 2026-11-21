@@ -31,42 +31,31 @@ import (
 )
 
 // childSpec is what the parent passes in childEnv: the socket's file
-// descriptor, those of the left and right streams, or -1, and the kinds of
-// the inputs (see inputs.encode).
+// descriptor and the kinds of the inputs (see inputs.encode).
 type childSpec struct {
-	sock        int
-	left, right int
-	kinds       string
+	sock  int
+	kinds string
 }
 
 func parseChildSpec(s string) (childSpec, error) {
-	parts := strings.Split(s, ",")
-	if len(parts) != 4 {
+	sock, kinds, ok := strings.Cut(s, ",")
+	n, err := strconv.Atoi(sock)
+	if !ok || err != nil || n < 3 {
 		return childSpec{}, fmt.Errorf("invalid %s %q", childEnv, s)
 	}
-	var fds [3]int
-	for i, p := range parts[:3] {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < -1 || (i == 0 && n < 3) {
-			return childSpec{}, fmt.Errorf("invalid %s %q", childEnv, s)
-		}
-		fds[i] = n
-	}
-	return childSpec{sock: fds[0], left: fds[1], right: fds[2], kinds: parts[3]}, nil
+	return childSpec{sock: n, kinds: kinds}, nil
 }
 
 // child is the restricted process's setup, before the screen opens.
 type child struct {
-	log     *slog.Logger
-	opts    options
-	in      inputs
-	client  *supervise.Client
-	streams [2]*os.File
+	log    *slog.Logger
+	opts   options
+	in     inputs
+	client *supervise.Client
 	// repo is the repository of --git, found before the process is
-	// restricted, and gitFiles the revisions' files, if files.
-	repo     *git.Location
-	gitFiles [2]*git.Root
-	ignore   git.GlobalIgnore
+	// restricted.
+	repo   *git.Location
+	ignore git.GlobalIgnore
 }
 
 func runChild(specText string) int {
@@ -91,11 +80,6 @@ func runChild(specText string) int {
 		return fail("%v", err)
 	}
 	c := &child{log: log, opts: o, in: in, client: supervise.NewClient(sock)}
-	for i, fd := range []int{spec.left, spec.right} {
-		if fd >= 0 {
-			c.streams[i] = os.NewFile(uintptr(fd), "stream")
-		}
-	}
 
 	// The terminal's signals reach the whole foreground process group,
 	// this process too. Ctrl+c and Ctrl+\ are keys in raw mode; ignore
@@ -125,19 +109,15 @@ func (c *child) policy() landlock.Policy {
 		}
 	}
 	for _, side := range []input{c.in.left, c.in.right} {
-		switch side.kind {
-		case inputDir:
+		if side.kind == inputDir {
 			p.Dirs = append(p.Dirs, side.path)
-		case inputFile:
-			p.Files = append(p.Files, side.path)
 		}
 	}
 	return p
 }
 
 // restrict applies Landlock. Everything the child needs that is not
-// beneath the policy's paths must be open by now: the terminal and the
-// streams.
+// beneath the policy's paths must be open by now, as the terminal.
 func (c *child) restrict() error {
 	rules, err := c.policy().Rules()
 	if err != nil {
@@ -200,8 +180,8 @@ func (c *child) run() (code int) {
 		// The revisions are of the repository at the top: its work tree,
 		// or the git directory of a bare one.
 		a.Header = view.Header{Label: "(git)", Path: cmp.Or(c.repo.WorkTree, c.repo.GitDir), Home: os.Getenv("HOME")}
-	} else if c.in.dirMode() {
-		roots = [2]source.Root{source.Disk(c.in.left.path), source.Disk(c.in.right.path)}
+	} else {
+		roots = [2]source.Root{diskRoot(c.in.left), diskRoot(c.in.right)}
 	}
 
 	if err := a.Enter(); err != nil {
@@ -217,38 +197,24 @@ func (c *child) run() (code int) {
 	a.HasEditor = len(editorCommand()) > 0
 	styles := colors.Parse(colors.FromEnv(os.Getenv)).Styles
 	a.Styles = styles
-	if roots[0] != nil {
-		a.Main = app.NewTreeScreen(a, app.TreeConfig{
-			Styles: styles,
-			Home:   os.Getenv("HOME"),
-			Left:   roots[0],
-			Right:  roots[1],
-			Options: scan.Options{
-				Compare:  c.opts.compare,
-				Quick:    c.opts.quick,
-				Excludes: c.opts.excludes,
-			},
-			Context: c.opts.context,
-		})
-	} else {
-		d := app.NewDiffScreen(a, app.DiffConfig{
-			Styles:  styles,
-			Home:    os.Getenv("HOME"),
-			Context: c.opts.context,
-			Left:    c.source(0),
-			Right:   c.source(1),
-			Compare: c.opts.compare,
-		})
-		d.Start()
-		a.Main = d
-	}
+	a.Main = app.NewTreeScreen(a, app.TreeConfig{
+		Styles: styles,
+		Home:   os.Getenv("HOME"),
+		Left:   roots[0],
+		Right:  roots[1],
+		Options: scan.Options{
+			Compare:  c.opts.compare,
+			Quick:    c.opts.quick,
+			Excludes: c.opts.excludes,
+		},
+		Context: c.opts.context,
+	})
 	code = a.Run()
 	_ = a.Leave()
 	return code
 }
 
-// gitRoots resolves two trees (including a work tree), or two revision
-// files, kept for source to return.
+// gitRoots resolves two trees, including a work tree or an index.
 func (c *child) gitRoots() ([2]source.Root, error) {
 	repo, err := git.Open(c.repo)
 	if err != nil {
@@ -277,23 +243,24 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 			// Before the first commit, compare an empty tree, as git
 			// status lists every file as new.
 			if unborn, uerr := repo.Unborn(); uerr == nil && unborn {
-				c.gitFiles[i] = git.NewTargetRoot(repo.Repo, git.Target{Mode: git.ModeTree}, "(no commits)")
-				roots[i] = c.gitFiles[i]
+				roots[i] = git.NewTargetRoot(repo.Repo, git.Target{Mode: git.ModeTree}, "(no commits)")
 				continue
 			}
 		}
 		if err != nil {
 			return [2]source.Root{}, err
 		}
-		if local && (!target.IsTree() || target.Path != "") {
+		switch {
+		case !target.IsTree():
+			return [2]source.Root{}, fmt.Errorf("unable to compare %s: the revision names a file, and binate compares trees: compare two files with git diff", side.path)
+		case local && target.Path != "":
 			other := "the work tree"
 			if !c.in.hasWorkTree() {
 				other = "the index"
 			}
 			return [2]source.Root{}, fmt.Errorf("unable to compare %s with %s: the revision must name a full tree", side.path, other)
 		}
-		c.gitFiles[i] = git.NewTargetRoot(repo.Repo, target, side.path)
-		roots[i] = c.gitFiles[i]
+		roots[i] = git.NewTargetRoot(repo.Repo, target, side.path)
 	}
 	if work >= 0 {
 		tree, err := repo.OpenWorkTree(c.ignore)
@@ -301,32 +268,14 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 			return [2]source.Root{}, err
 		}
 		roots[work] = tree
-		return roots, nil
-	}
-	if c.in.hasIndex() {
-		return roots, nil
-	}
-	l, r := c.gitFiles[0], c.gitFiles[1]
-	switch {
-	case l.IsFile() != r.IsFile():
-		return [2]source.Root{}, fmt.Errorf("unable to compare a tree with a file: %s and %s", c.in.left.path, c.in.right.path)
-	case l.IsFile():
-		return [2]source.Root{}, nil
 	}
 	return roots, nil
 }
 
-// source returns side i (0 left, 1 right) for the diff view. A stream is read
-// once, by the diff view, in the background.
-func (c *child) source(i int) app.Source {
-	in := []input{c.in.left, c.in.right}[i]
-	if f := c.gitFiles[i]; f != nil {
-		return app.Source{Root: f}
+// diskRoot returns the root of side, on disk: a directory, or nothing.
+func diskRoot(side input) source.Root {
+	if side.kind == inputNull {
+		return source.Nothing(side.path)
 	}
-	src := app.Source{Root: source.Disk(in.path)}
-	if f := c.streams[i]; f != nil {
-		src.Stream, src.Pipe = true, f
-		src.Stat, src.StatErr = stat.ReadFile(f)
-	}
-	return src
+	return source.Disk(side.path)
 }

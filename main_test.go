@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"os/user"
@@ -47,6 +48,19 @@ func binate(t *testing.T, args ...string) *exec.Cmd {
 	cmd := exec.Command(exe, args...)
 	cmd.Env = append(os.Environ(), asBinateEnv+"=1", "NO_COLOR=", "BINATE_COLORS=", "VISUAL=", "EDITOR=")
 	return cmd
+}
+
+// binateWithin returns binate run with args, killed if it hasn't exited
+// within d, as one that should refuse its arguments at once could instead
+// block, as on a FIFO's open, and the output then given up on.
+func binateWithin(t *testing.T, d time.Duration, args ...string) *exec.Cmd {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), d)
+	t.Cleanup(cancel)
+	cmd := binate(t, args...)
+	killed := exec.CommandContext(ctx, cmd.Path, args...)
+	killed.Env, killed.WaitDelay = cmd.Env, time.Second
+	return killed
 }
 
 // enterScreen and leaveScreen are written when binate takes and releases
@@ -541,177 +555,104 @@ func TestTreeView(t *testing.T) {
 	}
 }
 
-func TestTwoFiles(t *testing.T) {
-	dir := writeFiles(t, map[string]string{"a.txt": "one\ntwo\n", "b.txt": "one\nTWO\n", "bin": "\xff\xfe"})
-	a, b := filepath.Join(dir, "a.txt"), filepath.Join(dir, "b.txt")
-
-	pt, offset := startInTerminal(t, a, b)
-	scr := pt.WaitScreen(100, 30, offset, "1 changed")
-	if !strings.Contains(scr, "2 two") || !strings.Contains(scr, "| │2 TWO") {
-		t.Errorf("screen:\n%s", scr)
+// TestRefusesFiles checks that a file is refused, opposite a file or a
+// directory, before the screen is taken.
+func TestRefusesFiles(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"a.txt": "one\n", "b.txt": "two\n", "d/a.txt": "one\n"})
+	a := filepath.Join(dir, "a.txt")
+	for _, args := range [][2]string{{a, filepath.Join(dir, "b.txt")}, {a, filepath.Join(dir, "d")}, {filepath.Join(dir, "d"), a}} {
+		cmd := binate(t, args[0], args[1])
+		out, _ := cmd.CombinedOutput()
+		if code := cmd.ProcessState.ExitCode(); code != 2 || !strings.Contains(string(out), a+": a file, and binate compares directories") {
+			t.Errorf("%q: exit status %d, output %q", args, code, out)
+		}
 	}
-	// The diff view's panels start with the paths too.
-	if !regexp.MustCompile(`│ path │ /\S*a\.txt *│   │ path │ /\S*b\.txt *│`).MatchString(scr) {
-		t.Errorf("panels without the paths:\n%s", scr)
-	}
-	quit(t, pt, offset, "x")
-	pt.Wait(offset, leaveScreen)
-	if code := pt.Exit(); code != 0 {
-		t.Errorf("exit status %d", code)
-	}
-
-	// /dev/null is an empty side.
-	pt, offset = startInTerminal(t, "/dev/null", a)
-	pt.WaitScreen(100, 30, offset, "[2 right]")
-	pressEsc(pt) // Esc never quits, nor does q
-	pt.Write("q")
-	quit(t, pt, offset, "x")
-	pt.Wait(offset, leaveScreen)
-	pt.Exit()
-
-	// Binary input shows why on an empty diff view.
-	pt, offset = startInTerminal(t, a, filepath.Join(dir, "bin"))
-	pt.WaitScreen(100, 30, offset, "│Unable to compare files due to an error on the│")
-	pt.WaitScreen(100, 30, offset, "│Unable to show data that is not UTF-8 encoded. │")
-	quit(t, pt, offset, "x")
-	pt.Exit()
-
-	pt, offset = startInTerminal(t, filepath.Join(dir, "bin"), filepath.Join(dir, "bin"))
-	pt.WaitScreen(100, 30, offset, "│Unable to show data that is not UTF-8 encoded.│   │Unable to show data that is not UTF-8 encoded. │")
-	quit(t, pt, offset, "x")
-	pt.Exit()
 }
 
-func TestPipeInput(t *testing.T) {
-	dir := writeFiles(t, map[string]string{"a.txt": "one\ntwo\n"})
+// TestRefusesOtherInputs checks that only directories are compared, and
+// /dev/null taken for an empty one: a pipe, a FIFO without a writer,
+// which is not waited for, or another device is refused.
+func TestRefusesOtherInputs(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := unix.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() {
-		_, _ = w.WriteString("one\nthree\n")
-		_ = w.Close()
-	}()
-	pt := ptytest.Open(t, 100, 30)
-	cmd := binate(t, filepath.Join(dir, "a.txt"), "/dev/fd/3")
-	cmd.ExtraFiles = []*os.File{r}
-	pt.Start(cmd)
-	_ = r.Close()
-	offset := pt.Wait(0, enterScreen)
-	pt.WaitScreen(100, 30, offset, "1 changed")
-	// The file's panel is read in the background, after the pipe is: wait
-	// for it, as "1 changed" can be drawn first. Waited for only after
-	// "1 changed", it is the panel read once the pipe was, not before.
-	scr := pt.WaitScreen(100, 30, offset, "type │ file")
-	// The pipe's panel describes the pipe, read before it was.
-	if !strings.Contains(scr, "| │2 three") || !strings.Contains(scr, "type │ pipe") {
-		t.Errorf("screen:\n%s", scr)
-	}
-	quit(t, pt, offset, "x")
-	if code := pt.Exit(); code != 0 {
-		t.Errorf("exit status %d", code)
+	defer func() { _ = r.Close(); _ = w.Close() }()
+	for _, other := range []string{"/dev/fd/3", fifo, "/dev/zero"} {
+		// Opening the FIFO, which has no writer, would block.
+		cmd := binateWithin(t, 10*time.Second, dir, other)
+		cmd.ExtraFiles = []*os.File{r}
+		out, err := cmd.CombinedOutput()
+		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+			t.Errorf("%s: %v, output %q", other, err, out)
+			continue
+		}
+		if code := cmd.ProcessState.ExitCode(); code != 2 || !strings.Contains(string(out), other+": not a directory, which binate compares") {
+			t.Errorf("%s: exit status %d, output %q", other, code, out)
+		}
 	}
 }
 
 // TestDescriptorInputs checks that inputs named by inherited descriptors,
-// as /dev/fd/3 from "3<file", name the same files in the child, though
-// the socket to it and its streams are passed as descriptors too.
+// as /dev/fd/3 from "3<dir", name the same directories in the child,
+// though the socket to it is passed as a descriptor too.
 func TestDescriptorInputs(t *testing.T) {
-	dir := writeFiles(t, map[string]string{"a.txt": "one\ntwo\n", "b.txt": "one\nTWO\n",
-		"l/f": "a", "r/f": "b"})
-	open := func(name string) *os.File {
+	dir := writeFiles(t, map[string]string{"l/f": "a", "r/f": "b"})
+	var files []*os.File
+	for _, name := range []string{"l", "r"} {
 		f, err := os.Open(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = f.Close() })
-		return f
-	}
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() {
-		_, _ = w.WriteString("one\nthree\n")
-		_ = w.Close()
-	}()
-	for _, tt := range []struct {
-		name  string
-		files []*os.File
-		args  []string
-		want  string
-	}{
-		{"regular file", []*os.File{open("a.txt")}, []string{"/dev/fd/3", filepath.Join(dir, "b.txt")}, "| │2 TWO"},
-		{"file and pipe", []*os.File{open("a.txt"), r}, []string{"/dev/fd/3", "/dev/fd/4"}, "| │2 three"},
-		{"directories", []*os.File{open("l"), open("r")}, []string{"/dev/fd/3", "/dev/fd/4"}, "[1 contents]"},
-	} {
-		pt := ptytest.Open(t, 100, 30)
-		cmd := binate(t, tt.args...)
-		cmd.ExtraFiles = tt.files
-		pt.Start(cmd)
-		offset := pt.Wait(0, enterScreen)
-		if scr := pt.WaitScreen(100, 30, offset, tt.want); strings.Contains(scr, "Unable") {
-			t.Errorf("%s:\n%s", tt.name, scr)
-		}
-		quit(t, pt, offset, "x")
-		if code := pt.Exit(); code != 0 {
-			t.Errorf("%s: exit status %d", tt.name, code)
-		}
-	}
-	_ = r.Close()
-}
-
-// TestSlowPipe checks that a pipe ending after startup is shown without
-// waiting for a key.
-func TestSlowPipe(t *testing.T) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
+		files = append(files, f)
 	}
 	pt := ptytest.Open(t, 100, 30)
-	cmd := binate(t, "/dev/fd/3", "/dev/null")
-	cmd.ExtraFiles = []*os.File{r}
+	cmd := binate(t, "/dev/fd/3", "/dev/fd/4")
+	cmd.ExtraFiles = files
 	pt.Start(cmd)
-	_ = r.Close()
 	offset := pt.Wait(0, enterScreen)
-	pt.WaitScreen(100, 30, offset, "reading the input…")
-	_, _ = w.WriteString("ready\n")
-	_ = w.Close()
-	pt.WaitScreen(100, 30, offset, "1 ready")
+	pt.WaitScreen(100, 30, offset, "[1 contents]")
 	quit(t, pt, offset, "x")
-	pt.Exit()
-}
-
-// TestPendingPipe checks that a pipe that doesn't end yet doesn't keep
-// binate from quitting.
-func TestPendingPipe(t *testing.T) {
-	for _, key := range []string{"\x03", "x"} {
-		r, w, err := os.Pipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		pt := ptytest.Open(t, 100, 30)
-		cmd := binate(t, "/dev/fd/3", "/dev/null")
-		cmd.ExtraFiles = []*os.File{r}
-		pt.Start(cmd)
-		_ = r.Close()
-		offset := pt.Wait(0, enterScreen)
-		pt.WaitScreen(100, 30, offset, "reading the input…")
-		quit(t, pt, offset, key)
-		pt.Exit()
-		_ = w.Close()
+	if code := pt.Exit(); code != 0 {
+		t.Errorf("exit status %d", code)
 	}
 }
 
-func TestFileAndDirectory(t *testing.T) {
-	dir := writeFiles(t, map[string]string{"a/name.txt": "left\n", "b/name.txt": "right\n"})
-	pt, offset := startInTerminal(t, filepath.Join(dir, "a", "name.txt"), filepath.Join(dir, "b"))
-	scr := pt.WaitScreen(100, 30, offset, "1 changed")
-	if !strings.Contains(scr, "b/name.txt") {
-		t.Errorf("screen:\n%s", scr)
+// TestNullIsNothing checks that /dev/null, by any name, is nothing:
+// opposite a directory an empty tree, everything on the other side added
+// or removed.
+func TestNullIsNothing(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"a": "one\n", "sub/b": "two\n"})
+	null := filepath.Join(t.TempDir(), "null")
+	if err := os.Symlink("/dev/null", null); err != nil {
+		t.Fatal(err)
 	}
-	quit(t, pt, offset, "x")
-	pt.Exit()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"left", []string{"/dev/null", dir}, "[2 right]"},
+		{"right by a symlink", []string{dir, null}, "[2 left]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pt, offset := startInTerminal(t, tc.args...)
+			scr := pt.WaitScreen(100, 30, offset, tc.want)
+			if !strings.Contains(scr, "sub") {
+				t.Errorf("screen:\n%s", scr)
+			}
+			quit(t, pt, offset, "x")
+			if code := pt.Exit(); code != 0 {
+				t.Errorf("exit status %d", code)
+			}
+		})
+	}
 }
 
 func TestDiffViewFromTree(t *testing.T) {
@@ -728,7 +669,11 @@ func TestDiffViewFromTree(t *testing.T) {
 	// Any key closes the popup, and goes no further.
 	pt.Write(" ")
 	pt.Write("j\r")
-	screen("| │2 B")
+	scr := screen("| │2 B")
+	// The diff view's panels start with the paths too.
+	if !regexp.MustCompile(`│ path │ /\S*/f\.txt *│   │ path │ /\S*/f\.txt *│`).MatchString(scr) {
+		t.Errorf("panels without the paths:\n%s", scr)
+	}
 	pt.Write("\x1b")
 	screen("[1 left] [2 contents]")
 	pt.Write("j\r")
@@ -1016,59 +961,50 @@ func TestEditInDiffView(t *testing.T) {
 	}
 	pt.Write("j")
 	screen("[1 identical]")
+
+	// Deleted: the diff view says so instead of showing old contents,
+	// broken into lines in the left box, and the right box says which
+	// side failed.
+	pt.Write("\r")
+	screen("no differences")
+	e.do("delete")
+	pt.Write("e")
+	screen("Select side to edit")
+	pt.Write("h")
+	scr = screen("│Failed reading this file (no such file or     │   │Unable to compare files due to an error on the │")
+	if !strings.Contains(scr, "│directory).                                   │   │left side.") {
+		t.Errorf("message:\n%s", scr)
+	}
 	quit(t, pt, offset, "x")
 	if code := pt.Exit(); code != 0 {
 		t.Errorf("exit status %d", code)
 	}
 }
 
-func TestEditTwoFiles(t *testing.T) {
+// TestEditOppositeNothing checks that /dev/null, nothing, can't be
+// edited: a file opposite it is edited at once.
+func TestEditOppositeNothing(t *testing.T) {
 	e := newFakeEditor(t)
-	dir := writeFiles(t, map[string]string{"a.txt": "one\n", "b.txt": "two\n"})
-	a, b := filepath.Join(dir, "a.txt"), filepath.Join(dir, "b.txt")
-	pt, offset := e.start(a, b)
-	screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
-	screen("1 changed")
-
-	e.do(`write:one\nmore\n`)
-	pt.Write("e")
-	screen("Select side to edit")
-	pt.Write("l")
-	screen("> │2 more")
-
-	// Deleted: the diff view says so instead of showing old contents.
-	e.do("delete")
-	pt.Write("e")
-	screen("Select side to edit")
-	pt.Write("h")
-	// Broken into lines in the left box, and the right box says which side
-	// failed.
-	scr := screen("│Failed reading this file (no such file or     │   │Unable to compare files due to an error on the │")
-	if !strings.Contains(scr, "│directory).                                   │   │left side.") {
-		t.Errorf("message:\n%s", scr)
-	}
-	if got := e.log(); len(got) != 2 || got[0] != b || got[1] != a {
-		t.Errorf("editor given %q", got)
-	}
-	quit(t, pt, offset, "x")
-	pt.Exit()
-
-	// /dev/null can't be edited: the other side is edited at once.
+	dir := writeFiles(t, map[string]string{"b.txt": "two\n"})
 	e.do(`write:changed\n`)
-	pt, offset = e.start("/dev/null", b)
-	screen = func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
-	screen("[2 right]")
+	pt, offset := e.start("/dev/null", dir)
+	screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
+	screen("[1 right]")
 	pt.Write("e")
-	screen("edited the right side, as the left side is not a regular file")
+	screen("edited the right side, as the left side is missing")
+	pt.Write("\r")
 	screen("> │1 changed")
 	quit(t, pt, offset, "x")
-	pt.Exit()
+	if code := pt.Exit(); code != 0 {
+		t.Errorf("exit status %d", code)
+	}
 }
 
 func TestEditWithoutEditor(t *testing.T) {
-	dir := writeFiles(t, map[string]string{"a.txt": "one\n", "b.txt": "two\n"})
-	pt, offset := startInTerminal(t, filepath.Join(dir, "a.txt"), filepath.Join(dir, "b.txt"))
-	pt.WaitScreen(100, 30, offset, "1 changed")
+	left := writeFiles(t, map[string]string{"f.txt": "one\n"})
+	right := writeFiles(t, map[string]string{"f.txt": "two\n"})
+	pt, offset := startInTerminal(t, left, right)
+	pt.WaitScreen(100, 30, offset, "[1 contents]")
 	pt.Write("e")
 	pt.WaitScreen(100, 30, offset, "Environment variable VISUAL or EDITOR must be set.")
 	// Ctrl+C closes the popup, and asks to quit.
@@ -1106,19 +1042,40 @@ func TestEditorNotStarted(t *testing.T) {
 	}
 }
 
+// TestResolveInputs checks that a side on disk must be a directory, or
+// /dev/null, by any name, but not on both sides.
+func TestResolveInputs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink("/dev/null", filepath.Join(dir, "null")); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(dir, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"fifo": "not a directory", "file": "a file"} {
+		if _, err := resolveInputs(dir, filepath.Join(dir, name)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for _, args := range [][2]string{{"/dev/null", dir}, {dir, filepath.Join(dir, "null")}} {
+		in, err := resolveInputs(args[0], args[1])
+		if err != nil || in.left.kind == in.right.kind {
+			t.Errorf("%q: %+v, %v", args, in, err)
+		}
+	}
+	if _, err := resolveInputs("/dev/null", filepath.Join(dir, "null")); err == nil || !strings.Contains(err.Error(), "/dev/null with itself") {
+		t.Errorf("/dev/null twice: %v", err)
+	}
+}
+
 // The child takes the inputs as the parent resolved them, from their kinds,
 // without looking again.
 func TestInputsEncode(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "f.txt")
-	if err := os.WriteFile(file, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	other := t.TempDir()
-	if err := os.WriteFile(filepath.Join(other, "f.txt"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][2]string{{dir, other}, {file, other}, {other, file}, {file, "/dev/null"}} {
+	dir, other := t.TempDir(), t.TempDir()
+	for _, args := range [][2]string{{dir, other}, {dir, "/dev/null"}, {"/dev/null", dir}} {
 		in, err := resolveInputs(args[0], args[1])
 		if err != nil {
 			t.Fatal(err)
@@ -1387,19 +1344,22 @@ func TestGitTrees(t *testing.T) {
 	}
 }
 
-func TestGitFiles(t *testing.T) {
+// TestGitSubtrees compares trees a revision's path names, found from -C
+// run from elsewhere, which "./" is relative to, as with git -C.
+func TestGitSubtrees(t *testing.T) {
 	repo := gitRepo(t)
-	// Run from elsewhere, the repository found from -C's directory, which
-	// "./" is relative to, as with git -C.
-	pt := startIn(t, t.TempDir(), "--git", "-C", filepath.Join(repo, "dir"), "HEAD~:./changed", "HEAD:dir/changed")
+	pt := startIn(t, t.TempDir(), "--git", "-C", filepath.Join(repo, "dir"), "HEAD~:./", "HEAD:dir")
 	offset := pt.Wait(0, enterScreen)
-	// The files have the history of their commits.
-	scr := pt.WaitScreen(100, 30, offset, "committed │")
-	// The repository is the one -C names, at the top of the diff view too.
+	scr := pt.WaitScreen(100, 30, offset, "[1 contents]")
+	// The repository is the one -C names.
 	if !strings.HasPrefix(scr, " (git) "+repo) {
 		t.Errorf("no repository at the top:\n%s", scr)
 	}
-	if !strings.Contains(scr, "| │2 TWO") || !regexp.MustCompile(`│ +path │ HEAD~:\./changed *│   │ +path │ HEAD:dir/changed *│`).MatchString(scr) {
+	pt.Write("n")
+	// The entries have the history of their commits, and the paths of
+	// their revisions.
+	scr = pt.WaitScreen(100, 30, offset, "committed │")
+	if !regexp.MustCompile(`│ +path │ HEAD~:\./changed *│   │ +path │ HEAD:dir/changed *│`).MatchString(scr) {
 		t.Errorf("screen:\n%s", scr)
 	}
 	quit(t, pt, offset, "x")
@@ -1563,8 +1523,9 @@ func TestGitErrors(t *testing.T) {
 	}{
 		{repo, []string{"-g", "nope", "HEAD"}, "error: revision nope: unknown revision"},
 		{repo, []string{"-g", "HEAD@{1}", "HEAD"}, "not supported"},
-		{repo, []string{"-g", "HEAD", "HEAD:same"}, "unable to compare a tree with a file"},
-		{repo, []string{"-g", "HEAD:same", "."}, "the revision must name a full tree"},
+		{repo, []string{"-g", "HEAD", "HEAD:same"}, "unable to compare HEAD:same: the revision names a file"},
+		{repo, []string{"-g", "HEAD~:same", "HEAD:same"}, "unable to compare HEAD~:same: the revision names a file"},
+		{repo, []string{"-g", "HEAD:same", "."}, "the revision names a file"},
 		{repo, []string{"-g", ".", "HEAD:dir"}, "the revision must name a full tree"},
 		{repo, []string{"-g", ".", "."}, "a work tree must be compared with a revision"},
 		{filepath.Join(repo, ".git"), []string{"-g", "HEAD", "."}, "the repository has no work tree"},

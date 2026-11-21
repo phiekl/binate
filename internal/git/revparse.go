@@ -333,7 +333,14 @@ func (r *Repository) lookupPath(id ID, file string) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
+	// As in git, a path ending in a slash names a tree, as does a relative
+	// one ending in . or .., which git leaves a slash of when it cleans it.
+	given := file
+	wantTree := strings.HasSuffix(file, "/")
 	if strings.HasPrefix(file, "./") || strings.HasPrefix(file, "../") {
+		if last := path.Base(file); last == "." || last == ".." {
+			wantTree = true
+		}
 		if r.loc.WorkTree == "" {
 			return Target{}, fmt.Errorf("path %s relative to a work tree, in a bare repository", file)
 		}
@@ -370,6 +377,9 @@ func (r *Repository) lookupPath(id ID, file string) (Target, error) {
 		if !found {
 			return Target{}, fmt.Errorf("path %s does not exist", file)
 		}
+	}
+	if wantTree && !t.IsTree() {
+		return Target{}, fmt.Errorf("path %s names a directory, but %s is not one", given, file)
 	}
 	switch t.Mode {
 	case ModeSymlink:

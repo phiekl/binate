@@ -7,7 +7,7 @@
 // Ctrl+z. They talk over a socket pair, one line per message:
 //
 //	screen on|off                      notice: the child took or released the terminal
-//	edit left|right [quoted path]      request: edit a file, answered done or error
+//	edit left|right quoted-path        request: edit a file, answered done or error
 //	suspend                            request: stop the job, answered done once resumed
 //
 // Answers are "done" or "error" followed by a quoted message. Paths and
@@ -39,10 +39,9 @@ type Request struct {
 	// Screen is the terminal's new state, of a screen notice.
 	Screen bool
 	// Side and Path are an edit request's side and path relative to that
-	// side's root; HasPath is false in two-file mode, where no path is sent.
-	Side    Side
-	Path    string
-	HasPath bool
+	// side's root.
+	Side Side
+	Path string
 }
 
 // Client is the child's end.
@@ -71,14 +70,9 @@ func (c *Client) Screen(on bool) error {
 }
 
 // Edit asks the parent to edit a file and waits until the editor exits.
-// path is relative to the side's root; with hasPath false, the parent edits
-// the file given for that side on the command line.
-func (c *Client) Edit(side Side, path string, hasPath bool) error {
-	line := "edit " + string(side)
-	if hasPath {
-		line += " " + strconv.Quote(path)
-	}
-	return c.call(line)
+// path is relative to the side's root.
+func (c *Client) Edit(side Side, path string) error {
+	return c.call("edit " + string(side) + " " + strconv.Quote(path))
 }
 
 // Suspend asks the parent to stop the job, and waits until it's resumed.
@@ -128,19 +122,15 @@ func ParseRequest(line string) (Request, error) {
 			return Request{Kind: kind}, nil
 		}
 	case "edit":
-		side, quoted, hasPath := strings.Cut(rest, " ")
+		side, quoted, _ := strings.Cut(rest, " ")
 		if Side(side) != Left && Side(side) != Right {
 			return Request{}, fmt.Errorf("invalid side %q", side)
 		}
-		req := Request{Kind: kind, Side: Side(side), HasPath: hasPath}
-		if hasPath {
-			path, err := strconv.Unquote(quoted)
-			if err != nil || !strings.HasPrefix(quoted, `"`) {
-				return Request{}, fmt.Errorf("invalid path %q", quoted)
-			}
-			req.Path = path
+		path, err := strconv.Unquote(quoted)
+		if err != nil || !strings.HasPrefix(quoted, `"`) {
+			return Request{}, fmt.Errorf("invalid path %q", quoted)
 		}
-		return req, nil
+		return Request{Kind: kind, Side: Side(side), Path: path}, nil
 	}
 	return Request{}, fmt.Errorf("invalid request %q", line)
 }

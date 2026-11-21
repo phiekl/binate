@@ -329,7 +329,7 @@ func (t *TreeScreen) startEdit() {
 		path = n.Path()
 		for i := range 2 {
 			sides[i] = EditSide{
-				Path: t.roots[i].Path(path), Rel: path, HasRel: true,
+				Path: t.roots[i].Path(path), Rel: path,
 				Why: whyNotEditable(t.roots[i], n.Side(i == 1).Kind),
 			}
 		}
@@ -753,7 +753,7 @@ func (t *TreeScreen) openFile(n *scan.Node) {
 	side := func(right bool) Source {
 		sk := t.sideKey(n, right)
 		return Source{
-			Root: sk.root, Rel: path, HasRel: true,
+			Root: sk.root, Rel: path,
 			Missing: n.Side(right).Kind == scan.Missing,
 		}
 	}

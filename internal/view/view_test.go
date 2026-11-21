@@ -736,25 +736,24 @@ func TestHelpKeys(t *testing.T) {
 		}
 		return strings.Join(rows, "\n")
 	}
-	tree, diff, diffBack := join(TreeHelp), join(DiffHelp(false)), join(DiffHelp(true))
-	// Ctrl+c exits from both; Esc goes back to the tree from the diff view
-	// opened from it, before Ctrl+c, and ends a search or a filter in the
-	// tree.
-	for _, text := range []string{tree, diff, diffBack} {
+	tree, diff := join(TreeHelp), join(DiffHelp())
+	// Ctrl+c exits from both; Esc goes back to the tree from the diff view,
+	// before Ctrl+c, and ends a search or a filter in the tree.
+	for _, text := range []string{tree, diff} {
 		if !strings.Contains(text, "Ctrl+c exit binate") {
 			t.Errorf("help lacks Ctrl+c:\n%s", text)
 		}
 	}
-	if !strings.Contains(diffBack, "Esc return to the tree\nCtrl+c exit binate") {
-		t.Errorf("The diff view's help from a tree lacks Esc:\n%s", diffBack)
+	if !strings.Contains(diff, "Esc return to the tree\nCtrl+c exit binate") {
+		t.Errorf("The diff view's help from a tree lacks Esc:\n%s", diff)
 	}
-	if strings.Contains(diff, "Esc") || strings.Count(tree, "Esc") != 1 || !strings.Contains(tree, "Esc close an action's result, end the search, or clear the filter") {
+	if strings.Count(tree, "Esc") != 1 || !strings.Contains(tree, "Esc close an action's result, end the search, or clear the filter") {
 		t.Error("Esc listed where it does nothing, or not where it does")
 	}
-	if strings.Contains(tree+diffBack, "diff view") || strings.Contains(tree+diffBack, "tree view") {
+	if strings.Contains(tree+diff, "diff view") || strings.Contains(tree+diff, "tree view") {
 		t.Error("help names a screen")
 	}
-	text := tree + "\n" + diffBack
+	text := tree + "\n" + diff
 	for _, gone := range []string{"Ctrl+z", "Space", "Backspace", "close this help", "filter bar", "Alt+"} {
 		if strings.Contains(text, gone) {
 			t.Errorf("help lists %q", gone)

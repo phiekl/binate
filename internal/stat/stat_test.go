@@ -56,21 +56,6 @@ func TestRead(t *testing.T) {
 	}
 }
 
-func TestReadFile(t *testing.T) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = r.Close(); _ = w.Close() }()
-	st, err := ReadFile(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Mode&unix.S_IFMT != unix.S_IFIFO {
-		t.Errorf("pipe %+v", st)
-	}
-}
-
 func TestNames(t *testing.T) {
 	ids := parseIDs(strings.NewReader("# comment\nroot:x:0:0:root:/root:/bin/sh\n\nbroken\nnoid:x:abc:\nalias:x:0:\nal:x:1000:1000::/home/al:/bin/sh\n"))
 	n := &Names{users: ids}

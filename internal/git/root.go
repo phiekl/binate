@@ -22,14 +22,11 @@ import (
 	"pxy.se/go/binate/internal/stat"
 )
 
-// Root is a tree of a repository as a side of the comparison, or a file,
-// a blob, compared on its own. Its entries have the modes git records, and
-// no times or owners.
+// Root is a tree of a repository as a side of the comparison. Its entries
+// have the modes git records, and no times or owners.
 type Root struct {
 	repo *Repo
 	tree ID
-	// file is set for a file compared on its own, at "".
-	file *TreeEntry
 	name string
 	// commit, unless zero, is the commit whose tree has the root at
 	// prefix, "" for the tree itself: where the history of its entries
@@ -60,20 +57,11 @@ func NewRoot(repo *Repo, id ID, name string) (*Root, error) {
 	return &Root{repo: repo, tree: tree, name: name, dirs: map[string]*dir{}}, nil
 }
 
-// NewTargetRoot returns the tree or file t in repo, shown as name, with
-// the history of t's commit, if any.
+// NewTargetRoot returns the tree t in repo, shown as name, with the
+// history of t's commit, if any.
 func NewTargetRoot(repo *Repo, t Target, name string) *Root {
-	r := &Root{repo: repo, name: name, dirs: map[string]*dir{}, commit: t.Commit, prefix: t.Path}
-	if t.IsTree() {
-		r.tree = t.ID
-	} else {
-		r.file = &TreeEntry{Mode: t.Mode, ID: t.ID}
-	}
-	return r
+	return &Root{repo: repo, tree: t.ID, name: name, dirs: map[string]*dir{}, commit: t.Commit, prefix: t.Path}
 }
-
-// IsFile reports whether the root is a file, not a tree.
-func (r *Root) IsFile() bool { return r.file != nil }
 
 // errFollow is the error of following a symlink, which in a tree names
 // nothing the tree can resolve for sure.
@@ -108,9 +96,6 @@ func (r *Root) dir(rel string) (*dir, error) {
 	r.mu.Unlock()
 	if ok {
 		return d, nil
-	}
-	if r.file != nil {
-		return nil, unix.ENOTDIR
 	}
 	id := r.tree
 	if id.IsZero() && rel == "" {
@@ -156,14 +141,8 @@ func (r *Repo) treeDir(id ID) (*dir, error) {
 	return d, nil
 }
 
-// lookup returns the entry at rel: not the root, unless a file.
+// lookup returns the entry at rel, not the root.
 func (r *Root) lookup(rel string) (TreeEntry, error) {
-	if r.file != nil {
-		if rel != "" {
-			return TreeEntry{}, unix.ENOTDIR
-		}
-		return *r.file, nil
-	}
 	parent, name := path.Split(rel)
 	d, err := r.dir(strings.TrimSuffix(parent, "/"))
 	if err != nil {
@@ -201,7 +180,7 @@ func unixMode(m Mode) uint32 {
 }
 
 func (r *Root) Entry(rel string, follow bool) (source.Entry, error) {
-	if rel == "" && r.file == nil {
+	if rel == "" {
 		return source.Entry{Mode: unix.S_IFDIR | 0o755}, nil
 	}
 	e, err := r.lookup(rel)
@@ -272,7 +251,7 @@ func (r *Root) ReadDir(rel string) ([]string, error) {
 }
 
 func (r *Root) Open(rel string, follow bool) (source.File, error) {
-	if rel == "" && r.file == nil {
+	if rel == "" {
 		return nil, r.pathError("open", rel, files.ErrNotRegular)
 	}
 	e, err := r.lookup(rel)
@@ -298,7 +277,7 @@ func (r *Root) Open(rel string, follow bool) (source.File, error) {
 
 // ContentID returns the ID of the blob of the regular file at rel.
 func (r *Root) ContentID(rel string) (source.ContentID, bool) {
-	if rel == "" && r.file == nil {
+	if rel == "" {
 		return source.ContentID{}, false
 	}
 	e, err := r.lookup(rel)

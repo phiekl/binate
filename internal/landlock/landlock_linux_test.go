@@ -5,7 +5,6 @@
 package landlock
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -167,46 +166,13 @@ var childActions = map[string]func(target string) error{
 		return readData(filepath.Join(target, "outside"))
 	},
 
-	// The policy of a file compared on its own: target/root/sub/file.
-	"policy-file-read": func(target string) error {
-		mustRestrictPolicy(Policy{Files: []string{filepath.Join(target, "root", "sub", "file")}})
-		return readData(filepath.Join(target, "root", "sub", "file"))
-	},
-	// Read once the test, as an editor would, has replaced the file by
-	// renaming a new one over it: restrict, say so, and wait for a line.
-	"policy-file-renamed": func(target string) error {
-		file := filepath.Join(target, "root", "sub", "file")
-		mustRestrictPolicy(Policy{Files: []string{file}})
-		fmt.Println("restricted")
-		if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
-			return err
-		}
-		return readData(file)
-	},
-	"policy-file-listdir": func(target string) error {
-		mustRestrictPolicy(Policy{Files: []string{filepath.Join(target, "root", "sub", "file")}})
-		_, err := os.ReadDir(filepath.Join(target, "root", "sub"))
-		return err
-	},
-	"policy-file-write": func(target string) error {
-		mustRestrictPolicy(Policy{Files: []string{filepath.Join(target, "root", "sub", "file")}})
-		return os.WriteFile(filepath.Join(target, "root", "sub", "file"), []byte("x"), 0o600)
-	},
-	"policy-file-outside": func(target string) error {
-		mustRestrictPolicy(Policy{Files: []string{filepath.Join(target, "root", "sub", "file")}})
-		return readData(filepath.Join(target, "outside"))
-	},
-	// Roots and files through symlinks elsewhere: target/links/*.
+	// A root through a symlink elsewhere: target/links/dir.
 	"policy-dir-symlink": func(target string) error {
 		mustRestrictPolicy(Policy{Dirs: []string{filepath.Join(target, "links", "dir")}})
 		if _, err := os.ReadDir(filepath.Join(target, "links", "dir")); err != nil {
 			return err
 		}
 		return readData(filepath.Join(target, "links", "dir", "file"))
-	},
-	"policy-file-symlink": func(target string) error {
-		mustRestrictPolicy(Policy{Files: []string{filepath.Join(target, "links", "file")}})
-		return readData(filepath.Join(target, "links", "file"))
 	},
 	"policy-exec": func(target string) error {
 		mustRestrictPolicy(Policy{Dirs: []string{filepath.Join(target, "root")}})
@@ -466,8 +432,8 @@ func TestRestrictAllowsRules(t *testing.T) {
 }
 
 // policyTarget creates, in a new directory, root/sub/file, root/sub/new,
-// an executable root/sub/run, outside, and links/dir and links/file,
-// symlinks to root/sub and root/sub/file.
+// an executable root/sub/run, outside, and links/dir, a symlink to
+// root/sub.
 func policyTarget(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -484,7 +450,7 @@ func policyTarget(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "root/sub/run"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for link, target := range map[string]string{"links/dir": "../root/sub", "links/file": "../root/sub/file"} {
+	for link, target := range map[string]string{"links/dir": "../root/sub"} {
 		if err := os.Symlink(target, filepath.Join(dir, link)); err != nil {
 			t.Fatal(err)
 		}
@@ -496,8 +462,7 @@ func TestPolicyAllows(t *testing.T) {
 	requireLandlock(t)
 
 	for _, action := range []string{
-		"policy-dir-read", "policy-file-read",
-		"policy-dir-symlink", "policy-file-symlink",
+		"policy-dir-read", "policy-dir-symlink",
 	} {
 		t.Run(action, func(t *testing.T) {
 			if got := runChild(t, action, policyTarget(t)); got != "ok" {
@@ -507,47 +472,11 @@ func TestPolicyAllows(t *testing.T) {
 	}
 }
 
-// TestPolicyAfterRename checks that a file compared on its own can still
-// be read after an editor replaced it by renaming a new file over it, which
-// a rule on the file itself, on its old inode, would not allow.
-func TestPolicyAfterRename(t *testing.T) {
-	requireLandlock(t)
-
-	target := policyTarget(t)
-	c := exec.Command(os.Args[0])
-	c.Env = append(os.Environ(), childActionEnv+"=policy-file-renamed", childTargetEnv+"="+target)
-	stdin, err := c.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := c.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Start(); err != nil {
-		t.Fatal(err)
-	}
-	out := bufio.NewReader(stdout)
-	if line, err := out.ReadString('\n'); err != nil || line != "restricted\n" {
-		t.Fatalf("child said %q, %v", line, err)
-	}
-	if err := os.Rename(filepath.Join(target, "root", "sub", "new"), filepath.Join(target, "root", "sub", "file")); err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.WriteString(stdin, "go\n")
-	line, _ := out.ReadString('\n')
-	_ = c.Wait()
-	if line != "ok\n" {
-		t.Errorf("reading after the rename = %q, want ok", line)
-	}
-}
-
 func TestPolicyDenies(t *testing.T) {
 	requireLandlock(t)
 
 	for _, action := range []string{
 		"policy-dir-write", "policy-dir-create", "policy-dir-outside",
-		"policy-file-listdir", "policy-file-write", "policy-file-outside",
 		"policy-exec",
 	} {
 		t.Run(action, func(t *testing.T) {

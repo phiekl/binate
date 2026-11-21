@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 
 # binate(1)
 
-Inspect file and directory differences in a read-only terminal view.
+Inspect directory differences in a read-only terminal view.
 
 ```
 binate [options] left right
@@ -14,17 +14,15 @@ binate -g [-C directory] [options] [left [right]]
 agitate [-C directory] [options] [left [right]]
 ```
 
-**binate** shows two directory trees, or two files, side by side, and marks
-where they differ. With **-g**, or run as **agitate**, a symlink to it, they are
-trees or files of two git revisions, or a revision and the work tree. **binate**
-never changes files itself. **e** opens eligible files in your editor. Scanning,
+**binate** shows two directory trees side by side, and marks where they
+differ. With **-g**, or run as **agitate**, a symlink to it, they are trees of
+two git revisions, or a revision and the work tree. **binate** never changes
+files itself. **e** opens eligible files in your editor. Scanning,
 comparing and drawing run in a child process. Where available, Landlock
 restricts it from writing and running programs, within the kernel's limits.
 
-*left* and *right* may be directories, files, or one of each. When one input is
-a directory, its entry matching the other input's filename is compared, as with
-**diff**(1). **/dev/null**, pipes and process substitutions are read as streams,
-so **binate** works as **git difftool --no-prompt -x binate**.
+*left* and *right* are directories. **/dev/null** is an empty one. A file is
+refused, as **diff**(1) compares two.
 
 See [**binate-manual**(7)](manual.md) for the full reference.
 

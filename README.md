@@ -55,7 +55,7 @@ tree.
 
 ### Native git object reader
 
-Use `-g`, or run binate as `agitate`, to compare two revisions or files within
+Use `-g`, or run binate as `agitate`, to compare two revisions or trees within
 them. Data is read directly from the repository without running git or checking
 anything out. Files are compared by their object IDs without reading their
 contents. Two revisions of Linux compare in about 0.2 seconds.
@@ -90,11 +90,10 @@ contents are shown escaped, never sent to the terminal. Landlock prevents the
 process that reads files from writing files or running programs, and restricts
 some network access. With `-g`, it also prevents reads outside the repository.
 
-### difftool, editor and terminal integration
+### Editor and terminal integration
 
-binate works as a `git difftool`, opens your `$VISUAL` or `$EDITOR`, and follows
-the terminal's palette, with colours changed through `BINATE_COLORS` or turned
-off with `NO_COLOR`.
+binate opens your `$VISUAL` or `$EDITOR`, and follows the terminal's palette,
+with colours changed through `BINATE_COLORS` or turned off with `NO_COLOR`.
 
 ## Examples
 
@@ -111,16 +110,10 @@ instead of contents:
 $ binate -q /mnt/backup ~/photos
 ```
 
-Compare a local file with one on another host using process substitution:
+Show everything in a directory as added, by comparing it with nothing:
 
 ```
-$ binate config.yaml <(ssh host cat /etc/app/config.yaml)
-```
-
-Use binate as git's difftool, which opens each changed file in turn:
-
-```
-$ git difftool --no-prompt -x binate
+$ binate /dev/null ~/project
 ```
 
 Compare two branches of the git repository you're in:

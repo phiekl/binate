@@ -27,8 +27,8 @@ type DiffView struct {
 
 	L, R diff.Text
 	Rows []diff.Row
-	// Message is shown instead of the texts, as when a side can't be
-	// opened in two-file mode.
+	// Message is shown instead of the texts, as when the sides can't be
+	// read again after an edit.
 	Message string
 	// SideErrors, where either is set, are shown instead of the texts,
 	// each in its side's box: why the side can't be shown.

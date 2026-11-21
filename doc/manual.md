@@ -14,10 +14,10 @@ binate -g [-C directory] [options] [left [right]]
 agitate [-C directory] [options] [left [right]]
 ```
 
-**binate** shows two directory trees, or two files, side by side, and marks
-where they differ. With **-g**, or run as **agitate**, a symlink to it, they are
-trees or files of two git revisions, or a revision and the work tree. **binate**
-never changes files itself. **e** opens eligible files in your editor.
+**binate** shows two directory trees side by side, and marks where they
+differ. With **-g**, or run as **agitate**, a symlink to it, they are trees of
+two git revisions, or a revision and the work tree. **binate** never changes
+files itself. **e** opens eligible files in your editor.
 
 It is Linux-only, needs /proc mounted to open files, and needs a terminal: if
 stdin or stdout is not a terminal, it exits with an error before drawing
@@ -41,19 +41,21 @@ anything. The man page,
 
 ## Inputs
 
-*left* and *right* accept directories, files, or a mixture. When just one
-argument is a directory, **binate** looks there for an entry matching the other
-argument's basename, following **diff**(1)'s convention. Symlinks given on the
-command line are followed. **/dev/null** supplies no contents. Pipes, including
-process substitutions such as **<(**_command_**)**, and other special files
-supply a stream read once at startup. These inputs allow use with
-**git difftool --no-prompt -x binate**. While waiting for a pipe to end, the
-diff view displays a reading message and accepts only **Ctrl+c** and **Ctrl+z**.
+*left* and *right* are directories. Symlinks given on the command line are
+followed. **binate** compares no files on their own. Two files are for
+**diff**(1), or **git diff** for files in a repository.
+
+**/dev/null** stands for nothing, an empty directory, with everything on the
+other side shown as added or removed. It is told apart by what it is, the null
+device by any name, as through a symlink, without being opened. It can't be
+given on both sides. Any other input is refused without being opened, as a
+file, a pipe, a process substitution such as **<(**_command_**)**, a FIFO,
+another device or a socket.
 
 An input may be named by a file descriptor **binate** inherits, as **/dev/fd/3**
-given with **3<**_file_, and is then whatever that descriptor is open on, a
-directory, a file or a pipe: descriptors keep their numbers in the child, and
-those **binate** passes it besides take free ones.
+given with **3<**_directory_, and is then the directory that descriptor is open
+on. Descriptors keep their numbers in the child, and those **binate** passes it
+besides take free ones.
 
 ## Options
 
@@ -99,10 +101,10 @@ next arguments are *left* and *right* even if they start with a dash.
 
 - **-g**, **--git**: Take *left* and *right* as revisions of the git repository
   of the current directory, or of **-C**, such as **main**, **HEAD~2** or
-  **v1.0:src**, and compare their trees, or files. Regular files are read only
-  within the repository. Give **.** for the work tree on one side, or **:** for
-  the index. A missing *right* defaults to **.**, and a missing *left* defaults
-  to **HEAD**. See [Git](#git).
+  **v1.0:src**, and compare their trees. Regular files are read only within the
+  repository. Give **.** for the work tree on one side, or **:** for the index.
+  A missing *right* defaults to **.**, and a missing *left* defaults to
+  **HEAD**. See [Git](#git).
 
 - **--cached**: With **-g**, compare *left*, or **HEAD** if missing, with the
   index, as **git diff --cached** does. The same as giving **:** as *right*.
@@ -144,9 +146,9 @@ directory to files, as an old repository's **HEAD**, are not read either.
 is then the top, and beneath it. The repository's work tree, or its git
 directory if it is bare, is shown in a row at the top of the screen, after
 **(git)**, and linked to in full as the panels' paths are, unless the terminal
-is too short to spare it. A revision naming a commit or a tag compares its tree;
-one naming a file, as **HEAD:README**, compares that file, as two files are
-compared. A tree can't be compared with a file.
+is too short to spare it. A revision naming a commit or a tag compares its tree,
+and one naming a path, as **HEAD:src**, the tree there. A revision naming a
+file, as **HEAD:README**, is refused.
 
 **binate** reads the repository itself, without running git: loose objects,
 packs and alternates, in either object format, SHA-1 or SHA-256. As in Git, an
@@ -167,7 +169,9 @@ A revision is written as for **git rev-parse**:
   **~**_n_, its first parent _n_ times, **^{}**, what a tag points to, and
   **^{commit}**, **^{tree}**, **^{blob}**, **^{tag}** or **^{object}**;
 - then maybe **:**_path_, the entry at _path_ in the tree, relative to the
-  current directory, or that of **-C**, if it starts with **./** or **../**.
+  current directory, or that of **-C**, if it starts with **./** or **../**. As
+  in git, a path ending in **/**, or a relative one ending in **.** or **..**,
+  must name a tree.
 
 Reflogs and upstreams (**@{**...**}**), ranges (**..**, **^!**, **^@**),
 searches (**:/**_text_, **^{/**_text_**}**) and the index (**:**_path_) are not
@@ -652,7 +656,7 @@ directory's number of entries, and a symlink's size, which is its target's
 length, are not marked. A difference in entry type is always marked. Other
 fields are marked only when chosen for comparison (see **--compare** and
 [Compare](#compare)). The diff view's panels follow the tree's comparison
-settings, or with two files, **--compare**. The mtime is compared to the
+settings. The mtime is compared to the
 nanosecond, as in the tree: two that differ within the same second show as much
 of the fraction as tells them apart, as **14:10:00.4** and **14:10:00.5**. The
 more recent one is marked **(newer)**, unless the other side is in a git
@@ -863,8 +867,7 @@ numbers, and a mark between the boxes: blank for an unchanged line, **|** for a
 changed line, and **<** or **>** for a line on one side only. As in the tree,
 the marks have their colours, and a marked line has a faint background in its
 mark's colour across both sides. Changed text inside a changed line has a
-stronger one. It opens on **Enter** in the tree, and directly when **binate** is
-given two files or streams, or a file and a directory.
+stronger one. It opens on **Enter** in the tree.
 
 It shows UTF-8 encoded text of up to 10 MiB per side. A side that is not valid
 UTF-8, such as a binary file, or is larger, does not open: the tree stays, and a
@@ -873,9 +876,9 @@ red box titled **Unable to open** says why, as
 at 80 columns, or narrower on a narrower terminal, until a key closes it. When
 the sides fail differently, the box lists each side's reason on its own line,
 starting with **-**. Tree entries open only if each side is a regular file or
-missing. Symlinks and special entries in the tree don't open. In two-file mode,
-which has no tree, each side that can't be shown says why in its own box
-instead, in red, as **Unable to show data that is not UTF-8 encoded.**, and the
+missing. Symlinks and special entries in the tree don't open. Once open, as
+after an edit, each side that can't be shown says why in its own box instead,
+in red, as **Unable to show data that is not UTF-8 encoded.**, and the
 box of a side that could be says which side couldn't, as **Unable to compare
 files due to an error on the left side.**
 
@@ -889,8 +892,7 @@ minified file on one line, is highlighted whole instead, since comparing it
 would take too long.
 
 Below the text, panels describe the two files as in the tree view (see
-[Panels](#panels)), read again after an edit. A pipe's panel describes the pipe,
-as it was when **binate** started.
+[Panels](#panels)), read again after an edit.
 
 Text is shown escaped (see [Showing text safely](#showing-text-safely)), with
 tabs expanded to 4 columns. The status bar counts the lines changed, and on the
@@ -925,8 +927,7 @@ lines, the whole file is shown.
   trees before and after it, from a popup like the tree's Actions (see
   [Commits](#commits)).
 
-- **Esc**: Go back to the tree if the diff view was opened from it. In a session
-  started on two files or streams, do nothing.
+- **Esc**: Go back to the tree.
 
 ## Editing
 
@@ -941,26 +942,22 @@ file at once, and **l** or **Right** the right one. **j**, **k**, **Down**,
 **Up** and the other keys that move through Help move the selection, and
 **Enter** or **Space** opens the selected file. **Esc** or **e** closes the box
 without editing, and other keys are ignored meanwhile. A side can be edited only
-if it is an existing regular file. Directories, missing sides and streams such
-as **/dev/null** or pipes cannot be edited. Symlinks in the tree cannot be
-edited either, while a file given through a symlink on the command line is
-followed instead. If only one side can be edited, **e** opens it directly and
-the status bar says which. If neither can, or neither **VISUAL** nor **EDITOR**
-is set, a red box titled **Unable to edit** says why. If editing fails, as when
-the editor can't be started or exits with an error status, one titled **Failed
-to edit** does. Any key closes it, without acting on the screen behind.
-**Ctrl+c** closes it and asks to quit.
+if it is an existing regular file. Directories, missing sides, symlinks and
+**/dev/null** cannot be edited. If only one side can be edited, **e** opens it
+directly and the status bar says which. If neither can, or neither **VISUAL**
+nor **EDITOR** is set, a red box titled **Unable to edit** says why. If editing
+fails, as when the editor can't be started or exits with an error status, one
+titled **Failed to edit** does. Any key closes it, without acting on the screen
+behind. **Ctrl+c** closes it and asks to quit.
 
 The editor is run by the unrestricted parent (see [Process
 structure](#process-structure)), attached to the terminal, and runs without
-Landlock. The child sends the parent which side to edit, and in directory mode
-the path relative to that side's root. The parent opens that path beneath the
+Landlock. The child sends the parent which side to edit, and the path relative
+to that side's root. The parent opens that path beneath the
 root, with **openat2**(2) or, where it is unavailable, one name at a time,
 without following symlinks or **..** out of it, and refuses anything but a
 regular file. The editor starts in the file's directory, the very one the parent
-opened, and is given only the file's name, as **./name**. In two-file mode, no
-path is sent, and the editor starts in the directory **binate** was started in,
-on the file given on the command line.
+opened, and is given only the file's name, as **./name**.
 
 Once the editor exits, the file is read again by path, whether or not the
 editor's exit status says it changed anything, so an editor that saves by
@@ -1197,18 +1194,10 @@ terminal. It is read as a key and quits, once confirmed.
 The child restricts itself with Landlock before it reads any input:
 
 - Directories compared as trees may be listed and read, with everything beneath
-  them, including files created later.
-- A file compared on its own may be read through a rule on its directory, which
-  allows reading files but not listing directories. A rule on the file itself
-  would not survive an editor saving by renaming a new file over the old one.
-  The cost: a Landlock rule covers everything beneath its directory, so the
-  child could read any file in that directory or in a directory below it whose
-  path it knows. Comparing **~/a.txt** with another file lets it read
-  **~/.ssh/id_ed25519**, if it asks for it by name. It still can't write, run
-  programs or list those directories.
-- Rules are placed on resolved paths: a directory or file given through a
-  symlink gets its rule where the symlink leads, since that is where Landlock
-  looks.
+  them, including files created later, as by an editor saving by renaming a new
+  file over the old one.
+- Rules are placed on resolved paths: a directory given through a symlink gets
+  its rule where the symlink leads, since that is where Landlock looks.
 - Nothing may be written, no program run, no TCP connection made or port bound,
   no UDP port bound or datagram sent, and no process outside the child
   signalled, nor an abstract unix socket outside it reached, as far as the

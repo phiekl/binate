@@ -69,23 +69,24 @@ pseudo-terminals and skip without them.
 - **Tree view:** marks and counts, the panels' full paths and their links,
   showing identical entries, difference jumps and Help, read from the screen as
   a terminal would show it (`ptytest.Term.Screen`).
-- **Diff view:** two files with their paths in the panels, `/dev/null`, a pipe
-  given as `/dev/fd/3`, a file and a directory, binary input in two-file mode
-  and from the tree, and a file on one side only.
-- **Lookups:** a regular file is opened as it was checked, though a device took
-  its path since.
-- **Descriptors:** inputs named by inherited descriptors, a regular file, a pipe
-  and two directories as `/dev/fd/3` and `/dev/fd/4`, which keep their numbers
-  in the child beside the socket and streams.
+- **Diff view:** opened from the tree, with the paths in the panels, binary
+  input, and a file on one side only.
+- **Inputs:** files refused, opposite a file or a directory, and `/dev/null`,
+  given as it is or through a symlink, as an empty tree opposite a directory on
+  either side, but not on both sides. A pipe given as `/dev/fd/3`, a FIFO
+  without a writer and `/dev/zero` are refused without waiting.
+- **Descriptors:** directories named by inherited descriptors as `/dev/fd/3`
+  and `/dev/fd/4`, which keep their numbers in the child beside the socket.
 - **Colours:** warnings about `BINATE_COLORS` before the screen opens, escaped
   once, and no colour at all under `NO_COLOR`.
 - **Editing:** a fake editor script, run by the parent, that changes a file,
   rewrites it by renaming a new file over it, and deletes it. The tree's marks
-  and counts and the diff view's contents follow, in directory and two-file
-  mode. The popup shows both paths, opens the one selected with Down and Enter,
-  ignores other keys and closes on Esc and e. One editable side is edited at
-  once with a note. Directories, `/dev/null` and a missing editor are refused
-  with a reason in a red popup, which any key closes without reaching the tree.
+  and counts and the diff view's contents follow, and a file deleted from the
+  diff view says so in its box. The popup shows both paths, opens the one
+  selected with Down and Enter, ignores other keys and closes on Esc and e. One
+  editable side is edited at once with a note. Directories, `/dev/null` and a
+  missing editor are refused with a reason in a red popup, which any key closes
+  without reaching the tree.
 - **Arguments:** usage errors, a missing terminal, `--help`, `-V` and
   `--version`, `-c` and `--compare` accepting the same attribute lists, help
   fitting 80 columns without wrapping, and VISUAL or EDITOR checked only where
@@ -128,7 +129,8 @@ pseudo-terminals and skip without them.
   action cache keeping results only of files on disk, whose versions it can
   check. Listing opens only a directory, not a FIFO, which isn't waited for,
   a device or a symlink put in its place, but for the root given through a
-  symlink.
+  symlink. A regular file is opened as it was checked, though a device took its
+  path since.
 - **git:** reading a repository as git reads it, compared, where git is
   installed, with what git itself reads in repositories made for each test:
   loose objects, in SHA-1 and SHA-256, checked for their header, size and zlib
@@ -141,9 +143,10 @@ pseudo-terminals and skip without them.
   a commit and its checkout differing in nothing git records; finding a
   repository from a directory up, bare or through a gitfile, its format and
   configuration, refusing reftable, and resolving revisions, ambiguous
-  abbreviations included, as git rev-parse does. Fuzzing checks that parsing
-  trees and loose objects' headers, deltas, pack entries' headers and indexes,
-  and configuration and revisions never panics.
+  abbreviations included, and paths ending in a slash, `.` or `..` only as
+  trees, as git rev-parse does. Fuzzing checks that parsing trees and loose
+  objects' headers, deltas, pack entries' headers and indexes, and
+  configuration and revisions never panics.
 - **git work tree:** path visibility checked against Git across index versions
   and hash formats, nested and global ignore rules, tracked paths in ignored
   directories, unsupported indexes, rescans, and symlink confinement. Each
@@ -240,16 +243,15 @@ pseudo-terminals and skip without them.
   unknown keys, values with other characters, empty values, and `NO_COLOR`.
 - **landlock:** the restrictions themselves, and binate's policy, each in a
   re-executed test process that restricts itself and tries one thing. Under the
-  policy, reading beneath a compared directory and reading a file compared on
-  its own work, also when given through a symlink to another directory, and also
-  after the file was replaced by renaming a new file over it (a test that fails
-  with a rule on the file itself). Writing, creating, reading outside the
-  inputs, listing a file's directory, running a program and signalling the
-  parent are denied. ABI reporting tests cover the errata downgrade, the build's
+  policy, listing and reading beneath a compared directory work, also when it
+  is given through a symlink to another directory. Writing, creating, reading
+  outside the inputs, running a program and signalling the parent are
+  denied. ABI reporting tests cover the errata downgrade, the build's
   minimum, ABI 10 and 11, and the cap on newer kernels.
 - **supervise:** the request protocol, and the parent's checks: `..` and
   symlinks out of the root, absolute paths, directories and FIFOs, a missing
-  file, an invalid side, and a path sent in two-file mode. The editor starts in
+  file, an invalid side, a request without a path, and a side that is no
+  directory, as `/dev/null`. The editor starts in
   the checked directory even after it is replaced by a symlink, and a relative
   editor program is located from binate's original working directory. The
   fallback for systems without `openat2` is tested directly too.
