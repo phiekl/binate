@@ -121,8 +121,13 @@ type DiffConfig struct {
 	Excludes []string
 }
 
-// NewDiffScreen returns the diff view on two sides, not yet loaded.
+// NewDiffScreen returns the diff view on two sides, not yet loaded. As in
+// the tree, owners and times are not compared opposite a side of git.
 func NewDiffScreen(a *App, cfg DiffConfig) *DiffScreen {
+	if cfg.Compare == 0 {
+		cfg.Compare = scan.DefaultAttrs
+	}
+	cfg.Compare = recorded(cfg.Compare, unrecordedAttrs(cfg.Left.Root, cfg.Right.Root))
 	return &DiffScreen{
 		abs:    [2]string{panelPath(cfg.Left.Root, cfg.Left.Rel), panelPath(cfg.Right.Root, cfg.Right.Rel)},
 		app:    a,
@@ -340,7 +345,7 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 		}
 		sides[i].Path = d.abs[i]
 		sides[i].InRevision = !onDisk(src.Root)
-		sides[i].BesideRevision = onDisk(src.Root) && srcs[1-i].Root != nil && !onDisk(srcs[1-i].Root)
+		sides[i].BesideGit = onDisk(src.Root) && srcs[1-i].Root != nil && unrecordedAttrs(src.Root, srcs[1-i].Root) != 0
 		if !src.Missing {
 			sides[i].RepoPath = repoPath(src.Root, src.Rel)
 		}

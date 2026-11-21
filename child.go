@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -38,6 +39,7 @@ type childSpec struct {
 }
 
 func parseChildSpec(s string) (childSpec, error) {
+	// The kinds, last, hold commas of their own.
 	sock, kinds, ok := strings.Cut(s, ",")
 	n, err := strconv.Atoi(sock)
 	if !ok || err != nil || n < 3 {
@@ -52,9 +54,10 @@ type child struct {
 	opts   options
 	in     inputs
 	client *supervise.Client
-	// repo is the repository of --git, found before the process is
-	// restricted.
-	repo   *git.Location
+	// locs are the repositories of the sides of git, found before the
+	// process is restricted, the same for sides found from the same
+	// directory, and nil for a side on disk.
+	locs   [2]*git.Location
 	ignore git.GlobalIgnore
 }
 
@@ -75,7 +78,10 @@ func runChild(specText string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	in, err := decodeInputs(o.left, o.right, spec.kinds)
+	in, err := decodeInputs(o.left, o.right, spec.kinds, o.git)
+	if err == nil && o.cached {
+		in, err = in.withCached()
+	}
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -101,14 +107,22 @@ func socketFile(fd int) (*os.File, error) {
 
 // policy returns what the child may read (see doc/manual.md#landlock).
 func (c *child) policy() landlock.Policy {
-	var p landlock.Policy
-	if c.repo != nil {
-		p.Dirs = append(p.Dirs, c.repo.ReadDirs()...)
-		if c.in.hasWorkTree() {
-			p.Dirs = append(p.Dirs, c.repo.WorkTree)
+	p := c.diskPolicy()
+	for i, side := range c.in.sides() {
+		if loc := c.locs[i]; loc != nil {
+			p.Dirs = append(p.Dirs, loc.ReadDirs()...)
+			if side.kind == inputWorkTree {
+				p.Dirs = append(p.Dirs, loc.WorkTree)
+			}
 		}
 	}
-	for _, side := range []input{c.in.left, c.in.right} {
+	return p
+}
+
+// diskPolicy returns what the child may read of the sides on disk.
+func (c *child) diskPolicy() landlock.Policy {
+	var p landlock.Policy
+	for _, side := range c.in.sides() {
 		if side.kind == inputDir {
 			p.Dirs = append(p.Dirs, side.path)
 		}
@@ -135,51 +149,29 @@ func (c *child) run() (code int) {
 		return fail("opening the terminal: %v", err)
 	}
 	a := app.New(c.log, t, c.client)
-	if c.opts.git {
-		// Before restricting the process, resolve the starting directory's
-		// symlinks, possibly reading links outside the repository, and
-		// find the top by names. Repository files are then read under a
-		// first layer allowing only the top, before the next allows the
-		// git directories and, when compared, the work tree.
-		dir := cmp.Or(c.opts.directory, ".")
-		top, err := git.FindTop(dir, os.Getenv)
-		if err != nil {
-			return fail("%v", err)
-		}
-		if c.in.hasWorkTree() {
-			c.ignore, err = git.ReadGlobalIgnore(os.Getenv)
-			if err != nil {
-				return fail("reading global git ignore rules: %v", err)
-			}
-			a.Names = stat.LoadNames()
-		}
-		rules, err := landlock.Policy{Dirs: []string{top}}.Rules()
-		if err != nil {
-			return fail("%v", err)
-		}
-		if err := landlock.Restrict(c.log, rules...); err != nil {
-			return fail("restricting the process: %v", err)
-		}
-		if c.repo, err = git.Discover(top, dir); err != nil {
-			return fail("%v", err)
-		}
-		if (c.in.hasWorkTree() || c.in.hasIndex()) && c.repo.WorkTree == "" {
-			return fail("the repository has no work tree")
-		}
-	} else {
+	if c.in.hasDisk() || c.in.hasWorkTree() {
 		a.Names = stat.LoadNames()
+	}
+	if c.in.hasWorkTree() {
+		c.ignore, err = git.ReadGlobalIgnore(os.Getenv)
+		if err != nil {
+			return fail("reading global git ignore rules: %v", err)
+		}
+	}
+	if c.in.hasGit() {
+		if err := c.discover(); err != nil {
+			return fail("%v", err)
+		}
 	}
 	if err := c.restrict(); err != nil {
 		return fail("restricting the process: %v", err)
 	}
 	var roots [2]source.Root
-	if c.opts.git {
+	if c.in.hasGit() {
 		if roots, err = c.gitRoots(); err != nil {
 			return fail("%v", err)
 		}
-		// The revisions are of the repository at the top: its work tree,
-		// or the git directory of a bare one.
-		a.Header = view.Header{Label: "(git)", Path: cmp.Or(c.repo.WorkTree, c.repo.GitDir), Home: os.Getenv("HOME")}
+		a.Header = c.header()
 	} else {
 		roots = [2]source.Root{diskRoot(c.in.left), diskRoot(c.in.right)}
 	}
@@ -214,21 +206,127 @@ func (c *child) run() (code int) {
 	return code
 }
 
-// gitRoots resolves two trees, including a work tree or an index.
-func (c *child) gitRoots() ([2]source.Root, error) {
-	repo, err := git.Open(c.repo)
-	if err != nil {
-		return [2]source.Root{}, err
+// repoDir returns the directory the repository of side, of git, is found
+// from: its own, relative to -C, or else -C or the current directory.
+func (c *child) repoDir(side input) string {
+	if side.repo == "" {
+		return cmp.Or(c.opts.directory, ".")
 	}
+	if !filepath.IsAbs(side.repo) && c.opts.directory != "" {
+		// Not cleaned, for .. to follow a symlink as Git does.
+		return c.opts.directory + string(filepath.Separator) + side.repo
+	}
+	return side.repo
+}
+
+// discover finds the repositories of the sides of git. Before restricting
+// the process, it resolves the symlinks of each one's starting directory,
+// possibly reading links outside the repository, and finds its top by
+// names. Repository files are then read under a first layer allowing only
+// the tops and the sides on disk, before the next allows the git
+// directories and, where compared, the work trees.
+func (c *child) discover() error {
+	// Each repository is found from the directory its sides start in.
+	tops := map[string]string{}
+	var starts []string
+	for _, side := range c.in.sides() {
+		if !side.isGit() {
+			continue
+		}
+		s := c.repoDir(side)
+		if _, ok := tops[s]; ok {
+			continue
+		}
+		top, err := git.FindTop(s, os.Getenv)
+		if err != nil {
+			return err
+		}
+		tops[s] = top
+		starts = append(starts, s)
+	}
+	p := c.diskPolicy()
+	for _, s := range starts {
+		p.Dirs = append(p.Dirs, tops[s])
+	}
+	rules, err := p.Rules()
+	if err != nil {
+		return err
+	}
+	if err := landlock.Restrict(c.log, rules...); err != nil {
+		return fmt.Errorf("restricting the process: %w", err)
+	}
+	locs := map[string]*git.Location{}
+	for _, s := range starts {
+		if locs[s], err = git.Discover(tops[s], s); err != nil {
+			return err
+		}
+	}
+	sides := c.in.sides()
+	for i, side := range sides {
+		if !side.isGit() {
+			continue
+		}
+		loc := locs[c.repoDir(side)]
+		c.locs[i] = loc
+		if (side.kind == inputWorkTree || side.kind == inputIndex) && loc.WorkTree == "" {
+			if side.repo != "" {
+				return fmt.Errorf("%s: the repository has no work tree", side.repo)
+			}
+			return errors.New("the repository has no work tree")
+		}
+	}
+	if l, r := c.locs[0], c.locs[1]; l != nil && r != nil && sides[0].kind == sides[1].kind && sameDir(l.GitDir, r.GitDir) {
+		switch sides[0].kind {
+		case inputWorkTree:
+			return errors.New("a work tree must be compared with a revision or the index")
+		case inputIndex:
+			return errors.New("the index must be compared with a revision or the work tree")
+		}
+	}
+	return nil
+}
+
+// sameDir reports whether the directories a and b are the same, as where
+// a symlink to one is the other.
+func sameDir(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	return aerr == nil && berr == nil && os.SameFile(ai, bi)
+}
+
+// gitRoots resolves the sides of git, each in its repository, to trees,
+// including a work tree or an index, and returns them with the sides on
+// disk.
+func (c *child) gitRoots() ([2]source.Root, error) {
+	repos := map[*git.Location]*git.Repository{}
 	var roots [2]source.Root
-	work := -1
-	// Opposite the work tree or the index, a revision is of the whole
+	sides := c.in.sides()
+	// Opposite a work tree or an index, a revision is of a whole
 	// repository.
 	local := c.in.hasWorkTree() || c.in.hasIndex()
-	for i, side := range []input{c.in.left, c.in.right} {
+	for i, side := range sides {
+		loc := c.locs[i]
+		if loc == nil {
+			continue
+		}
+		repo := repos[loc]
+		if repo == nil {
+			var err error
+			if repo, err = git.Open(loc); err != nil {
+				return [2]source.Root{}, err
+			}
+			repos[loc] = repo
+		}
 		switch side.kind {
 		case inputWorkTree:
-			work = i
+			tree, err := repo.OpenWorkTree(c.ignore)
+			if err != nil {
+				return [2]source.Root{}, err
+			}
+			roots[i] = tree
 			continue
 		case inputIndex:
 			index, err := repo.OpenIndex()
@@ -248,7 +346,7 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 			}
 		}
 		if err != nil {
-			return [2]source.Root{}, err
+			return [2]source.Root{}, gitPrefixHint(side, err)
 		}
 		switch {
 		case !target.IsTree():
@@ -262,14 +360,33 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 		}
 		roots[i] = git.NewTargetRoot(repo.Repo, target, side.path)
 	}
-	if work >= 0 {
-		tree, err := repo.OpenWorkTree(c.ignore)
-		if err != nil {
-			return [2]source.Root{}, err
+	for i, side := range sides {
+		switch {
+		case roots[i] != nil:
+		case side.kind == inputNull:
+			roots[i] = source.Nothing(side.path)
+		default:
+			// A directory opposite git has the modes git records.
+			roots[i] = source.GitModes{Disk: source.Disk(side.path)}
 		}
-		roots[work] = tree
 	}
 	return roots, nil
+}
+
+// gitPrefixHint returns err, of resolving the revision of side, with a
+// hint where it looks like a side in another repository given with git:,
+// as without -g. With -g, git: starts a revision's path, as on a branch
+// git, and the side is given without it, starting with ./ if relative, as
+// app@main would be a revision.
+func gitPrefixHint(side input, err error) error {
+	rest, ok := strings.CutPrefix(side.path, "git:")
+	if side.repo != "" || !ok || !strings.Contains(rest, "@") {
+		return err
+	}
+	if !inOtherRepo(rest) {
+		rest = "./" + rest
+	}
+	return fmt.Errorf("%w (with -g, give another repository's side without git:, as %s)", err, rest)
 }
 
 // diskRoot returns the root of side, on disk: a directory, or nothing.
@@ -278,4 +395,26 @@ func diskRoot(side input) source.Root {
 		return source.Nothing(side.path)
 	}
 	return source.Disk(side.path)
+}
+
+// header returns what each side is: a repository's work tree, or its git
+// directory if bare, or a path on disk.
+func (c *child) header() view.Header {
+	h := view.Header{Home: os.Getenv("HOME")}
+	for i, side := range c.in.sides() {
+		s := &h.Sides[i]
+		if loc := c.locs[i]; loc != nil {
+			s.Label, s.Path = "(git)", cmp.Or(loc.WorkTree, loc.GitDir)
+			continue
+		}
+		s.Path = side.path
+		if abs, err := filepath.Abs(side.path); err == nil {
+			s.Path = abs
+		}
+		s.Label = "(dir)"
+		if side.kind == inputNull {
+			s.Label = "(nothing)"
+		}
+	}
+	return h
 }

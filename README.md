@@ -142,6 +142,20 @@ When invoked as `agitate`, binate needs no `-g`. Compare `HEAD~3` with `HEAD`:
 $ agitate HEAD~3 HEAD
 ```
 
+Compare `main` of another repository with the work tree of the one you're in,
+or the `HEAD` of two other repositories:
+
+```
+$ agitate ~/src/fork@main
+$ agitate ~/src/a@ ~/src/b@
+```
+
+Without `-g`, a `git:` side compares a revision with any directory:
+
+```
+$ binate git:~/src/project@v1.0 /mnt/project
+```
+
 Press `?` to list the current screen's key bindings, or run `binate --help` to
 list command-line options. [binate(1)](doc/binate.1.md) summarises both, and the
 [manual](doc/manual.md) describes everything in detail.

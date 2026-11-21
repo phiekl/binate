@@ -425,12 +425,12 @@ func TestPanelChange(t *testing.T) {
 	}
 }
 
-func TestPanelBesideRevision(t *testing.T) {
+func TestPanelBesideGit(t *testing.T) {
 	file := &stat.Stat{Mode: unix.S_IFREG | 0o644, Size: 3, Nlink: 1, Ino: 7, Mtime: time.Unix(1, 0)}
 	for _, beside := range []bool{false, true} {
 		sides := [2]StatSide{
 			{Stat: &stat.Stat{Mode: unix.S_IFREG | 0o644, Size: 3}, Entries: -1, Path: "HEAD:f", InRevision: true},
-			{Stat: file, Entries: -1, Path: "/repo/f", BesideRevision: beside},
+			{Stat: file, Entries: -1, Path: "/repo/f", BesideGit: beside},
 		}
 		scr := term.NewScreen(100, 15)
 		p := Layout(100)
@@ -453,6 +453,18 @@ func TestPanelBesideRevision(t *testing.T) {
 		if text := strings.Join(panelRowsText(scr), "\n"); strings.Contains(text, "newer") {
 			t.Errorf("beside revision %v: mtime marked newer:\n%s", beside, text)
 		}
+	}
+}
+
+// TestPanelNotNewerBesideGit checks that two sides on disk compared as
+// git, as a work tree with a directory, mark neither mtime newer, as the
+// tree compares none: a sparse entry the index supplies has none.
+func TestPanelNotNewerBesideGit(t *testing.T) {
+	l := StatSide{Stat: file(t, 10, 0o644, "2026-11-02 14:10:00"), Entries: -1, BesideGit: true}
+	r := StatSide{Stat: &stat.Stat{Mode: unix.S_IFREG | 0o644, Size: 10}, Entries: -1, BesideGit: true}
+	text := strings.Join(panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r})), "\n")
+	if strings.Contains(text, "newer") {
+		t.Errorf("mtime marked newer beside git:\n%s", text)
 	}
 }
 
@@ -594,7 +606,7 @@ func TestPanelSubmodule(t *testing.T) {
 func TestStatRowsGitStatus(t *testing.T) {
 	for _, sd := range []StatSide{
 		{Path: "/r/f", Status: "deleted, not staged", Missing: true},
-		{Path: "/r/f", Status: "modified, not staged", Stat: &stat.Stat{Mode: 0o100644}, BesideRevision: true},
+		{Path: "/r/f", Status: "modified, not staged", Stat: &stat.Stat{Mode: 0o100644}, BesideGit: true},
 	} {
 		rows := statRows(&sd, scan.DefaultAttrs, "")
 		if len(rows) < 3 || rows[1].label != "git" || display.String(rows[1].value) != sd.Status {

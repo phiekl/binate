@@ -232,3 +232,25 @@ func TestEditPopupKeys(t *testing.T) {
 		t.Error("Esc left the popup open")
 	}
 }
+
+// Opposite a side of git, owners and times are not compared, as in the
+// tree, even when asked, but between two sides on disk they are.
+func TestDiffComparesWhatGitRecords(t *testing.T) {
+	asked := scan.Content | scan.Mtime | scan.Owner
+	for _, tc := range []struct {
+		name        string
+		left, right source.Root
+		want        scan.Attrs
+	}{
+		{"on disk", source.Disk("a"), source.Disk("b"), asked},
+		{"beside git", source.GitModes{Disk: source.Disk("a")}, source.Disk("b"), scan.Content},
+	} {
+		d := NewDiffScreen(nil, DiffConfig{
+			Styles: colors.Default(), Compare: asked,
+			Left: Source{Root: tc.left}, Right: Source{Root: tc.right},
+		})
+		if d.view.Compare != tc.want || d.opts.Compare != tc.want {
+			t.Errorf("%s: comparing %v, %v, want %v", tc.name, d.view.Compare, d.opts.Compare, tc.want)
+		}
+	}
+}

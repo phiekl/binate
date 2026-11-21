@@ -130,3 +130,55 @@ func TestReadDirOpensOnlyDirectories(t *testing.T) {
 		t.Errorf("root through a symlink: %q, %v", names, err)
 	}
 }
+
+// TestGitModes checks that a disk side opposite git has the modes git
+// records, in what the scan compares and the panels show, and is still a
+// disk side.
+func TestGitModes(t *testing.T) {
+	dir := t.TempDir()
+	for name, mode := range map[string]os.FileMode{"plain": 0o664, "private": 0o600, "run": 0o744, "group-run": 0o654} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(dir, name), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("plain", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(dir, "fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := GitModes{Disk(dir)}
+	for name, want := range map[string]uint32{
+		"plain":     unix.S_IFREG | 0o644,
+		"private":   unix.S_IFREG | 0o644,
+		"run":       unix.S_IFREG | 0o755,
+		"group-run": unix.S_IFREG | 0o644,
+		"sub":       unix.S_IFDIR | 0o755,
+		"link":      unix.S_IFLNK | 0o777,
+		"fifo":      unix.S_IFIFO | 0o600,
+	} {
+		e, err := root.Entry(name, false)
+		if err != nil || e.Mode != want {
+			t.Errorf("%s: entry mode %o, %v, want %o", name, e.Mode, err, want)
+		}
+		st, err := root.Stat(name)
+		if err != nil || st.Mode != want {
+			t.Errorf("%s: stat mode %o, %v, want %o", name, st.Mode, err, want)
+		}
+	}
+	if e, err := root.Entry("link", true); err != nil || e.Mode != unix.S_IFREG|0o644 {
+		t.Errorf("followed link: %o, %v", e.Mode, err)
+	}
+	if d, ok := AsDisk(root); !ok || d != Disk(dir) {
+		t.Errorf("AsDisk = %q, %v", d, ok)
+	}
+	if _, ok := Root(root).(DiskRoot); !ok {
+		t.Error("not a disk root")
+	}
+}

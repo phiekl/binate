@@ -279,3 +279,40 @@ func TestShowStat(t *testing.T) {
 		t.Errorf("error %q:\n%s", a.errTitle, text(60))
 	}
 }
+
+// TestCommitHeader checks that a commit's screen says both sides are of
+// the repository of the side whose commit it is, and that going back says
+// what the screen's sides are again.
+func TestCommitHeader(t *testing.T) {
+	a := testApp(60, 20)
+	root := fakeChanges{"/r"}
+	var main Screen = &TextScreen{}
+	a.Main = main
+	git, dir := view.HeaderSide{Label: "(git)", Path: "/r"}, view.HeaderSide{Label: "(dir)", Path: "/d"}
+	a.Header = view.Header{Sides: [2]view.HeaderSide{dir, git}, Home: "/h"}
+	before := a.Header
+	cv := commitView{app: a, styles: colors.Default(), back: func() { a.Main = main }}
+	var changes changeReader
+	changes.app = a
+	key := changeKey{sides: [2]sideKey{{}, {root, "f"}}}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if _, wait := cv.start(commitActions[0], key, &changes); wait == "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the commit was not found")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	ts, ok := a.Main.(*TextScreen)
+	if !ok || ts == main {
+		t.Fatalf("Main is %T", a.Main)
+	}
+	if want := (view.Header{Sides: [2]view.HeaderSide{git, git}, Home: "/h"}); a.Header != want {
+		t.Errorf("commit's header %+v", a.Header)
+	}
+	ts.Key(term.Key{Code: term.KeyEsc})
+	if a.Main != main || a.Header != before {
+		t.Errorf("back to %T, header %+v", a.Main, a.Header)
+	}
+}

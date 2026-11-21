@@ -34,6 +34,8 @@ type commitSide struct {
 	rel string
 	ch  source.Change
 	why string
+	// side is which side it is: 0 left, 1 right.
+	side int
 }
 
 // commitSides returns the sides' commits from the changes read for key,
@@ -55,7 +57,7 @@ func commitSides(key changeKey, res [2]changeResult, done bool) ([2]commitSide, 
 		case res[i].err != nil:
 			sides[i].why = "without a commit found: " + errorText(files.UnwrapPath(res[i].err))
 		default:
-			sides[i] = commitSide{root: c, rel: sk.rel, ch: res[i].ch}
+			sides[i] = commitSide{root: c, rel: sk.rel, ch: res[i].ch, side: i}
 		}
 	}
 	return sides, ""
@@ -224,6 +226,12 @@ func commitRows(ckey changeKey) []view.ActionRow {
 // returns the popup choosing, if open, or a note for the status bar while
 // the commits are still being found.
 func (c commitView) start(a commitAction, ckey changeKey, changes *changeReader) (*commitPicker, string) {
+	// Going back shows the screen's header again.
+	header, back := c.app.Header, c.back
+	c.back = func() {
+		c.app.Header = header
+		back()
+	}
 	var res [2]changeResult
 	done := true
 	if ckey != (changeKey{}) {
@@ -274,6 +282,7 @@ func (c commitView) start(a commitAction, ckey changeKey, changes *changeReader)
 // with note in the status bar.
 func (c commitView) showMessage(cs commitSide, note string) {
 	if ts := c.messageScreen(cs, note); ts != nil {
+		c.enter(cs)
 		c.app.Main = ts
 	}
 }
@@ -311,6 +320,7 @@ func (c commitView) textScreen(cs commitSide, note string, lines []string) *Text
 func (c commitView) showStat(cs commitSide, note string) {
 	// A line apart from the title, as git's stat from the message.
 	ts := c.textScreen(cs, note, []string{""})
+	c.enter(cs)
 	c.app.Main = ts
 	ts.view.SetTail(func(int) []string { return []string{" counting the lines changed…"} })
 	ctx, cancel := context.WithCancel(context.Background())
@@ -351,7 +361,18 @@ func (c commitView) showTrees(cs commitSide, note string) {
 	case parents > 1:
 		t.message = fmt.Sprintf("comparing with the first of %d parents", parents)
 	}
+	c.enter(cs)
 	c.app.Main = t
+}
+
+// enter sets the header for a screen of the commit cs: both sides are of
+// the repository of the side it is of, which start shows again on going
+// back.
+func (c commitView) enter(cs commitSide) {
+	if h := c.app.Header; !h.IsZero() {
+		side := h.Sides[cs.side]
+		c.app.Header.Sides = [2]view.HeaderSide{side, side}
+	}
 }
 
 // TextScreen shows a text, as a commit's message.

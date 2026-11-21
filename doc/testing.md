@@ -73,8 +73,9 @@ pseudo-terminals and skip without them.
   input, and a file on one side only.
 - **Inputs:** files refused, opposite a file or a directory, and `/dev/null`,
   given as it is or through a symlink, as an empty tree opposite a directory on
-  either side, but not on both sides. A pipe given as `/dev/fd/3`, a FIFO
-  without a writer and `/dev/zero` are refused without waiting.
+  either side and opposite a revision's tree, but not on both sides. A pipe
+  given as `/dev/fd/3`, a FIFO without a writer and `/dev/zero` are refused
+  without waiting.
 - **Descriptors:** directories named by inherited descriptors as `/dev/fd/3`
   and `/dev/fd/4`, which keep their numbers in the child beside the socket.
 - **Colours:** warnings about `BINATE_COLORS` before the screen opens, escaped
@@ -89,8 +90,23 @@ pseudo-terminals and skip without them.
   without reaching the tree.
 - **Arguments:** usage errors, a missing terminal, `--help`, `-V` and
   `--version`, `-c` and `--compare` accepting the same attribute lists, help
-  fitting 80 columns without wrapping, and VISUAL or EDITOR checked only where
-  it is the one used.
+  fitting 80 columns without wrapping as either name, and VISUAL or EDITOR
+  checked only where it is the one used. Sides in other repositories are told
+  from revisions by their paths, split at the last `@` with a directory before
+  it, as with `@` in the directory or the revision, from `-C` if relative, and
+  `~` expanded after `git:`. Without `-g`, other names before a colon are
+  unknown backends, and names that aren't backends' are paths.
+- **Other repositories:** another repository's revision opposite the work
+  tree, also with `GIT_DIR` set, which is ignored, two other repositories run
+  from a directory in none, relative to `-C`, and of different object formats,
+  and `git:` sides without `-g`, each with the header saying what each side is
+  and linking to it. A revision against a directory on disk, whose files have
+  the modes Git records whatever theirs, editing the directory's side at once. A
+  work tree against a directory, both on disk, compares no times even when
+  asked. Two work trees, the same index on both sides, also through a symlink, a
+  directory in no repository, a revision naming a file and `-q` with a `git:`
+  side are refused, and a `git:` side under `-g` fails with a hint to drop the
+  prefix.
 
 ## Package tests
 
@@ -130,7 +146,8 @@ pseudo-terminals and skip without them.
   check. Listing opens only a directory, not a FIFO, which isn't waited for,
   a device or a symlink put in its place, but for the root given through a
   symlink. A regular file is opened as it was checked, though a device took its
-  path since.
+  path since. A disk side opposite git has the modes Git records, for each type,
+  in what is compared and what the panels show.
 - **git:** reading a repository as git reads it, compared, where git is
   installed, with what git itself reads in repositories made for each test:
   loose objects, in SHA-1 and SHA-256, checked for their header, size and zlib
@@ -202,7 +219,8 @@ pseudo-terminals and skip without them.
   do. Other key tests cover the quit prompt's buttons, Ctrl+c quitting at once
   on a terminal too small for it, gg and G, Help navigation and closing without
   passing the key through, and Esc clearing the filter. Both screens leave q,
-  Space and Backspace unbound.
+  Space and Backspace unbound. A commit's screen shows the header of the side
+  whose commit it is above both boxes, and going back shows the screen's again.
 - **diff:** side-by-side alignment, line ends (CR+LF throughout, mixed, lone CR,
   no final line feed), the size limit and binary input, and in-line changes,
   including the length cap and escapes inside changes. Fuzzing checks that every

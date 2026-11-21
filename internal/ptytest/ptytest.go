@@ -188,13 +188,35 @@ func Children(pid int) []int {
 // positioning (CSI H), clearing the screen (CSI 2J) and text, which is all
 // binate draws with, and ignores other sequences.
 func (pt *Term) Screen(cols, rows, offset int) string {
+	grid, _ := pt.emulate(cols, rows, offset)
+	var b strings.Builder
+	for _, line := range grid {
+		b.WriteString(strings.TrimRight(strings.ReplaceAll(string(line), "\x00", ""), " "))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// Links returns the target of the hyperlink (OSC 8) each cell of the
+// screen Screen returns is in, by row and column, "" for none.
+func (pt *Term) Links(cols, rows, offset int) [][]string {
+	_, links := pt.emulate(cols, rows, offset)
+	return links
+}
+
+// emulate returns the cells of the screen Screen describes, and the
+// hyperlink each is in.
+func (pt *Term) emulate(cols, rows, offset int) ([][]rune, [][]string) {
 	grid := make([][]rune, rows)
+	links := make([][]string, rows)
 	clearGrid := func() {
 		for y := range grid {
 			grid[y] = []rune(strings.Repeat(" ", cols))
+			links[y] = make([]string, cols)
 		}
 	}
 	clearGrid()
+	link := ""
 	out := pt.Output()
 	if offset > len(out) {
 		offset = len(out)
@@ -208,19 +230,22 @@ func (pt *Term) Screen(cols, rows, offset int) string {
 				continue
 			}
 			if y < rows && x < cols {
-				grid[y][x] = r
+				grid[y][x], links[y][x] = r, link
 				if display.RuneWidth(r) == 2 && x+1 < cols {
-					grid[y][x+1] = 0
+					grid[y][x+1], links[y][x+1] = 0, link
 				}
 			}
 			x += display.RuneWidth(r)
 			continue
 		}
 		if i+1 < len(s) && s[i+1] == ']' {
-			// OSC, as a hyperlink: skip to its end, ST or BEL.
+			// OSC, as a hyperlink: up to its end, ST or BEL.
 			j := i + 2
 			for j < len(s) && s[j] != 0x07 && !(s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\') {
 				j++
+			}
+			if target, ok := strings.CutPrefix(string(s[i+2:j]), "8;;"); ok {
+				link = target
 			}
 			if j < len(s) && s[j] == 0x1b {
 				j++
@@ -252,12 +277,7 @@ func (pt *Term) Screen(cols, rows, offset int) string {
 		}
 		i = j
 	}
-	var b strings.Builder
-	for _, line := range grid {
-		b.WriteString(strings.TrimRight(strings.ReplaceAll(string(line), "\x00", ""), " "))
-		b.WriteByte('\n')
-	}
-	return b.String()
+	return grid, links
 }
 
 // WaitScreen waits until the screen, as Screen returns it, contains want,

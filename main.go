@@ -87,10 +87,10 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	s.Count(&o.verbose, "verbose", "v", "write debug messages (repeat for more)")
 	s.Bool(&o.version, "version", "V", "show version and exit")
 	s.Global("verbose", "version")
-	sides, directory := "%s directory, or revision, . or : with --git", "with --git, find the repository from directory, as git -C"
+	sides, directory := "%s dir or git:dir@rev, or with --git a revision, . or :", "with --git, find the repository from directory, as git -C"
 	cached := "with --git, compare left, or HEAD, with the index"
 	if gitOnly {
-		sides, directory = "%s revision, . (work tree) or : (index)", "find the repository from directory, as git -C"
+		sides, directory = "%s [dir@]rev, . (work tree) or : (index)", "find the repository from directory, as git -C"
 		cached = "compare left, or HEAD, with the index, as git diff --cached"
 	}
 	s.Arg(&o.left, "left", fmt.Sprintf(sides, "left"))
@@ -128,13 +128,25 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	if o.git && o.quick {
 		return s, o, errors.New("--quick with --git: revisions don't record modification times")
 	}
+	if o.quick {
+		for _, arg := range []string{o.left, o.right} {
+			if name, ok := backendOf(arg); ok && name == gitBackend {
+				return s, o, errors.New("--quick with a git side: revisions don't record modification times")
+			}
+		}
+	}
 	if o.cached {
 		switch {
 		case !o.git:
 			return s, o, errors.New("--cached without --git: it compares a revision with the git index")
-		case s.Given("right") || o.left == "." || o.left == ":":
+		case s.Given("right"):
 			return s, o, errors.New("--cached compares one revision with the index: give at most one")
+		case o.left == "." || o.left == ":":
+			// In another repository, withCached refuses them.
+			return s, o, fmt.Errorf("--cached compares a revision with the index: %s is not one", o.left)
 		}
+		// Of left's repository, as withCached makes it once left is
+		// found.
 		o.right = ":"
 	}
 	switch {
@@ -191,11 +203,12 @@ func runParent() int {
 		return fail("%v", err)
 	}
 
-	in := gitInputs(o.left, o.right)
-	if !o.git {
-		if in, err = resolveInputs(o.left, o.right); err != nil {
-			return fail("%v", err)
-		}
+	in, err := parseInputs(o.left, o.right, o.git, o.directory)
+	if err == nil && o.cached {
+		in, err = in.withCached()
+	}
+	if err != nil {
+		return fail("%v", err)
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return fail("stdin and stdout must be a terminal")

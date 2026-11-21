@@ -57,6 +57,17 @@ given with **3<**_directory_, and is then the directory that descriptor is open
 on. Descriptors keep their numbers in the child, and those **binate** passes it
 besides take free ones.
 
+Without **-g**, an argument starting with a backend's name and a colon, as
+**git:~/src/app@main**, is a side read by that backend instead of a path. The
+name is a letter followed by letters, digits, **+**, **-** and **.**, as a URL's
+scheme is. **git** is the only backend, and any other name is an error. A path
+of that form, as a directory named **notes:old**, is given as **./notes:old**. A
+revision of the current repository, as **HEAD:src**, takes **-g**. With
+**git:**, the rest names a repository's directory and, after an **@**, a
+revision, its work tree or its index (see
+[Other repositories](#other-repositories)). The other argument may be a
+directory, **/dev/null** or another backend's side.
+
 ## Options
 
 Options may come before, between or after *left* and *right*. After **--**, the
@@ -96,22 +107,27 @@ next arguments are *left* and *right* even if they start with a dash.
   path. Repeatable.
 
 - **-q**, **--quick**: In the tree view, compare files by size and modification
-  time instead of by contents. Not with **-g**, since revisions do not record
-  modification times.
+  time instead of by contents. Not with **-g** or a **git:** side, since
+  revisions do not record modification times.
 
 - **-g**, **--git**: Take *left* and *right* as revisions of the git repository
   of the current directory, or of **-C**, such as **main**, **HEAD~2** or
   **v1.0:src**, and compare their trees. Regular files are read only within the
   repository. Give **.** for the work tree on one side, or **:** for the index.
   A missing *right* defaults to **.**, and a missing *left* defaults to
-  **HEAD**. See [Git](#git).
+  **HEAD**. A side in another repository is its directory, **@** and the
+  revision, as **~/src/app@main** (see
+  [Other repositories](#other-repositories)). See [Git](#git).
 
 - **--cached**: With **-g**, compare *left*, or **HEAD** if missing, with the
-  index, as **git diff --cached** does. The same as giving **:** as *right*.
+  index of its repository, as **git diff --cached** does. The same as giving
+  **:** as *right*, or **~/src/app@:** for **~/src/app@main**. *left* must be a
+  revision, not the work tree or the index.
 
 - **-C**, **--directory** *directory*: With **-g**, find the repository from
   *directory* instead of the current directory, as **git -C** does: revisions'
-  paths starting with **./** or **../** are relative to it.
+  paths starting with **./** or **../** and other repositories' relative
+  directories are relative to it.
 
 - **-h**, **--help**: Show the options and exit.
 
@@ -141,13 +157,18 @@ superproject's, one apart from its work tree, as **git init --separate-git-dir**
 makes, or one with alternates elsewhere, as **git clone --reference** makes. An
 alternate that doesn't exist is skipped, as git skips it. Symlinks in the git
 directory to files, as an old repository's **HEAD**, are not read either.
-**GIT_DIR** and **GIT_WORK_TREE** are ignored. A repository elsewhere is found
-with **-C** instead, as in **-C ~/.dotfiles**. The repository's work tree, or
-its git directory if it is bare, is shown in a row at the top of the screen,
-after **(git)**, and linked to in full as the panels' paths are, unless the
-terminal is too short to spare it. A revision naming a commit or a tag compares
-its tree, and one naming a path, as **HEAD:src**, the tree there. A revision
-naming a file, as **HEAD:README**, is refused.
+**GIT_DIR** and **GIT_WORK_TREE** are ignored. A repository elsewhere is given
+by its directory instead, as in **~/.dotfiles@main** (see
+[Other repositories](#other-repositories)). A row at the top of the screen says
+what each side is, above its box, unless the terminal is too short to spare it.
+A side in a repository shows **(git)** and the repository's work tree, or its
+git directory if it is bare, linked to in full as the panels' paths are, even
+where both sides are in the same repository. A directory or **/dev/null**
+opposite it shows **(dir)** or **(nothing)** and its path. A commit's message,
+stat or trees show the repository of the side it is of above both boxes. A
+revision naming a commit or a tag compares its tree, and one naming a path, as
+**HEAD:src**, the tree there. A revision naming a file, as **HEAD:README**, is
+refused.
 
 **binate** reads the repository itself, without running git: loose objects,
 packs and alternates, in either object format, SHA-1 or SHA-256. As in Git, an
@@ -353,6 +374,47 @@ compared by their blob IDs, as a revision's are. Their panels show the path,
 type, size and mode. A file added with **git add -N** is left out, as Git
 compares it as not staged. A path with a merge conflict has no version staged
 and shows as **unmerged path**. A rescan reads the index again.
+
+### Other repositories
+
+A side may be in another repository than the one of the current directory. With
+**-g**, or as **agitate**, an argument starting with **/**, **./**, **../** or
+**~** names a repository's directory, then **@**, then what to compare there, as
+**~/src/app@main**. Nothing after the **@** stands for **HEAD**, and **.** and
+**:** for that repository's work tree and index, as in **~/src/app@.** and
+**~/src/app@:**. No revision starts that way, and **.** alone is still the
+current repository's work tree. The **@** taken is the last one with a directory
+before it, which allows an **@** in the directory's name, as in
+**~/pkg@1.2@main**, and in the revision, as in **./app@@~2**. A relative
+directory is relative to **-C** if given. The repository is found from the
+directory as from the current one, and a revision's path starting with **./**
+or **../** is relative to the directory.
+
+**agitate ~/src/app@main** compares **main** of that repository with the work
+tree of the current one, as **agitate main** compares the current one's. With
+both sides in other repositories, as in **agitate ~/a@main ~/b@main**, the
+current directory is not searched for a repository. Without **-g**, the **git:**
+backend names such a side, as in **binate git:~/src/app@v1.0 /mnt/app**, and
+the other side may be a directory or **/dev/null** (see [Inputs](#inputs)). With
+**-g**, **git:** starts a revision's path instead, as on a branch named **git**,
+and a side that fails to resolve that way gets a hint to drop it. After
+**git:**, any path names the directory, as in **git:app@main**. The shell
+leaves the **~** after **git:** as it is, and **binate** expands a leading **~**
+or **~/** itself.
+
+Each side is read from its own repository. Files of two repositories of the same
+object format are compared by their blobs' IDs without being read, and those of
+repositories of different formats by their contents. Opposite a directory on
+disk, a revision, index or work tree is compared as a revision is with a work
+tree. Both sides have the modes Git records, a file **0644** or, if its owner
+may run it, **0755**, a directory **0755** and a symlink **0777**, which the
+directory's panels show too, and times and owners are not compared. The
+directory's files can be edited. Opposite **/dev/null**, a revision's tree is
+compared with an empty one.
+
+Only one side can show statuses, and two work trees can't be compared. A work
+tree or index can't be compared with itself, as the same repository's on both
+sides, even where a symlink names its git directory by another path.
 
 ### Commits
 
@@ -659,11 +721,13 @@ settings. The mtime is compared to the
 nanosecond, as in the tree: two that differ within the same second show as much
 of the fraction as tells them apart, as **14:10:00.4** and **14:10:00.5**. The
 more recent one is marked **(newer)**, unless the other side is in a git
-revision, which records no mtime. The inode and the other times differ between
-almost any two trees, and are not marked. A side with no entry says **missing**,
-and one that can't be read says why. An entry the scan could not read fully
-starts with an **error** row, as **error │ permission denied**, and the other
-side's rows move down with it, so the fields stay side by side.
+revision, which records no mtime, or the sides are compared as git compares
+them, as a work tree with a directory, where the tree compares no mtimes. The
+inode and the other times differ between almost any two trees, and are not
+marked. A side with no entry says **missing**, and one that can't be read says
+why. An entry the scan could not read fully starts with an **error** row, as
+**error │ permission denied**, and the other side's rows move down with it, so
+the fields stay side by side.
 
 The panels are read in the background, without following symlinks, so a slow
 file system doesn't hold the screen. They show **…** meanwhile. A box keeps at
@@ -1205,13 +1269,14 @@ The child restricts itself with Landlock before it reads any input:
   read before the restriction when a disk side is shown. A work-tree
   comparison also reads the user's global Git ignore configuration and rules
   before restricting access.
-- With **-g**, before applying the sandbox, the child resolves symlinks along
-  the starting directory, possibly reading links outside the repository, then
-  finds the repository's top by names without reading regular files. It
-  restricts itself to reading beneath the top before reading repository files,
-  and then to its Git directory, common directory and object directories
-  before reading its configuration, refs and objects. The second layer
-  includes the top when comparing a work tree. Work-tree paths are opened
+- With **-g** or a **git:** side, before applying the sandbox, the child
+  resolves symlinks along each repository's starting directory, possibly
+  reading links outside the repository, then finds each repository's top by
+  names without reading regular files. It restricts itself to reading beneath
+  the tops, and what is compared on disk, before reading repository files, and
+  then to their Git directories, common directories and object directories
+  before reading their configuration, refs and objects. The second layer
+  includes a top when comparing its work tree. Work-tree paths are opened
   relative to that directory without following symlinks.
 
 The editor is run by the parent, and is not restricted (see

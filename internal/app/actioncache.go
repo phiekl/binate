@@ -105,7 +105,7 @@ func versionOfStat(st *unix.Stat_t) fileVersion {
 // it, even if the path is as it was once the read ends.
 func (c *resultCache) run(ctx context.Context, a *action, root source.Root, rel string, progress func(float64)) view.ActionSide {
 	side := &sideRun{progress: progress}
-	disk, onDisk := root.(source.Disk)
+	disk, onDisk := source.AsDisk(root)
 	if !a.cache || !onDisk {
 		return a.run(ctx, root, rel, side)
 	}

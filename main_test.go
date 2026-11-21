@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"pxy.se/go/binate/internal/ptytest"
 	"pxy.se/go/binate/internal/scan"
 	"pxy.se/go/binate/internal/term"
+	"pxy.se/go/binate/internal/view"
 )
 
 // asBinateEnv makes the test binary run main, so tests can start binate as
@@ -160,7 +162,10 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"--cached", dir, dir}, "--cached without --git"},
 		{[]string{"-g", "--cached", "HEAD", "HEAD"}, "--cached compares one revision with the index"},
 		{[]string{"agitate", "--cached", "HEAD", ":"}, "--cached compares one revision with the index"},
-		{[]string{"agitate", "--cached", "."}, "--cached compares one revision with the index"},
+		{[]string{"agitate", "--cached", "."}, "--cached compares a revision with the index: . is not one"},
+		{[]string{"agitate", "--cached", ":"}, "--cached compares a revision with the index: : is not one"},
+		{[]string{"-g", "--cached", "./@."}, "--cached compares a revision with the index: ./@. is not one"},
+		{[]string{"-g", "--cached", "./@:"}, "--cached compares a revision with the index: ./@: is not one"},
 	} {
 		var cmd *exec.Cmd
 		if len(tt.args) > 0 && tt.args[0] == "agitate" {
@@ -285,8 +290,8 @@ func TestGitName(t *testing.T) {
 	help := s.Help(80)
 	for _, want := range []string{
 		"usage: agitate [option]... [left [right]]",
-		"left revision, . (work tree) or : (index) (default \"HEAD\")",
-		"right revision, . (work tree) or : (index) (default \".\")",
+		"left [dir@]rev, . (work tree) or : (index) (default \"HEAD\")",
+		"right [dir@]rev, . (work tree) or : (index) (default \".\")",
 		"-C, --directory   find the repository",
 	} {
 		if !strings.Contains(help, want) {
@@ -306,12 +311,16 @@ func TestHelpFits80Columns(t *testing.T) {
 		t.Fatal(err)
 	}
 	help := s.Help(0)
-	if got := s.Help(80); got != help {
-		t.Errorf("help wraps at 80 columns:\n%s", got)
-	}
-	for _, line := range strings.Split(help, "\n") {
-		if len(line) > 80 {
-			t.Errorf("help line exceeds 80 columns (%d): %s", len(line), line)
+	for _, name := range []string{"binate", gitName} {
+		s, _, _ := parseOptions(name, []string{"--help"})
+		all := s.Help(0)
+		if got := s.Help(80); got != all {
+			t.Errorf("%s's help wraps at 80 columns:\n%s", name, got)
+		}
+		for _, line := range strings.Split(all, "\n") {
+			if len(line) > 80 {
+				t.Errorf("%s's help line exceeds 80 columns (%d): %s", name, len(line), line)
+			}
 		}
 	}
 	for _, alias := range []string{"-c, --compare", "-V, --version"} {
@@ -625,8 +634,8 @@ func TestDescriptorInputs(t *testing.T) {
 }
 
 // TestNullIsNothing checks that /dev/null, by any name, is nothing:
-// opposite a directory an empty tree, everything on the other side added
-// or removed.
+// opposite a directory or a revision's tree an empty tree, everything on
+// the other side added or removed.
 func TestNullIsNothing(t *testing.T) {
 	dir := writeFiles(t, map[string]string{"a": "one\n", "sub/b": "two\n"})
 	null := filepath.Join(t.TempDir(), "null")
@@ -648,6 +657,30 @@ func TestNullIsNothing(t *testing.T) {
 				t.Errorf("screen:\n%s", scr)
 			}
 			quit(t, pt, offset, "x")
+			if code := pt.Exit(); code != 0 {
+				t.Errorf("exit status %d", code)
+			}
+		})
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		return
+	}
+	repo := gitRepo(t)
+	git, nothing := [2]string{"(git)", repo}, [2]string{"(nothing)", "/dev/null"}
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		want   string
+		header [2][2]string
+	}{
+		{"revision's tree", []string{"git:" + repo + "@HEAD", "/dev/null"}, "[3 left]", [2][2]string{git, nothing}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pt := startIn(t, dir, tc.args...)
+			offset := pt.Wait(0, enterScreen)
+			scr := pt.WaitScreen(100, 30, offset, tc.want)
+			checkHeader(t, pt, offset, scr, tc.header[0], tc.header[1])
+			pt.Write("\x03x")
 			if code := pt.Exit(); code != 0 {
 				t.Errorf("exit status %d", code)
 			}
@@ -1076,28 +1109,145 @@ func TestResolveInputs(t *testing.T) {
 func TestInputsEncode(t *testing.T) {
 	dir, other := t.TempDir(), t.TempDir()
 	for _, args := range [][2]string{{dir, other}, {dir, "/dev/null"}, {"/dev/null", dir}} {
-		in, err := resolveInputs(args[0], args[1])
+		in, err := parseInputs(args[0], args[1], false, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := decodeInputs(args[0], args[1], in.encode())
+		got, err := decodeInputs(args[0], args[1], in.encode(), false)
 		if err != nil || got != in {
 			t.Errorf("%q: decoded %+v, %v, want %+v", args, got, err, in)
 		}
 	}
-	git := gitInputs("HEAD~", "main:dir")
-	if got, err := decodeInputs("HEAD~", "main:dir", git.encode()); err != nil || got != git || git.encode() != "gg" {
-		t.Errorf("git: decoded %+v, %v, want %+v", got, err, git)
+	gitIn := func(left, right string, git bool) inputs {
+		t.Helper()
+		in, err := parseInputs(left, right, git, "")
+		if err != nil {
+			t.Fatalf("%q %q: %v", left, right, err)
+		}
+		got, err := decodeInputs(left, right, in.encode(), git)
+		if err != nil || got != in {
+			t.Errorf("%q %q: decoded %+v, %v, want %+v", left, right, got, err, in)
+		}
+		return in
 	}
-	for _, in := range []inputs{gitInputs("HEAD", "."), gitInputs(".", "HEAD")} {
-		got, err := decodeInputs(in.left.path, in.right.path, in.encode())
-		if err != nil || got != in || !got.hasWorkTree() {
-			t.Errorf("work tree: decoded %+v, %v, want %+v", got, err, in)
+	if in := gitIn("HEAD~", "main:dir", true); in.encode() != "gg,-1,-1" {
+		t.Errorf("git: encoded %q", in.encode())
+	}
+	for _, args := range [][2]string{{"HEAD", "."}, {".", "HEAD"}} {
+		if in := gitIn(args[0], args[1], true); !in.hasWorkTree() {
+			t.Errorf("%q: no work tree", args)
 		}
 	}
-	for _, code := range []string{"", "d", "ddd", "Dd", "FF", "xd", "gW"} {
-		if _, err := decodeInputs("a", "b", code); err == nil {
+	// Sides in other repositories, and on disk opposite them.
+	in := gitIn(dir+"@main", "git:"+other+"@.", true)
+	if in.left.repo != dir || in.left.path != "main" || in.left.kind != inputGit {
+		t.Errorf("other repository: %+v", in.left)
+	}
+	// With --git, git: is a revision's path, as of a branch git.
+	if in.right.repo != "" || in.right.kind != inputGit {
+		t.Errorf("git: with --git: %+v", in.right)
+	}
+	in = gitIn("git:"+dir+"@", other, false)
+	if in.left.repo != dir || in.left.path != "HEAD" || in.right.kind != inputDir || in.right.repo != "" {
+		t.Errorf("git side and directory: %+v", in)
+	}
+	for _, code := range []string{"", "d", "ddd", "Dd", "ff", "xd", "gW", "dd,0,-1", "gg,1,-1", "gd,-2,-1", "dd,x,-1"} {
+		if _, err := decodeInputs("a@b", "b", code, false); err == nil {
 			t.Errorf("decodeInputs(%q) succeeded", code)
+		}
+	}
+}
+
+// TestParseInputs checks which arguments name sides of git in other
+// repositories, and where their directories end.
+func TestParseInputs(t *testing.T) {
+	base := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, d := range []string{"repo", "pkg@1.2", "pkg", "deep/sub"} {
+		if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(home, "h"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(base)
+	for _, tc := range []struct {
+		arg        string
+		git        bool
+		repo, path string
+		kind       inputKind
+	}{
+		{"main", true, "", "main", inputGit},
+		{".", true, "", ".", inputWorkTree},
+		{":", true, "", ":", inputIndex},
+		{"HEAD:README", true, "", "HEAD:README", inputGit},
+		{"./repo@main", true, "./repo", "main", inputGit},
+		{base + "/repo@", true, base + "/repo", "HEAD", inputGit},
+		{"./repo@.", true, "./repo", ".", inputWorkTree},
+		{"./repo@:", true, "./repo", ":", inputIndex},
+		{"./repo@@~2", true, "./repo", "@~2", inputGit},
+		{"./repo@main:a@b", true, "./repo", "main:a@b", inputGit},
+		{"./pkg@1.2@main", true, "./pkg@1.2", "main", inputGit},
+		{"./deep/sub@origin/main:x", true, "./deep/sub", "origin/main:x", inputGit},
+		{".@main", true, ".", "main", inputGit},
+		{"~/h@main", true, home + "/h", "main", inputGit},
+		{"git:repo@v1", false, "repo", "v1", inputGit},
+		{"git:~/h@", false, home + "/h", "HEAD", inputGit},
+		{"git:./pkg@1.2@.", false, "./pkg@1.2", ".", inputWorkTree},
+	} {
+		in, err := parseInputs(tc.arg, "/dev/null", tc.git, "")
+		if tc.git {
+			in, err = parseInputs(tc.arg, "HEAD", tc.git, "")
+		}
+		if err != nil || in.left.repo != tc.repo || in.left.path != tc.path || in.left.kind != tc.kind {
+			t.Errorf("%q: %+v, %v", tc.arg, in.left, err)
+		}
+	}
+	// A relative directory is found from -C.
+	if in, err := parseInputs("sub@main", "HEAD", true, filepath.Join(base, "deep")); err != nil || in.left.repo != "" || in.left.path != "sub@main" {
+		t.Errorf("not path-like, a revision: %+v, %v", in.left, err)
+	}
+	if in, err := parseInputs("./sub@main", "HEAD", true, filepath.Join(base, "deep")); err != nil || in.left.repo != "./sub" {
+		t.Errorf("relative to -C: %+v, %v", in.left, err)
+	}
+	for _, tc := range []struct {
+		left, right string
+		git         bool
+		want        string
+	}{
+		{"./repo", "HEAD", true, "no directory before an @"},
+		{"./missing@main", "HEAD", true, "no directory before an @"},
+		{"git:nowhere@main", "repo", false, "no directory before an @"},
+		{"hg:repo@main", "repo", false, `unknown backend "hg"`},
+		// As git's syntax without --git.
+		{"HEAD:README", "repo", false, "as ./HEAD:README, or a revision with --git"},
+		{"./repo@.", "~/h@.", true, "two work trees"},
+	} {
+		if _, err := parseInputs(tc.left, tc.right, tc.git, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q %q: %v, want %q", tc.left, tc.right, err, tc.want)
+		}
+	}
+	// Without --git, other names before a colon are paths, as are those
+	// given as such.
+	for _, name := range []string{"1:x", "a b:c", "_x:y", "./hg:x"} {
+		if err := os.Mkdir(filepath.Join(base, filepath.Base(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if in, err := parseInputs(name, "/dev/null", false, ""); err != nil || in.left.kind != inputDir {
+			t.Errorf("%q: %+v, %v", name, in.left, err)
+		}
+	}
+	for _, arg := range []string{"git:repo@main", "./repo@main"} {
+		if _, _, err := parseOptions("binate", []string{"-q", arg, "x"}); arg[0] == 'g' && err == nil {
+			t.Errorf("-q with %q accepted", arg)
+		}
+	}
+	// A side's directory starts after its backend's name, whatever it is.
+	for arg, want := range map[string]int{"git:repo@main": 4, "hg+ssh:repo@main": 7} {
+		if got := repoStart(arg, false); got != want {
+			t.Errorf("directory of %q at %d, want %d", arg, got, want)
 		}
 	}
 }
@@ -1166,6 +1316,35 @@ func gitRepo(t *testing.T) string {
 	return dir
 }
 
+// checkHeader checks that the top row of scr, a screen 100 columns wide,
+// drawn from offset on, says what each side is, its label above its box,
+// and that each side's path is linked to in full, in its own half.
+func checkHeader(t *testing.T, pt *ptytest.Term, offset int, scr string, left, right [2]string) {
+	t.Helper()
+	line := []rune(strings.Split(scr, "\n")[0])
+	p := view.Layout(100)
+	halves := [2]string{string(line[:min(p.RightBox, len(line))]), string(line[min(p.RightBox, len(line)):])}
+	links := pt.Links(100, 30, offset)[0]
+	for i, side := range [2][2]string{left, right} {
+		if !strings.HasPrefix(halves[i], " "+side[0]+" ") {
+			t.Errorf("side %d not %s in the header:\n%s", i, side[0], scr)
+		}
+		from, to := 0, p.RightBox
+		if i == 1 {
+			from, to = p.RightBox, len(links)
+		}
+		var got []string
+		for _, l := range links[from:to] {
+			if l != "" && !slices.Contains(got, l) {
+				got = append(got, l)
+			}
+		}
+		if want := "'" + side[1] + "'"; len(got) != 1 || got[0] != want {
+			t.Errorf("side %d linked to %q, want %q", i, got, want)
+		}
+	}
+}
+
 // startIn runs binate in dir, in a new pseudo-terminal.
 func startIn(t *testing.T, dir string, args ...string) *ptytest.Term {
 	t.Helper()
@@ -1183,12 +1362,10 @@ func TestGitTrees(t *testing.T) {
 	offset := pt.Wait(0, enterScreen)
 	screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
 	scr := screen("[1 identical] [1 left] [1 right] [1 contents]")
-	// The repository is named at the top, above the boxes.
-	if lines := strings.Split(scr, "\n"); !strings.HasPrefix(lines[0], " (git) "+repo) || !strings.HasPrefix(lines[1], "┌") {
-		t.Errorf("no repository at the top:\n%s", scr)
-	}
-	if link := "\x1b]8;;'" + repo + "'\x1b\\"; !strings.Contains(pt.Output(), link) {
-		t.Errorf("the repository not linked: no %q", link)
+	// The repository is named at the top, above each box.
+	checkHeader(t, pt, offset, scr, [2]string{"(git)", repo}, [2]string{"(git)", repo})
+	if lines := strings.Split(scr, "\n"); !strings.HasPrefix(lines[1], "┌") {
+		t.Errorf("no boxes below the header:\n%s", scr)
 	}
 	// The panels show the revisions' paths, as git names them.
 	pt.Write("n")
@@ -1352,9 +1529,7 @@ func TestGitSubtrees(t *testing.T) {
 	offset := pt.Wait(0, enterScreen)
 	scr := pt.WaitScreen(100, 30, offset, "[1 contents]")
 	// The repository is the one -C names.
-	if !strings.HasPrefix(scr, " (git) "+repo) {
-		t.Errorf("no repository at the top:\n%s", scr)
-	}
+	checkHeader(t, pt, offset, scr, [2]string{"(git)", repo}, [2]string{"(git)", repo})
 	pt.Write("n")
 	// The entries have the history of their commits, and the paths of
 	// their revisions.
@@ -1380,6 +1555,12 @@ func agitate(t *testing.T, dir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// withEnv returns cmd with the environment variables env set too.
+func withEnv(cmd *exec.Cmd, env ...string) *exec.Cmd {
+	cmd.Env = append(cmd.Env, env...)
+	return cmd
+}
+
 // Run as agitate, binate compares revisions, its child too.
 func TestGitNameSession(t *testing.T) {
 	repo := gitRepo(t)
@@ -1387,9 +1568,7 @@ func TestGitNameSession(t *testing.T) {
 	pt.Start(agitate(t, repo, "HEAD~", "main"))
 	offset := pt.Wait(0, enterScreen)
 	scr := pt.WaitScreen(100, 30, offset, "[1 contents]")
-	if lines := strings.Split(scr, "\n"); !strings.HasPrefix(lines[0], " (git) "+repo) {
-		t.Errorf("no repository at the top:\n%s", scr)
-	}
+	checkHeader(t, pt, offset, scr, [2]string{"(git)", repo}, [2]string{"(git)", repo})
 	pt.Write("\x03x")
 	if code := pt.Exit(); code != 0 {
 		t.Errorf("exit status %d", code)
@@ -1425,9 +1604,7 @@ func TestGitWorkTreeDefaults(t *testing.T) {
 			pt.Start(tc.cmd)
 			offset := pt.Wait(0, enterScreen)
 			scr := pt.WaitScreen(100, 30, offset, tc.want)
-			if !strings.HasPrefix(scr, " (git) "+repo) {
-				t.Errorf("work-tree root missing:\n%s", scr)
-			}
+			checkHeader(t, pt, offset, scr, [2]string{"(git)", repo}, [2]string{"(git)", repo})
 			pt.Write("\x03x")
 			if code := pt.Exit(); code != 0 {
 				t.Errorf("exit status %d", code)
@@ -1485,9 +1662,10 @@ func TestGitWorkTreeSession(t *testing.T) {
 			offset := pt.Wait(0, enterScreen)
 			screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
 			scr := screen("[1 identical] [1 left] [1 right] [1 contents]")
-			if !strings.Contains(scr, "local-new") || !strings.HasPrefix(scr, " (git) "+repo) {
-				t.Errorf("work-tree entries or root missing:\n%s", scr)
+			if !strings.Contains(scr, "local-new") {
+				t.Errorf("work-tree entries missing:\n%s", scr)
 			}
+			checkHeader(t, pt, offset, scr, [2]string{"(git)", repo}, [2]string{"(git)", repo})
 			pt.Write("n")
 			screen("HEAD:dir/changed")
 			pt.Write("\r")
@@ -1598,24 +1776,89 @@ func TestCachedOptions(t *testing.T) {
 		name        string
 		argv        []string
 		left, right string
+		// repo is the index's repository, "" for the current one.
+		repo string
 	}{
-		{"agitate", []string{"--cached"}, "HEAD", ":"},
-		{"agitate", []string{"--cached", "main"}, "main", ":"},
-		{"binate", []string{"-g", "--cached"}, "HEAD", ":"},
-		{"agitate", []string{":"}, ":", "."},
-		{"agitate", []string{"HEAD", ":"}, "HEAD", ":"},
+		{"agitate", []string{"--cached"}, "HEAD", ":", ""},
+		{"agitate", []string{"--cached", "main"}, "main", ":", ""},
+		{"binate", []string{"-g", "--cached"}, "HEAD", ":", ""},
+		{"agitate", []string{":"}, ":", ".", ""},
+		{"agitate", []string{"HEAD", ":"}, "HEAD", ":", ""},
+		// The index of the revision's repository.
+		{"agitate", []string{"--cached", "./@main"}, "./@main", ":", "./"},
+		{"agitate", []string{"--cached", "./@"}, "./@", ":", "./"},
 	} {
 		_, o, err := parseOptions(tc.name, tc.argv)
 		if err != nil || o.left != tc.left || o.right != tc.right {
 			t.Errorf("%s %q: %q %q, %v; want %q %q", tc.name, tc.argv, o.left, o.right, err, tc.left, tc.right)
 		}
-		in := gitInputs(o.left, o.right)
-		if !in.hasIndex() {
-			t.Errorf("%s %q: no index side", tc.name, tc.argv)
+		in, err := parseInputs(o.left, o.right, true, "")
+		if err == nil && o.cached {
+			in, err = in.withCached()
 		}
-		if got, err := decodeInputs(o.left, o.right, in.encode()); err != nil || got != in {
+		if err != nil || !in.hasIndex() || in.right.repo != tc.repo {
+			t.Errorf("%s %q: index side %+v, %v; want of %q", tc.name, tc.argv, in.right, err, tc.repo)
+		}
+		got, err := decodeInputs(o.left, o.right, in.encode(), true)
+		if err == nil && o.cached {
+			got, err = got.withCached()
+		}
+		if err != nil || got != in {
 			t.Errorf("%s %q: decoded %+v, %v", tc.name, tc.argv, got, err)
 		}
+	}
+}
+
+// TestCachedNotRevision checks that --cached refuses a work tree or an
+// index for left, as named in the current repository or another.
+func TestCachedNotRevision(t *testing.T) {
+	for _, left := range []string{".", ":", "./@.", "./@:"} {
+		_, o, err := parseOptions("agitate", []string{"--cached", left})
+		if err == nil {
+			var in inputs
+			if in, err = parseInputs(o.left, o.right, true, ""); err == nil {
+				_, err = in.withCached()
+			}
+		}
+		if want := "--cached compares a revision with the index: " + left + " is not one"; err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", left, err, want)
+		}
+	}
+}
+
+// TestCachedRepoAsFound checks that the child takes the repository of
+// --cached's index as the parent found it, though a directory that would
+// be found instead appeared since.
+func TestCachedRepoAsFound(t *testing.T) {
+	base := t.TempDir()
+	if err := os.Mkdir(filepath.Join(base, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, o, err := parseOptions("agitate", []string{"-C", base, "--cached", "./a@b@main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := parseInputs(o.left, o.right, true, base)
+	if err == nil {
+		in, err = in.withCached()
+	}
+	if err != nil || in.right.repo != "./a" {
+		t.Fatalf("index of %q, %v; want of ./a", in.right.repo, err)
+	}
+	// Found last, it would be found by the child if it looked again.
+	if err := os.Mkdir(filepath.Join(base, "a@b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, child, err := parseOptions("agitate", []string{"-C", base, "--cached", "./a@b@main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeInputs(child.left, child.right, in.encode(), true)
+	if err == nil {
+		got, err = got.withCached()
+	}
+	if err != nil || got != in {
+		t.Errorf("child's inputs %+v, %v; want %+v", got, err, in)
 	}
 }
 
@@ -1670,5 +1913,216 @@ func TestGitIndex(t *testing.T) {
 				t.Errorf("exit status %d", code)
 			}
 		})
+	}
+}
+
+// gitRepoSHA256 makes a repository in the SHA-256 object format with one
+// commit of the files of gitRepo's last, and sha256.
+func gitRepoSHA256(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, data := range map[string]string{"dir/changed": "one\nTWO\n", "same": "x\n", "new": "n\n", "sha256": "s\n"} {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q", "-b", "main", "--object-format=sha256"}, {"add", "-A"}, {"commit", "-q", "-m", "only"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@example.org", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@example.org")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir
+}
+
+// countsRE matches each of the tree's counts, as "[3 identical]".
+var countsRE = regexp.MustCompile(`\[\d+ [a-z]+\]`)
+
+// gitOtherRepo makes a repository of gitRepo's commits and a third,
+// adding other, so that a side read from the wrong one of the two shows.
+func gitOtherRepo(t *testing.T) string {
+	t.Helper()
+	dir := gitRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "other"), []byte("o\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "third"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@example.org", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@example.org")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir
+}
+
+// Sides in other repositories than the current one, each read from its
+// own, with the header saying which. The repositories differ at each
+// revision compared, so that a side read from another shows: HEAD~ of
+// other is HEAD of repo, and its HEAD and work tree have other too.
+func TestGitOtherRepositories(t *testing.T) {
+	repo, other := gitRepo(t), gitOtherRepo(t)
+	sha256 := gitRepoSHA256(t)
+	nowhere := t.TempDir()
+	for _, tc := range []struct {
+		name        string
+		cmd         *exec.Cmd
+		want        string
+		left, right [2]string
+	}{
+		// Another repository's revision opposite the current work tree.
+		{"with the work tree", agitate(t, repo, other+"@HEAD~"), "[3 identical]",
+			[2]string{"(git)", other}, [2]string{"(git)", repo}},
+		// Both in other repositories: the current directory, in none, is
+		// not searched.
+		{"two repositories", agitate(t, nowhere, repo+"@HEAD~", other+"@"), "[1 identical] [1 left] [2 right] [1 contents]",
+			[2]string{"(git)", repo}, [2]string{"(git)", other}},
+		{"relative to -C", agitate(t, nowhere, "-C", filepath.Dir(repo), "./"+filepath.Base(repo)+"@HEAD~", "./"+filepath.Base(other)+"@main"),
+			"[1 identical] [1 left] [2 right] [1 contents]", [2]string{"(git)", repo}, [2]string{"(git)", other}},
+		// Files of different object formats compared by their contents.
+		{"object formats", agitate(t, nowhere, repo+"@", sha256+"@main"), "[3 identical] [1 right]",
+			[2]string{"(git)", repo}, [2]string{"(git)", sha256}},
+		{"git side without -g", binate(t, "git:"+repo+"@HEAD~", "git:"+other+"@."), "[1 identical] [1 left] [2 right] [1 contents]",
+			[2]string{"(git)", repo}, [2]string{"(git)", other}},
+		// GIT_DIR is ignored: the current repository is found from the
+		// current directory.
+		{"GIT_DIR ignored", withEnv(agitate(t, repo, other+"@HEAD~"), "GIT_DIR="+filepath.Join(other, ".git")),
+			"[3 identical]", [2]string{"(git)", other}, [2]string{"(git)", repo}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.cmd.Dir == "" {
+				tc.cmd.Dir = nowhere
+			}
+			home := t.TempDir()
+			tc.cmd.Env = append(tc.cmd.Env, "HOME="+home, "XDG_CONFIG_HOME="+home, "GIT_CONFIG_GLOBAL=/dev/null", "PWD="+tc.cmd.Dir)
+			pt := ptytest.Open(t, 100, 30)
+			pt.Start(tc.cmd)
+			offset := pt.Wait(0, enterScreen)
+			scr := pt.WaitScreen(100, 30, offset, tc.want)
+			// All the counts, not only some.
+			if got := strings.Join(countsRE.FindAllString(scr, -1), " "); got != tc.want {
+				t.Errorf("counts %q, want %q", got, tc.want)
+			}
+			checkHeader(t, pt, offset, scr, tc.left, tc.right)
+			pt.Write("\x03x")
+			if code := pt.Exit(); code != 0 {
+				t.Errorf("exit status %d", code)
+			}
+		})
+	}
+}
+
+// A revision compared with a directory on disk, without -g: the
+// directory has the modes git records, and can be edited.
+func TestGitSideAndDirectory(t *testing.T) {
+	repo := gitRepo(t)
+	dir := writeFiles(t, map[string]string{"dir/changed": "one\nTWO\n", "same": "x\n", "new": "n\n"})
+	for name, mode := range map[string]os.FileMode{"same": 0o600, "new": 0o664, "dir": 0o700} {
+		if err := os.Chmod(filepath.Join(dir, name), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := newFakeEditor(t)
+	pt, offset := e.start("git:"+repo+"@HEAD~", dir)
+	screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
+	scr := screen("[1 identical] [1 left] [1 right] [1 contents]")
+	checkHeader(t, pt, offset, scr, [2]string{"(git)", repo}, [2]string{"(dir)", dir})
+	// The revision's side can't be edited, and the directory's is at once.
+	pt.Write("n")
+	screen("HEAD~:dir/changed")
+	e.do(`write:one\ntwo\n`)
+	pt.Write("e")
+	screen("edited the right side, as the left side is in a git revision")
+	// The note shows until the next key.
+	pt.Write("k")
+	screen("[2 identical] [1 left] [1 right]")
+	real, err := filepath.EvalSymlinks(filepath.Join(dir, "dir", "changed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.log(); len(got) != 1 || got[0] != real {
+		t.Errorf("editor given %q", got)
+	}
+	pt.Write("\x03x")
+	if code := pt.Exit(); code != 0 {
+		t.Errorf("exit status %d", code)
+	}
+
+	// A work tree opposite a directory, both on disk, compares no times,
+	// even when asked, as git records none.
+	copied := writeFiles(t, map[string]string{"dir/changed": "one\nTWO\n", "same": "x\n", "new": "n\n"})
+	old := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, name := range []string{"dir/changed", "same", "new"} {
+		if err := os.Chtimes(filepath.Join(copied, name), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pt = startIn(t, copied, "--compare=+mtime", "git:"+repo+"@.", copied)
+	offset = pt.Wait(0, enterScreen)
+	scr = pt.WaitScreen(100, 30, offset, "[3 identical]")
+	if strings.Contains(scr, "mtime]") {
+		t.Errorf("times compared:\n%s", scr)
+	}
+	// Nor do the panels, though the directory's files are older.
+	pt.Write("*jj")
+	scr = pt.WaitScreen(100, 30, offset, "mtime │ 2001-")
+	if strings.Contains(scr, "(newer)") {
+		t.Errorf("panels compare times:\n%s", scr)
+	}
+	pt.Write("\x03x")
+	if code := pt.Exit(); code != 0 {
+		t.Errorf("work tree: exit status %d", code)
+	}
+}
+
+// What can't be compared across repositories, or named as a backend.
+func TestGitOtherRepositoryErrors(t *testing.T) {
+	repo := gitRepo(t)
+	dir := t.TempDir()
+	// A repository whose .git is a symlink to that of one inside it: the
+	// same index found from both.
+	alias := t.TempDir()
+	if err := os.Rename(repo, filepath.Join(alias, "inner")); err != nil {
+		t.Fatal(err)
+	}
+	repo = filepath.Join(alias, "inner")
+	if err := os.Symlink(filepath.Join("inner", ".git"), filepath.Join(alias, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		cmd  *exec.Cmd
+		want string
+	}{
+		{binate(t, "hg:"+repo+"@main", dir), `unknown backend "hg"`},
+		{binate(t, "git:"+dir+"/missing@main", dir), "no directory before an @"},
+		{agitate(t, repo, repo+"@.", "."), "unable to compare two work trees"},
+		{agitate(t, repo, repo+"@:", ":"), "the index must be compared with a revision or the work tree"},
+		{agitate(t, dir, alias+"@:", repo+"@:"), "the index must be compared with a revision or the work tree"},
+		{agitate(t, dir, dir+"@main"), "not a git repository"},
+		// With -g, git: starts a revision's path: a hint says to drop it.
+		{agitate(t, repo, "git:"+repo+"@HEAD~", "HEAD"), "(with -g, give another repository's side without git:, as " + repo + "@HEAD~)"},
+		// A relative directory gets ./, without which it would be a revision.
+		{agitate(t, alias, "git:inner@HEAD~", "HEAD"), "(with -g, give another repository's side without git:, as ./inner@HEAD~)"},
+		{binate(t, "git:"+repo+"@HEAD:same", dir), "the revision names a file"},
+		{binate(t, "-q", "git:"+repo+"@HEAD", dir), "--quick with a git side"},
+	} {
+		if tc.cmd.Dir == "" {
+			tc.cmd.Dir = dir
+		}
+		pt := ptytest.Open(t, 100, 30)
+		pt.Start(tc.cmd)
+		pt.Wait(0, tc.want)
+		if code := pt.Exit(); code != 2 {
+			t.Errorf("%q: exit status %d", tc.cmd.Args, code)
+		}
 	}
 }

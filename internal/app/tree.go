@@ -114,9 +114,7 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 		t.opts.Compare = scan.DefaultAttrs
 	}
 	t.roots = [2]source.Root{cfg.Left, cfg.Right}
-	if !onDisk(cfg.Left) || !onDisk(cfg.Right) {
-		t.unrecorded = scan.Owner | scan.Mtime
-	}
+	t.unrecorded = unrecordedAttrs(cfg.Left, cfg.Right)
 	t.opts.Compare = recorded(t.opts.Compare, t.unrecorded)
 	t.view.Compare = t.opts.Compare
 	t.stats.app, t.changes.app, t.previews.app = a, a, a
@@ -124,6 +122,23 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 	t.view.StatusRight, t.view.Statuses = t.scan.StatusSide()
 	t.model = tree.New(t.scan.Root)
 	return t
+}
+
+// unrecordedAttrs returns the attributes not compared between left and
+// right: owners and times, which git records neither of, where either is
+// a side of git or compared as one.
+func unrecordedAttrs(left, right source.Root) scan.Attrs {
+	if !onDisk(left) || !onDisk(right) || asGit(left) || asGit(right) {
+		return scan.Owner | scan.Mtime
+	}
+	return 0
+}
+
+// asGit reports whether root is a directory compared as a side of git
+// is, which records neither owners nor times, even opposite a work tree.
+func asGit(root source.Root) bool {
+	_, ok := root.(source.GitModes)
+	return ok
 }
 
 func (t *TreeScreen) start() {
@@ -254,7 +269,7 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 		}
 		sides[i].Path = panelPath(t.roots[i], n.Path())
 		sides[i].InRevision = !onDisk(t.roots[i])
-		sides[i].BesideRevision = onDisk(t.roots[i]) && !onDisk(t.roots[1-i])
+		sides[i].BesideGit = onDisk(t.roots[i]) && t.unrecorded != 0
 		sides[i].RepoPath = repoPath(t.roots[i], n.Path())
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 		if t.view.Statuses && t.view.StatusRight == (i == 1) {

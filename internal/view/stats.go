@@ -93,11 +93,12 @@ type StatSide struct {
 	// an entry's type, target, size and mode: the rest is left out, and
 	// the path, which names no file, is linked only by RepoPath.
 	InRevision bool
-	// BesideRevision is set for a side on disk compared with one in a
-	// git revision, as a work tree is. Its owner, links, inode and times
-	// but the modification time, which Git neither records nor compares,
-	// are left out.
-	BesideRevision bool
+	// BesideGit is set for a side on disk compared as git compares it:
+	// with a revision, as a work tree is, or a work tree with a directory.
+	// Its owner, links, inode and times but the modification time, which
+	// Git neither records nor compares, are left out, and its modification
+	// time isn't marked newer.
+	BesideGit bool
 	// RepoPath, if set, of a side in a revision, is the entry's path from
 	// the top of the repository, as git commands take it, linked to from
 	// the part of Path after the revision and the colon.
@@ -227,7 +228,7 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	if sd.InRevision {
 		return append(rows, changeRows(sd.Change)...)
 	}
-	if !sd.BesideRevision {
+	if !sd.BesideGit {
 		field("owner", ownerValue(st, sd.User, sd.Group), scan.Owner, '~')
 		plain("links", fmt.Sprint(st.Nlink), 0, 0)
 		plain("inode", fmt.Sprint(st.Ino), 0, 0)
@@ -235,7 +236,7 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	plain("mtime", formatStatTime(st.Mtime, 0), scan.Mtime, '#')
 	// Compared to the nanosecond, as the tree compares it.
 	rows[len(rows)-1].key = fmt.Sprint(st.Mtime.UnixNano())
-	if sd.BesideRevision {
+	if sd.BesideGit {
 		return rows
 	}
 	plain("ctime", formatStatTime(st.Ctime, 0), 0, 0)
@@ -420,7 +421,8 @@ func (r statRow) compareKey() string {
 // y, then up to rows rows below it. Fields worth comparing that differ are
 // marked between the panels, as in the tree, and take their mark's colour,
 // when both sides were read; the newer mtime is marked too, unless a side
-// is in a revision, which has none. The commit that
+// is in a revision, which has none, or beside one of git, as the tree
+// doesn't compare it. The commit that
 // last changed the entry, where it differs, takes the style of the item,
 // as the tree shows it.
 func drawPanels(s *term.Screen, p Panes, y, rows int, sides [2]StatSide, compare scan.Attrs, home string, item term.Style, st colors.Styles) {
@@ -453,8 +455,10 @@ func drawPanels(s *term.Screen, p Panes, y, rows int, sides [2]StatSide, compare
 		bright = isFileOrLink(lt) || isFileOrLink(rt)
 		// Mtimes that differ within a second are shown with as much of the
 		// fraction as tells them apart, so that the mark, and which is
-		// newer, can be seen. A revision has no mtime to compare.
-		mtimes := !sides[0].InRevision && !sides[1].InRevision
+		// newer, can be seen. A revision has no mtime to compare, and
+		// beside git the tree compares none.
+		mtimes := !sides[0].InRevision && !sides[1].InRevision &&
+			!sides[0].BesideGit && !sides[1].BesideGit
 		if digits := fractionDigits(l.Mtime, r.Mtime); mtimes && !l.Mtime.Equal(r.Mtime) && digits > 0 {
 			for i, t := range []time.Time{l.Mtime, r.Mtime} {
 				for j := range all[i] {

@@ -266,6 +266,53 @@ func (n Nothing) missing(op, rel string) error {
 	return &os.PathError{Op: op, Path: n.Path(rel), Err: unix.ENOENT}
 }
 
+// GitModes is a Disk side compared with a side of git, with the modes git
+// records: a regular file 0644, or 0755 if its owner may run it, a
+// directory 0755 and a symlink 0777. Other types keep theirs, which git
+// can't record.
+type GitModes struct{ Disk }
+
+func (g GitModes) Entry(rel string, follow bool) (Entry, error) {
+	e, err := g.Disk.Entry(rel, follow)
+	e.Mode = gitMode(e.Mode)
+	return e, err
+}
+
+func (g GitModes) Stat(rel string) (*stat.Stat, error) {
+	st, err := g.Disk.Stat(rel)
+	if st != nil {
+		st.Mode = gitMode(st.Mode)
+	}
+	return st, err
+}
+
+// gitMode returns the mode git records of an entry of mode m.
+func gitMode(m uint32) uint32 {
+	switch m & unix.S_IFMT {
+	case unix.S_IFREG:
+		if m&unix.S_IXUSR != 0 {
+			return unix.S_IFREG | 0o755
+		}
+		return unix.S_IFREG | 0o644
+	case unix.S_IFDIR:
+		return unix.S_IFDIR | 0o755
+	case unix.S_IFLNK:
+		return unix.S_IFLNK | 0o777
+	}
+	return m
+}
+
+// AsDisk returns the Disk that root is, or shows with other modes.
+func AsDisk(root Root) (Disk, bool) {
+	switch r := root.(type) {
+	case Disk:
+		return r, true
+	case GitModes:
+		return r.Disk, true
+	}
+	return "", false
+}
+
 // Status is an entry's state in a version control system's work tree, as
 // git status --short gives it: Staged is the letter of what is staged
 // against the last commit, and Unstaged of what is not, each ' ' for

@@ -61,8 +61,9 @@ type App struct {
 	Names *stat.Names
 	// Styles draw the quit prompt.
 	Styles colors.Styles
-	// Header, if its Path is set, is shown in a row above Main, which is
-	// drawn below it, unless the terminal is too small for both.
+	// Header, unless IsZero, as when a side's Path is set, is shown in a
+	// row above Main, which is drawn below it, unless the terminal is too
+	// small for both.
 	Header view.Header
 	// main is what Main is drawn on below the header.
 	main *term.Screen
@@ -205,7 +206,7 @@ func (a *App) draw() {
 
 // drawMain draws Main, below the header if there is one and room for it.
 func (a *App) drawMain() {
-	if a.Header.Path == "" || a.screen.H-1 < MinHeight {
+	if a.Header.IsZero() || a.screen.H-1 < MinHeight {
 		a.Main.Draw(a.screen)
 		return
 	}

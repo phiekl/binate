@@ -300,27 +300,47 @@ func drawBar(s *term.Screen, y int, items []barItem, st colors.Styles) {
 	}
 }
 
-// Header is a row above the boxes naming what both sides are of: a
-// repository's directory.
+// Header is a row above the boxes saying what each side is, above its
+// box, as a repository's directory.
 type Header struct {
-	// Label says what Path is.
-	Label string
-	Path  string
-	// Home is shown as "~" in Path.
+	Sides [2]HeaderSide
+	// Home is shown as "~" in the paths.
 	Home string
 }
 
-// DrawHeader draws h in the top row, its path shortened in the middle if
-// it doesn't fit, and linked to in full, quoted for the shell as the
-// panels' paths are.
+// HeaderSide is what a side is: Label says what Path is.
+type HeaderSide struct {
+	Label, Path string
+}
+
+// IsZero reports whether h has nothing to show.
+func (h Header) IsZero() bool {
+	return h.Sides[0].Path == "" && h.Sides[1].Path == ""
+}
+
+// DrawHeader draws h in the top row, each side above its box, its path
+// shortened in the middle if it doesn't fit, and linked to in full, quoted
+// for the shell as the panels' paths are.
 func DrawHeader(s *term.Screen, h Header, st colors.Styles) {
 	s.Fill(0, 0, s.W, st.Plain)
-	x := 1
-	x += s.Label(x, 0, s.W-x, h.Label+" ", st.Plain.With(term.Dim))
-	room := max(s.W-x-1, 0)
-	style := st.Plain.With(term.Bold)
-	esc := st.Escape
-	style.Link = display.ShellQuote(h.Path)
-	esc.Link = style.Link
-	s.Text(x, 0, room, ShortenMiddle(display.Name(HomePath(h.Path, h.Home)), room), style, esc)
+	p := Layout(s.W)
+	for i, side := range h.Sides {
+		x, w := p.LeftBox, p.LeftBoxW
+		if i == 1 {
+			x, w = p.RightBox, p.RightBoxW
+		}
+		if side.Path == "" || w < 3 {
+			continue
+		}
+		// Within the box's borders, as its title is.
+		end := x + w - 1
+		x++
+		x += s.Label(x, 0, end-x, side.Label+" ", st.Plain.With(term.Dim))
+		room := max(end-x, 0)
+		style := st.Plain.With(term.Bold)
+		esc := st.Escape
+		style.Link = display.ShellQuote(side.Path)
+		esc.Link = style.Link
+		s.Text(x, 0, room, ShortenMiddle(display.Name(HomePath(side.Path, h.Home)), room), style, esc)
+	}
 }

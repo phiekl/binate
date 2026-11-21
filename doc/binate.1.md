@@ -22,7 +22,10 @@ comparing and drawing run in a child process. Where available, Landlock
 restricts it from writing and running programs, within the kernel's limits.
 
 *left* and *right* are directories. **/dev/null** is an empty one. A file is
-refused, as **diff**(1) compares two.
+refused, as **diff**(1) compares two. Without **-g**,
+**git:**_repository_**@**_revision_ is a side in a git repository, as
+**git:~/src/app@main**, compared with a directory, **/dev/null** or another such
+side.
 
 See [**binate-manual**(7)](manual.md) for the full reference.
 
@@ -39,16 +42,18 @@ See [**binate-manual**(7)](manual.md) for the full reference.
 - **-x**, **--exclude** *pattern*: Skip entries whose name matches the
   shell-style *pattern*. Repeatable.
 - **-q**, **--quick**: Compare files by size and modification time instead of
-  contents. Not with **-g**.
+  contents. Not with **-g** or a **git:** side.
 - **-g**, **--git**: Compare *left* and *right* as revisions of the git
   repository of the current directory, or of **-C**, such as **main**,
   **HEAD~2** or **v1.0:src**. Use **.** opposite a full-tree revision to compare
   it with the work tree at the repository's top, including untracked files
   allowed by Git's ignore rules. Use **:** for the index, what is staged. With
   **-g** or **agitate**, a missing *right* defaults to **.**, and a missing
-  *left* defaults to **HEAD**.
-- **--cached**: With **-g**, compare *left*, or **HEAD**, with the index, as
-  **git diff --cached** does.
+  *left* defaults to **HEAD**. A side in another repository is its directory,
+  **@** and a revision, **.** or **:**, as **~/src/app@main**, and **HEAD**
+  without one.
+- **--cached**: With **-g**, compare *left*, or **HEAD**, with the index of its
+  repository, as **git diff --cached** does.
 - **-C**, **--directory** *directory*: With **-g**, find the repository from
   *directory*, as **git -C** does.
 - **-h**, **--help**: Show the options and exit.
