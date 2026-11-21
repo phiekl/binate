@@ -22,16 +22,19 @@ type Styles struct {
 	RightOnly  term.Style // the > mark
 	Unverified term.Style // the ? mark
 	Type       term.Style // the ! mark
+	Error      term.Style // why a file or field could not be shown
 	// The letters of a git status: what is staged, and what is not or
 	// untracked, in git's colours.
 	Staged   term.Style
 	Unstaged term.Style
-	// The backgrounds of lines by state in the diff view.
-	ChangedBg   term.Style
-	LeftOnlyBg  term.Style
-	RightOnlyBg term.Style
+	// The backgrounds of differing lines in the diff view, by side, as
+	// git diff's red for a and green for b, and of changed text inside a
+	// changed line.
+	LeftBg      term.Style
+	RightBg     term.Style
+	LeftInline  term.Style
+	RightInline term.Style
 	Select      term.Style // the selected row
-	Inline      term.Style // the background of changed text inside a changed line
 	Dir         term.Style // the dir type
 	Link        term.Style // the link type
 	Pipe        term.Style // the pipe type
@@ -62,23 +65,24 @@ func Default() Styles {
 		Changed:    term.Style{SGR: "33"},
 		Attrs:      term.Style{SGR: "36"},
 		Mtime:      term.Style{SGR: "1"},
-		Inline:     term.Style{SGR: "48;2;70;60;32"},
 		Dir:        term.Style{SGR: "1;34"},
 		Link:       term.Style{SGR: "1;36"},
 		Pipe:       term.Style{SGR: "33"},
 		Device:     term.Style{SGR: "1;33"},
 		Socket:     term.Style{SGR: "1;35"},
 		Exec:       term.Style{SGR: "1;32"},
-		LeftOnly:   term.Style{SGR: "32"},
-		RightOnly:  term.Style{SGR: "34"},
-		Unverified: term.Style{SGR: "35"},
-		Type:       term.Style{SGR: "1;31"},
+		LeftOnly:   term.Style{SGR: "31"},
+		RightOnly:  term.Style{SGR: "32"},
+		Unverified: term.Style{SGR: "90"},
+		Type:       term.Style{SGR: "1;35"},
+		Error:      term.Style{SGR: "1;31"},
 		Staged:     term.Style{SGR: "32"},
 		Unstaged:   term.Style{SGR: "31"},
 
-		ChangedBg:   term.Style{SGR: "48;2;34;31;24"},
-		LeftOnlyBg:  term.Style{SGR: "48;2;22;34;28"},
-		RightOnlyBg: term.Style{SGR: "48;2;22;28;42"},
+		LeftBg:      term.Style{SGR: "48;2;46;24;26"},
+		RightBg:     term.Style{SGR: "48;2;22;40;28"},
+		LeftInline:  term.Style{SGR: "48;2;104;38;42"},
+		RightInline: term.Style{SGR: "48;2;36;92;48"},
 		Select:      term.Style{SGR: "48;2;52;54;60"},
 
 		Escape: term.Style{SGR: "7"},
@@ -98,10 +102,10 @@ func Default() Styles {
 // than the truecolour ones, as its darkest colours are far from black.
 func Default256() Styles {
 	s := Default()
-	s.Inline = term.Style{SGR: "48;5;100"}
-	s.ChangedBg = term.Style{SGR: "48;5;58"}
-	s.LeftOnlyBg = term.Style{SGR: "48;5;22"}
-	s.RightOnlyBg = term.Style{SGR: "48;5;17"}
+	s.LeftBg = term.Style{SGR: "48;5;52"}
+	s.RightBg = term.Style{SGR: "48;5;22"}
+	s.LeftInline = term.Style{SGR: "48;5;88"}
+	s.RightInline = term.Style{SGR: "48;5;28"}
 	s.Select = term.Style{SGR: "48;5;238"}
 	return s
 }
@@ -113,21 +117,23 @@ func Default256() Styles {
 func NoColor() Styles {
 	bold := term.Style{Attr: term.Bold}
 	return Styles{
-		Changed:    bold,
-		Attrs:      bold,
-		Mtime:      bold,
-		Inline:     term.Style{Attr: term.Bold | term.Underline},
-		Dir:        bold,
-		LeftOnly:   bold,
-		RightOnly:  bold,
-		Unverified: bold,
-		Type:       bold,
-		Staged:     bold,
-		Unstaged:   bold,
-		Select:     term.Style{Attr: term.Reverse},
-		Escape:     term.Style{Attr: term.Reverse},
-		Border:     term.Style{Attr: term.Dim},
-		Status:     term.Style{},
+		Changed:     bold,
+		Attrs:       bold,
+		Mtime:       bold,
+		LeftInline:  term.Style{Attr: term.Bold | term.Underline},
+		RightInline: term.Style{Attr: term.Bold | term.Underline},
+		Dir:         bold,
+		LeftOnly:    bold,
+		RightOnly:   bold,
+		Unverified:  bold,
+		Type:        bold,
+		Error:       bold,
+		Staged:      bold,
+		Unstaged:    bold,
+		Select:      term.Style{Attr: term.Reverse},
+		Escape:      term.Style{Attr: term.Reverse},
+		Border:      term.Style{Attr: term.Dim},
+		Status:      term.Style{},
 
 		Accent:     term.Style{Attr: term.Reverse},
 		HelpSelect: term.Style{},
@@ -169,7 +175,7 @@ func FromEnv(getenv func(string) string) Env {
 // Parse returns the styles for an environment: the defaults for its
 // terminal, or none with NO_COLOR, changed by BINATE_COLORS. That is a
 // list of key=SGR separated by colons, as LS_COLORS, for example
-// "dir=1;34:inline=1;41".
+// "dir=1;34:leftinline=1;41".
 // An SGR value may contain only digits and semicolons, so it can't add
 // other escape sequences. An unknown key or invalid value is a warning, and
 // the default stays. Warnings quote the text as is: escaping it is up to
@@ -186,7 +192,6 @@ func Parse(e Env) Result {
 		"changed":     &r.Styles.Changed,
 		"attrs":       &r.Styles.Attrs,
 		"mtime":       &r.Styles.Mtime,
-		"inline":      &r.Styles.Inline,
 		"dir":         &r.Styles.Dir,
 		"link":        &r.Styles.Link,
 		"pipe":        &r.Styles.Pipe,
@@ -197,11 +202,13 @@ func Parse(e Env) Result {
 		"rightonly":   &r.Styles.RightOnly,
 		"unverified":  &r.Styles.Unverified,
 		"type":        &r.Styles.Type,
+		"error":       &r.Styles.Error,
 		"staged":      &r.Styles.Staged,
 		"unstaged":    &r.Styles.Unstaged,
-		"changedbg":   &r.Styles.ChangedBg,
-		"leftonlybg":  &r.Styles.LeftOnlyBg,
-		"rightonlybg": &r.Styles.RightOnlyBg,
+		"leftbg":      &r.Styles.LeftBg,
+		"rightbg":     &r.Styles.RightBg,
+		"leftinline":  &r.Styles.LeftInline,
+		"rightinline": &r.Styles.RightInline,
 		"select":      &r.Styles.Select,
 		"escape":      &r.Styles.Escape,
 		"border":      &r.Styles.Border,

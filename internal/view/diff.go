@@ -424,9 +424,9 @@ func (v *DiffView) spans(i int) [2][]diff.Span {
 	return v.inline[i]
 }
 
-// drawRow draws a visual line across both panes and the mark column,
-// over the tint of its row's kind, in the colour of its mark, as the
-// tree's rows.
+// drawRow draws a visual line across both panes and the mark column. A
+// differing line is tinted by its side, red on the left and green on the
+// right as in git diff, and the mark takes its colour, as in the tree.
 func (v *DiffView) drawRow(s *term.Screen, p Panes, y int, l vline) {
 	r := v.Rows[l.row]
 	var spans [2][]diff.Span
@@ -434,21 +434,26 @@ func (v *DiffView) drawRow(s *term.Screen, p Panes, y int, l vline) {
 		spans = v.spans(l.row)
 	}
 	st := v.Styles
-	markStyle, bg := st.Plain, term.Style{}
+	markStyle := st.Plain
 	switch r.Kind {
 	case diff.Changed:
-		markStyle, bg = st.Changed, st.ChangedBg
+		markStyle = st.Changed
 	case diff.LeftOnly:
-		markStyle, bg = st.LeftOnly, st.LeftOnlyBg
+		markStyle = st.LeftOnly
 	case diff.RightOnly:
-		markStyle, bg = st.RightOnly, st.RightOnlyBg
+		markStyle = st.RightOnly
 	}
 	g := v.gutter()
 	tw := v.textWidth(s.W)
 	for side := range 2 {
 		x, w, text, idx := p.LeftX, p.LeftW, v.L, r.L
+		bg, inline := st.LeftBg, st.LeftInline
 		if side == 1 {
 			x, w, text, idx = p.RightX, p.RightW, v.R, r.R
+			bg, inline = st.RightBg, st.RightInline
+		}
+		if r.Kind == diff.Same || idx < 0 {
+			bg = term.Style{}
 		}
 		s.Fill(x, y, w, st.Plain.On(bg))
 		if idx < 0 {
@@ -477,25 +482,25 @@ func (v *DiffView) drawRow(s *term.Screen, p Panes, y int, l vline) {
 		}
 		width := min(tw, w-g-1)
 		glyphs := display.ContentFrom(line, from, start-from.Column()+width+1)
-		v.drawText(s, x+g+1, y, width, glyphs, from.Column(), start, spans[side], bg)
+		v.drawText(s, x+g+1, y, width, glyphs, from.Column(), start, spans[side], bg, inline)
 	}
-	gap := st.Plain.On(bg)
+	gap := st.Plain
 	s.Set(p.Mark-1, y, ' ', 1, gap)
 	s.Set(p.Mark+1, y, ' ', 1, gap)
 	if l.part == 0 {
-		s.Set(p.Mark, y, r.Kind.Mark(), 1, markStyle.On(bg))
+		s.Set(p.Mark, y, r.Kind.Mark(), 1, markStyle)
 	} else {
 		s.Set(p.Mark, y, ' ', 1, gap)
 	}
 }
 
 // drawText draws the columns from start of glyphs, the first of which is
-// at column col, in width columns, over the row's background bg, with
-// changed spans in the inline style and escapes in the escape style. A
+// at column col, in width columns, over the side's background bg, with
+// changed spans over inline and escapes in the escape style. A
 // wide glyph cut by start shows as a space.
-func (v *DiffView) drawText(s *term.Screen, x, y, width int, glyphs []display.Glyph, col, start int, spans []diff.Span, bg term.Style) {
+func (v *DiffView) drawText(s *term.Screen, x, y, width int, glyphs []display.Glyph, col, start int, spans []diff.Span, bg, inline term.Style) {
 	base := v.Styles.Plain.On(bg)
-	inline := base.On(v.Styles.Inline)
+	inline = base.On(inline)
 	esc := rowEscape(v.Styles.Escape, bg)
 	si := 0
 	for _, gl := range glyphs {

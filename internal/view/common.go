@@ -115,7 +115,7 @@ func drawSideErrors(s *term.Screen, p Panes, y, h int, errors [2]string, st colo
 		w := []int{p.LeftW, p.RightW}[i]
 		switch {
 		case errors[i] != "":
-			drawNoteIn(s, x, y, w, h, errors[i], st.Type, st.Escape)
+			drawNoteIn(s, x, y, w, h, errors[i], st.Error, st.Escape)
 		case errors[1-i] != "":
 			side := [2]string{"left", "right"}[1-i]
 			drawNote(s, x, y, w, h, "Unable to compare files due to an error on the "+side+" side.", st)

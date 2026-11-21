@@ -50,25 +50,24 @@ func TestDiffScreen(t *testing.T) {
 	if status := lastLine(scr); !strings.HasPrefix(status, " [1 changed] [1 right]") {
 		t.Errorf("status %q", status)
 	}
-	// Lines are tinted by kind, in the colour of their mark, across both
-	// sides; the changed word is highlighted more strongly.
+	// Differing lines are tinted by side, red on the left and green on the
+	// right; the changed word is highlighted more strongly.
 	st := v.Styles
-	changed, inline := st.Plain.On(st.ChangedBg), st.Plain.On(st.ChangedBg).On(st.Inline)
+	left, right := st.Plain.On(st.LeftBg), st.Plain.On(st.RightBg)
 	for _, tt := range []struct {
 		x, y int
 		want term.Style
 	}{
-		{3, 3, inline},
-		{31, 3, inline},
-		{1, 3, st.Plain.With(term.Dim).On(st.ChangedBg)}, // the line number
-		{8, 3, changed},
-		{30, 3, changed},
-		{31, 3, inline},
-		{26, 3, st.Changed.On(st.ChangedBg)}, // the mark
+		{3, 3, left.On(st.LeftInline)},
+		{31, 3, right.On(st.RightInline)},
+		{1, 3, st.Plain.With(term.Dim).On(st.LeftBg)}, // the line number
+		{8, 3, left},
+		{30, 3, right},
+		{26, 3, st.Changed}, // the mark
 		{2, 2, st.Plain},
-		{1, 7, st.Plain.On(st.RightOnlyBg)},
-		{26, 7, st.RightOnly.On(st.RightOnlyBg)},
-		{35, 7, st.Plain.On(st.RightOnlyBg)},
+		{1, 7, st.Plain}, // opposite a right-only line
+		{26, 7, st.RightOnly},
+		{35, 7, right},
 	} {
 		if c := scr.Cell(tt.x, tt.y); c.Style != tt.want {
 			t.Errorf("column %d row %d %q %+v, want %+v", tt.x, tt.y, c.R, c.Style, tt.want)
@@ -92,12 +91,12 @@ func TestDiffEscapesInChangedLines(t *testing.T) {
 		t.Fatalf("line %q", line)
 	}
 	for x := 4; x < 8; x++ {
-		if c := scr.Cell(x, 1); c.Style != v.Styles.Escape.On(v.Styles.ChangedBg) {
+		if c := scr.Cell(x, 1); c.Style != v.Styles.Escape.On(v.Styles.LeftBg) {
 			t.Errorf("column %d %+v, want the escape style", x, c)
 		}
 	}
 	// The expanded tab is changed text, not an escape.
-	if c := scr.Cell(32, 1); c.Style != v.Styles.Plain.On(v.Styles.ChangedBg).On(v.Styles.Inline) {
+	if c := scr.Cell(32, 1); c.Style != v.Styles.Plain.On(v.Styles.RightBg).On(v.Styles.RightInline) {
 		t.Errorf("tab column %+v", c)
 	}
 }
@@ -319,7 +318,7 @@ func TestDiffSideErrors(t *testing.T) {
 		// Only a side that failed is red.
 		p := Layout(80)
 		for i, x := range []int{p.LeftX, p.RightX} {
-			if red := scr.Cell(x, 1).Style == st.Type; red != (tt.errors[i] != "") {
+			if red := scr.Cell(x, 1).Style == st.Error; red != (tt.errors[i] != "") {
 				t.Errorf("%q: side %d red %v", tt.errors, i, red)
 			}
 		}

@@ -928,8 +928,9 @@ view. Where the whole path doesn't fit after it, it is shortened to **(v)**
 first, and then the path in the middle, but never left out. The lines have line
 numbers, and a mark between the boxes: blank for an unchanged line, **|** for a
 changed line, and **<** or **>** for a line on one side only. As in the tree,
-the marks have their colours, and a marked line has a faint background in its
-mark's colour across both sides. Changed text inside a changed line has a
+the marks have their colours. A marked line has a faint background by side, as
+in **git diff**, red on the left and green on the right, and the cell opposite a
+line on one side only has none. Changed text inside a changed line has a
 stronger one. It opens on **Enter** in the tree.
 
 It shows UTF-8 encoded text of up to 10 MiB per side. A side that is not valid
@@ -1121,7 +1122,7 @@ escapes unambiguous.
 
 - **BINATE_COLORS**: Colours, as a list of *key*=*SGR* separated by colons, in
   the style of **LS_COLORS**, for example
-  **changed=33:leftonly=32:dir=1;34:select=48;5;238**. The values are SGR
+  **changed=33:leftonly=31:dir=1;34:select=48;5;238**. The values are SGR
   parameters as the terminal takes them, so 16-colour, 256-colour (**38;5;**_N_)
   and truecolour (**38;2;**_R_**;**_G_**;**_B_) values all work. A value may
   contain only digits and **;**, so the variable can't add other escape
@@ -1158,24 +1159,28 @@ The keys of **BINATE_COLORS**, with their defaults:
 - **changed** (33): the **|** mark.
 - **attrs** (36): the **~** mark.
 - **mtime** (1): the **#** mark.
-- **inline**: the background of changed text inside a changed line in the diff
-  view, a stronger yellow.
+- **leftinline**, **rightinline**: the background of changed text inside a
+  changed line in the diff view, on the left and on the right, a stronger red
+  and green.
 - **dir** (1;34): the **dir** type.
 - **link** (1;36): the **link** type.
 - **pipe** (33): the **pipe** type.
 - **device** (1;33): the **char** and **bdev** types.
 - **socket** (1;35): the **sock** type.
 - **exec** (1;32): the **file** type of a file with an execute bit.
-- **leftonly** (32): the **<** mark.
-- **rightonly** (34): the **>** mark.
-- **unverified** (35): the **?** mark.
-- **type** (1;31): the **!** mark.
+- **leftonly** (31): the **<** mark.
+- **rightonly** (32): the **>** mark.
+- **unverified** (90): the **?** mark, grey.
+- **type** (1;35): the **!** mark.
+- **error** (1;31): why a file can't be shown in the diff view or the preview,
+  why a checksum failed, and panel fields that could not be read. A directory
+  that could not be listed is a note in the tree, in plain text.
 - **staged** (32): the first letter of a git status, what is staged.
 - **unstaged** (31): the second letter of a git status, what is not staged, and
   both letters of an untracked or unmerged entry.
-- **changedbg**, **leftonlybg**, **rightonlybg**: the background of a line in
-  the diff view marked **|**, **<** or **>**: dark yellow, green and blue. Tree
-  rows have no background by state.
+- **leftbg**, **rightbg**: the background of a marked line in the diff view, on
+  the left and on the right, dark red and green. Tree rows have no background
+  by state.
 - **select**: the background of the selected row, grey.
 - **escape** (7): escaped characters (see [Showing text
   safely](#showing-text-safely)).
@@ -1199,22 +1204,22 @@ way to ask a terminal. Over **ssh**(1), or in **tmux**(1) started without it,
 **COLORTERM** is often unset, and setting it there gives the truecolour tints.
 The defaults, as **BINATE_COLORS**, in truecolour:
 
-    changedbg=48;2;34;31;24:leftonlybg=48;2;22;34;28:
-    rightonlybg=48;2;22;28;42:inline=48;2;70;60;32:select=48;2;52;54;60
+    leftbg=48;2;46;24;26:rightbg=48;2;22;40;28:leftinline=48;2;104;38;42:
+    rightinline=48;2;36;92;48:select=48;2;52;54;60
 
 and in 256 colours:
 
-    changedbg=48;5;58:leftonlybg=48;5;22:rightonlybg=48;5;17:
-    inline=48;5;100:select=48;5;238
+    leftbg=48;5;52:rightbg=48;5;22:leftinline=48;5;88:rightinline=48;5;28:
+    select=48;5;238
 
 On a light terminal, set light ones, such as:
 
-    changedbg=48;2;252;248;222:leftonlybg=48;2;228;246;230:
-    rightonlybg=48;2;228;236;252:inline=48;2;246;232;150:
+    leftbg=48;2;255;235;233:rightbg=48;2;230;255;236:
+    leftinline=48;2;255;192;192:rightinline=48;2;172;242;189:
     select=48;2;214;214;214
 
-(each as one line). **inline** is a background colour and **escape** reverse
-video, so the two never look alike.
+(each as one line). **leftinline** and **rightinline** are background colours
+and **escape** reverse video, so they never look alike.
 
 ## Exit status
 

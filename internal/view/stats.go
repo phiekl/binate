@@ -535,7 +535,7 @@ func drawStatRow(s *term.Screen, x, y, w, labelW int, row statRow, highlight ter
 	value := st.Plain
 	switch {
 	case row.failed:
-		value = st.Type
+		value = st.Error
 	case highlight != term.Style{}:
 		value = highlight
 	}

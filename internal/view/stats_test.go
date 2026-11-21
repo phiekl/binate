@@ -256,7 +256,7 @@ func TestPanelNotes(t *testing.T) {
 		t.Errorf("size opposite another type %q", rows[1])
 	}
 	scr = drawPanelsOn(13, 10, [2]StatSide{{Err: errors.New("permission denied")}, {Missing: true}})
-	if c := scr.Cell(1, 2); c.Style != st.Type {
+	if c := scr.Cell(1, 2); c.Style != st.Error {
 		t.Errorf("error style %+v", c.Style)
 	}
 	scr = drawPanelsOn(13, 10, [2]StatSide{{Stat: link, Entries: -1}, {Missing: true}})

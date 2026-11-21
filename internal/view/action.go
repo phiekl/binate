@@ -145,7 +145,7 @@ func (v *TreeView) drawAction(s *term.Screen, p Panes, y, h int, res *ActionResu
 		sd := res.Sides[i]
 		switch {
 		case sd.Err != "":
-			drawNoteIn(s, x, y, w, h, sd.Err, st.Type, st.Escape)
+			drawNoteIn(s, x, y, w, h, sd.Err, st.Error, st.Escape)
 		case sd.Value == "":
 			drawNoteIn(s, x, y, w, h, sd.Note, st.Plain.With(term.Dim), st.Escape)
 		default:

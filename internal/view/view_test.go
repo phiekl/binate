@@ -152,9 +152,9 @@ func TestTreeScreen(t *testing.T) {
 		fg   term.Style
 	}{
 		{2, '|', term.Style{SGR: "93"}},
-		{3, '<', term.Style{SGR: "92"}},
+		{3, '<', term.Style{SGR: "91"}},
 		{4, '|', term.Style{SGR: "93"}},
-		{5, '>', term.Style{SGR: "94"}},
+		{5, '>', term.Style{SGR: "92"}},
 	} {
 		if c := scr.Cell(31, tt.y); c.R != tt.mark || c.Style != tt.fg {
 			t.Errorf("mark cell %+v, want %c in %+v", c, tt.mark, tt.fg)
@@ -202,10 +202,10 @@ func TestTreeScreen(t *testing.T) {
 		{scan.Same, 0, "", ""},
 		{scan.Differ, scan.Content, "", "93;22"},
 		{scan.Differ, scan.Mode, "36;22", "96;22"},
-		{scan.LeftOnly, 0, "", "92;22"},
-		{scan.RightOnly, 0, "", "94;22"},
-		{scan.Unverified, 0, "", "35;22"},
-		{scan.TypeDiff, 0, "", "91;22"},
+		{scan.LeftOnly, 0, "", "91;22"},
+		{scan.RightOnly, 0, "", "92;22"},
+		{scan.Unverified, 0, "", "90;22"},
+		{scan.TypeDiff, 0, "", "95;22"},
 	} {
 		m.Root.Find("src").State, m.Root.Find("src").Own = tt.state, tt.own&^scan.Content
 		m.Root.Find("src/main.go").State, m.Root.Find("src/main.go").Own = tt.state, tt.own
