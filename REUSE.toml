@@ -5,6 +5,13 @@ path = [
   ".gitignore",
   "go.mod",
   "go.sum",
+  "doc/screenshots/gen/go.mod",
+  "doc/screenshots/gen/go.sum",
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = ["doc/screenshots/gen/sshd_config.*"]
+SPDX-FileCopyrightText = "2026 Philip Eklöf"
+SPDX-License-Identifier = "MIT"

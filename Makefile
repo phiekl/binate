@@ -17,7 +17,7 @@ MD2MAN ?= go-md2man
 TAGS ?=
 GOTAGS := $(if $(TAGS),-tags $(TAGS))
 
-.PHONY: all build man test fuzz vet clean
+.PHONY: all build man test fuzz vet screenshots clean
 
 all: build
 
@@ -79,6 +79,13 @@ fuzz:
 
 vet:
 	go vet $(GOTAGS) ./...
+
+# The screenshots in doc/screenshots, of which one compares two tags of the
+# Linux clone LINUX.
+screenshots:
+	@test -n "$(LINUX)" || { echo 'error: set LINUX to a clone of Linux' >&2; exit 1; }
+	$(MAKE) build
+	go -C doc/screenshots/gen run . -binate $(abspath $(BINARY)) -linux $(abspath $(LINUX)) -out $(abspath doc/screenshots)
 
 clean:
 	rm -rf $(BUILD_DIR)

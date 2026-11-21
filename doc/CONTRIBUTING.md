@@ -35,6 +35,21 @@ SPDX-License-Identifier: MIT
 - Run `make test` and `make test TAGS=landlocktsync` to test both Landlock
   configurations. See [testing.md](testing.md) for details.
 
+## Screenshots
+
+`make screenshots LINUX=<path>` makes the screenshots in `doc/screenshots`
+again, after a change to what the screen shows. `LINUX` names a clone of Linux
+with the tags `v7.1` and `v7.2`, which the git screenshot compares. The
+program in `doc/screenshots/gen` runs binate in a pseudo-terminal, types the
+keys of each screenshot, and draws the screen with the Tango palette and
+Liberation Mono.
+
+The trees compared are made in a temporary directory, from parts of `/usr/share`
+and made-up files with differences of each kind. The two sshd_config files are
+in `doc/screenshots/gen`. binate runs as root of a user namespace, which shows
+the files as owned by root and needs unprivileged user namespaces. The parts of
+`/usr/share` differ between systems, and with them the counts in the status bar.
+
 ## Commits
 
 A short imperative title of at most 72 characters saying what changes for the
