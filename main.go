@@ -32,6 +32,7 @@ import (
 	"pxy.se/go/binate/internal/cli"
 	"pxy.se/go/binate/internal/colors"
 	"pxy.se/go/binate/internal/display"
+	"pxy.se/go/binate/internal/files"
 	"pxy.se/go/binate/internal/scan"
 	"pxy.se/go/binate/internal/supervise"
 )
@@ -184,6 +185,9 @@ func runParent() int {
 	}
 	log := cli.NewLogger(os.Stderr, o.verbose)
 	if err := checkEditorEnv(os.Getenv); err != nil {
+		return fail("%v", err)
+	}
+	if err := files.CheckProc(); err != nil {
 		return fail("%v", err)
 	}
 

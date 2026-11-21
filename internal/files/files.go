@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -18,6 +19,19 @@ import (
 // ErrNotRegular is the error opening what is no longer a regular file, as
 // when something else replaced a file since it was looked at.
 var ErrNotRegular = errors.New("no longer a regular file")
+
+// ErrNoProc is the error reopening a file without /proc mounted, which
+// binate requires. It is no fs.ErrNotExist, as the file itself exists.
+var ErrNoProc = errors.New("/proc is not mounted, which binate requires")
+
+// CheckProc returns ErrNoProc unless /proc/self/fd, which files are
+// reopened through, is there.
+func CheckProc() error {
+	if _, err := os.Stat("/proc/self/fd"); err != nil {
+		return ErrNoProc
+	}
+	return nil
+}
 
 // OpenDirAt opens a directory below root without following symlinks.
 // The returned descriptor can be used with the *at calls.
@@ -87,7 +101,7 @@ func ResolveDirAt(root int, rootPath, rel string) (*os.File, error) {
 // included. rel may also be absolute, naming a path below rootPath.
 func OpenRegularBeneath(root int, rootPath, rel string) (*os.File, error) {
 	fd, err := unix.Openat2(root, rel, &unix.OpenHow{
-		Flags:   unix.O_RDONLY | unix.O_NONBLOCK | unix.O_CLOEXEC | unix.O_NOCTTY,
+		Flags:   unix.O_PATH | unix.O_CLOEXEC,
 		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS,
 	})
 	if err == nil {
@@ -258,7 +272,7 @@ func OpenRegular(path string, follow bool) (*os.File, error) {
 
 // OpenRegularAt is OpenRegular relative to an open directory.
 func OpenRegularAt(dir int, path string, follow bool) (*os.File, error) {
-	flags := unix.O_RDONLY | unix.O_NONBLOCK | unix.O_CLOEXEC | unix.O_NOCTTY
+	flags := unix.O_PATH | unix.O_CLOEXEC
 	if !follow {
 		flags |= unix.O_NOFOLLOW
 	}
@@ -269,19 +283,44 @@ func OpenRegularAt(dir int, path string, follow bool) (*os.File, error) {
 	return regularFile(fd, path)
 }
 
-// regularFile returns fd, opened for path, if it is a regular file, or
-// closes it.
+// regularFile opens fd, an O_PATH descriptor of path, which it closes,
+// for reading if it is a regular file. What it checks is what it opens,
+// though path may have changed since: a device put in its place is never
+// opened for reading, which may change it. A symlink, not followed, is
+// refused with ELOOP, as O_NOFOLLOW refuses one.
 func regularFile(fd int, path string) (*os.File, error) {
+	defer func() { _ = unix.Close(fd) }()
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
-		_ = unix.Close(fd)
 		return nil, err
 	}
-	if st.Mode&unix.S_IFMT != unix.S_IFREG {
-		_ = unix.Close(fd)
+	switch st.Mode & unix.S_IFMT {
+	case unix.S_IFREG:
+	case unix.S_IFLNK:
+		return nil, unix.ELOOP
+	default:
 		return nil, ErrNotRegular
 	}
-	return os.NewFile(uintptr(fd), path), nil
+	return reopen(fd, path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOCTTY)
+}
+
+// reopen opens the file the O_PATH descriptor fd holds, by path, with
+// flags, through /proc/self/fd rather than by path again. That entry is
+// missing only without /proc, as even a file deleted since is reopened,
+// so ENOENT is ErrNoProc rather than a missing file.
+func reopen(fd int, path string, flags int) (*os.File, error) {
+	name := "/proc/self/fd/" + strconv.Itoa(fd)
+	rfd, err := unix.Open(name, flags, 0)
+	for err == unix.EINTR {
+		rfd, err = unix.Open(name, flags, 0)
+	}
+	if err == unix.ENOENT {
+		return nil, ErrNoProc
+	}
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(rfd), path), nil
 }
 
 // UnwrapPath returns the error of a *fs.PathError or *os.LinkError without

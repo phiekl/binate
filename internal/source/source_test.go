@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -90,5 +91,42 @@ func TestDisk(t *testing.T) {
 	}
 	if f, err := root.Open("p", false); f != nil || !errors.Is(err, files.ErrNotRegular) {
 		t.Errorf("Open of a FIFO: %v, %v", f, err)
+	}
+}
+
+// TestReadDirOpensOnlyDirectories checks that what took a directory's
+// place since it was found one is not opened: a FIFO without a writer
+// fails at once, and /dev/null and a symlink to a directory are refused,
+// but for the root, given through a symlink.
+func TestReadDirOpensOnlyDirectories(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(dir, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{"null": "/dev/null", "link": "real"} {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := Disk(dir)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, rel := range []string{"fifo", "null", "link"} {
+			if names, err := d.ReadDir(rel); err == nil {
+				t.Errorf("%s listed: %q", rel, names)
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiting on the FIFO")
+	}
+	if names, err := Disk(filepath.Join(dir, "link")).ReadDir(""); err != nil || len(names) != 0 {
+		t.Errorf("root through a symlink: %q, %v", names, err)
 	}
 }

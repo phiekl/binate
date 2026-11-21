@@ -19,8 +19,9 @@ where they differ. With **-g**, or run as **agitate**, a symlink to it, they are
 trees or files of two git revisions, or a revision and the work tree. **binate**
 never changes files itself. **e** opens eligible files in your editor.
 
-It is Linux-only and needs a terminal: if stdin or stdout is not a terminal, it
-exits with an error before drawing anything. The man page,
+It is Linux-only, needs /proc mounted to open files, and needs a terminal: if
+stdin or stdout is not a terminal, it exits with an error before drawing
+anything. The man page,
 [**binate**(1)](binate.1.md), is a short summary of the options, marks and keys.
 
 - [Inputs](#inputs)
@@ -420,8 +421,13 @@ During a directory scan, only regular files are opened for content comparison.
 FIFOs, sockets and devices are compared by type without being opened, since
 opening a FIFO can block forever and reading a device can have side effects: two
 FIFOs, or two sockets, are the same, and two devices are the same when their
-device numbers match. Symlinks within the trees are compared by their stored
-targets without being followed. A directory is compared by its entries.
+device numbers match. A file is checked to be regular before it is opened for
+reading, through the same handle, so a device that takes a file's place during
+the scan is never opened either. A directory is listed only if it still is one
+when opened, so a FIFO, device or symlink put in its place is refused unopened.
+Symlinks within the trees are compared by their stored targets without being
+followed. A directory is compared by its entries. Files are reopened through
+**/proc/self/fd**, and without /proc **binate** exits with an error at start.
 
 Every type of entry, directories included, is also compared by its mode and
 owner, and with **--compare**, by its modification time. Each one that differs

@@ -232,3 +232,41 @@ func TestOpenRegularBeneath(t *testing.T) {
 		}
 	}
 }
+
+// TestRegularFileOpensWhatItChecks checks that a regular file is opened
+// as it was found, though a device took its path since, and that a device
+// is refused without being opened for reading.
+func TestRegularFileOpensWhatItChecks(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "file")
+	if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fd, err := unix.Open(name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A symlink to a device renamed over it after it was found.
+	if err := os.Symlink("/dev/zero", filepath.Join(dir, "zero")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(dir, "zero"), name); err != nil {
+		t.Fatal(err)
+	}
+	f, err := regularFile(fd, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// At most a byte more than the file holds, as /dev/zero never ends.
+	if data, err := io.ReadAll(io.LimitReader(f, 2)); err != nil || string(data) != "x" {
+		t.Errorf("read %q, %v", data, err)
+	}
+	_ = f.Close()
+	// Found now: the symlink, not followed, or the device it leads to.
+	if _, err := OpenRegular(name, false); !errors.Is(err, unix.ELOOP) {
+		t.Errorf("symlink not followed: %v", err)
+	}
+	if _, err := OpenRegular(name, true); !errors.Is(err, ErrNotRegular) {
+		t.Errorf("device: %v", err)
+	}
+}

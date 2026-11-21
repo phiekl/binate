@@ -204,11 +204,21 @@ func (d Disk) Stat(rel string) (*stat.Stat, error) {
 	return stat.Read(d.Path(rel))
 }
 
+// ReadDir opens only a directory, which the entry at rel may no longer be
+// since it was found one: a FIFO put in its place, which would wait for a
+// writer, or a device, which opening may change, is refused unopened, and
+// a symlink isn't followed, but for the root, as given.
 func (d Disk) ReadDir(rel string) ([]string, error) {
-	f, err := os.Open(d.Path(rel))
-	if err != nil {
-		return nil, err
+	p := d.Path(rel)
+	flags := unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC
+	if rel != "" {
+		flags |= unix.O_NOFOLLOW
 	}
+	fd, err := unix.Open(p, flags, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: p, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), p)
 	defer func() { _ = f.Close() }()
 	return f.Readdirnames(-1)
 }

@@ -72,6 +72,8 @@ pseudo-terminals and skip without them.
 - **Diff view:** two files with their paths in the panels, `/dev/null`, a pipe
   given as `/dev/fd/3`, a file and a directory, binary input in two-file mode
   and from the tree, and a file on one side only.
+- **Lookups:** a regular file is opened as it was checked, though a device took
+  its path since.
 - **Descriptors:** inputs named by inherited descriptors, a regular file, a pipe
   and two directories as `/dev/fd/3` and `/dev/fd/4`, which keep their numbers
   in the child beside the socket and streams.
@@ -124,7 +126,9 @@ pseudo-terminals and skip without them.
 - **source:** reading through `source.Disk`: paths joined to the root, listing,
   symlinks followed only when asked, missing entries, and opening files, and the
   action cache keeping results only of files on disk, whose versions it can
-  check.
+  check. Listing opens only a directory, not a FIFO, which isn't waited for,
+  a device or a symlink put in its place, but for the root given through a
+  symlink.
 - **git:** reading a repository as git reads it, compared, where git is
   installed, with what git itself reads in repositories made for each test:
   loose objects, in SHA-1 and SHA-256, checked for their header, size and zlib

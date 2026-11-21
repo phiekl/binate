@@ -155,9 +155,9 @@ list command-line options. [binate(1)](doc/binate.1.md) summarises both, and the
 
 ## Requirements
 
-binate requires Linux and a terminal. Sandbox protection depends on the kernel,
-and network restrictions are partial. Without Landlock, binate runs unprotected.
-`-v` reports the Landlock ABI in effect; see the
+binate requires Linux with /proc mounted, and a terminal. Sandbox protection
+depends on the kernel, and network restrictions are partial. Without Landlock,
+binate runs unprotected. `-v` reports the Landlock ABI in effect; see the
 [manual](doc/manual.md#landlock) for the restrictions each ABI provides.
 
 
