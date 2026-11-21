@@ -71,7 +71,7 @@ The column between the sides marks each pair:
 - **#**: Modification time differs.
 - **\***: Several of these differ.
 - **?**: Not verified: a side could not be read, or **-q** could not tell.
-- **<**, **>**: On the left, or the right, side only.
+- **-**, **+**: On the left, or the right, side only.
 - **!**: Different types.
 
 In a git work tree, each entry's type follows its status, as **git status

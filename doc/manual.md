@@ -85,8 +85,8 @@ next arguments are *left* and *right* even if they start with a dash.
   which differences the panels highlight. The diff view always compares file
   contents. See [Comparing](#comparing). The items are:
 
-  - **left**, **right**: entries on the left, or the right, side only (**<**,
-    **>**). Left out, they are hidden, with everything below them.
+  - **left**, **right**: entries on the left, or the right, side only (**-**,
+    **+**). Left out, they are hidden, with everything below them.
   - **type**: entries of different types on the two sides (**!**). Left out,
     they are hidden, with everything below them.
   - **content**: a regular file's size and contents, and the commit of a git
@@ -516,7 +516,7 @@ nothing to show, its error is shown in its box.
 
 ### Marks
 
-The column between the two sides marks each pair, in the style of **sdiff**(1):
+The column between the two sides marks each pair:
 
 - **=**: No difference found.
 
@@ -532,7 +532,7 @@ The column between the two sides marks each pair, in the style of **sdiff**(1):
 - **?**: Not verified: a side could not be read, or, in quick mode, the size is
   the same but the modification time is not.
 
-- **<**, **>**: Present on the left, or the right, side only.
+- **-**, **+**: Present on the left, or the right, side only.
 
 - **!**: Different entry types, such as a file opposite a directory or a
   symlink.
@@ -706,7 +706,7 @@ changed the entry, found in the background:
 
 Where they differ from the other side's, or the other side has none, they take
 the colour of the entry in the tree, as **|** for a file whose contents differ,
-or **<** for one on the left only.
+or **-** for one on the left only.
 
 Fields that differ between two sides that could be read are marked between the
 panels with the tree's marks, and their values take the mark's colour on both
@@ -759,8 +759,8 @@ background, showing **…** meanwhile, and again after a rescan or an edit.
 **c** opens a popup, in the style of the Edit popup, listing what the tree
 compares, **--compare** at first:
 
-    [x]  left      entries on the left only (<)
-    [x]  right     entries on the right only (>)
+    [x]  left      entries on the left only (-)
+    [x]  right     entries on the right only (+)
     [x]  type      entries of different types (!)
     [x]  content   files' size and contents
     [x]  target    symlinks' targets
@@ -927,7 +927,7 @@ after a dimmed **(viewing)**, which distinguishes the diff view from the tree
 view. Where the whole path doesn't fit after it, it is shortened to **(v)**
 first, and then the path in the middle, but never left out. The lines have line
 numbers, and a mark between the boxes: blank for an unchanged line, **|** for a
-changed line, and **<** or **>** for a line on one side only. As in the tree,
+changed line, and **-** or **+** for a line on one side only. As in the tree,
 the marks have their colours. A marked line has a faint background by side, as
 in **git diff**, red on the left and green on the right, and the cell opposite a
 line on one side only has none. Changed text inside a changed line has a
@@ -1170,8 +1170,8 @@ The keys of **BINATE_COLORS**, with their defaults:
 - **device** (1;33): the **char** and **bdev** types.
 - **socket** (1;35): the **sock** type.
 - **exec** (1;32): the **file** type of a file with an execute bit.
-- **leftonly** (31): the **<** mark.
-- **rightonly** (32): the **>** mark.
+- **leftonly** (31): the **-** mark.
+- **rightonly** (32): the **+** mark.
 - **unverified** (90): the **?** mark, grey.
 - **type** (1;35): the **!** mark. If it is in reverse video, so is the name of
   an entry marked **!**, whose escapes are then underlined.

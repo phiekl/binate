@@ -89,7 +89,7 @@ func (sd *Side) Executable() bool {
 // Mark returns the character shown for s between the two sides. A pair
 // that differs has a mark by what differs instead (see Node.Mark).
 func (s State) Mark() rune {
-	return [...]rune{' ', '=', '|', '?', '<', '>', '!', ' '}[s]
+	return [...]rune{' ', '=', '|', '?', '-', '+', '!', ' '}[s]
 }
 
 // IsDiff reports whether s is a difference: one the diffs-only filter

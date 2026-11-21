@@ -80,8 +80,8 @@ var TreeHelp = []HelpLine{
 	key("modification time differs", "#"),
 	key("more than one of |, ~ and #", "*"),
 	key("not verified", "?"),
-	key("on the left side only", "<"),
-	key("on the right side only", ">"),
+	key("on the left side only", "-"),
+	key("on the right side only", "+"),
 	key("different entry types", "!"),
 }
 
@@ -172,8 +172,8 @@ var diffHelp = []HelpLine{
 	{Text: "Comparison marks"},
 	{},
 	key("changed line", "|"),
-	key("line on the left side only", "<"),
-	key("line on the right side only", ">"),
+	key("line on the left side only", "-"),
+	key("line on the right side only", "+"),
 }
 
 // helpRule separates Help's columns, as in the tree's file stats.

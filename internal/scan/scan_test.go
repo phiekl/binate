@@ -108,18 +108,18 @@ func TestStates(t *testing.T) {
 | dir/differ
 = dir/same
 = empty
-< onesided
-< onesided/b
-< onesided/b/c
-< onesided/a
+- onesided
+- onesided/b
+- onesided/b/c
+- onesided/a
 ! type
 ! zz-dir-vs-file
 | content
-< left-only
+- left-only
 | link-differ
 = link-same
 ! link-vs-file
-> right-only
++ right-only
 = same
 | size
 `
@@ -268,7 +268,7 @@ func TestUnreadable(t *testing.T) {
 			t.Errorf("%s = %+v", p, n)
 		}
 	}
-	if marks := marks(s.Root); strings.Contains(marks, "<") {
+	if marks := marks(s.Root); strings.Contains(marks, "-") {
 		t.Errorf("one-sided entries:\n%s", marks)
 	}
 	// A size difference needs no reading.
@@ -543,7 +543,7 @@ func TestMarks(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := scanWait(t, left, right, Options{Compare: DefaultAttrs | Mtime})
-	want := "= mixed\n| mixed/a\n~ mixed/b\n= only\n= only/a\n< only/b\n~ times\n# times/a\n* both\n| content\n"
+	want := "= mixed\n| mixed/a\n~ mixed/b\n= only\n= only/a\n- only/b\n~ times\n# times/a\n* both\n| content\n"
 	if got := marks(s.Root); got != want {
 		t.Errorf("marks:\n%s\nwant:\n%s", got, want)
 	}
@@ -627,7 +627,7 @@ func TestIgnoredEntries(t *testing.T) {
 	left := tree(t, map[string]string{"gone/a": "x", "gone/b/c": "x", "kind": "x", "same": "x"})
 	right := tree(t, map[string]string{"new": "x", "kind/": "", "same": "x"})
 	s := scanWait(t, left, right, Options{})
-	if got, want := marks(s.Root), "< gone\n< gone/b\n< gone/b/c\n< gone/a\n! kind\n> new\n= same\n"; got != want {
+	if got, want := marks(s.Root), "- gone\n- gone/b\n- gone/b/c\n- gone/a\n! kind\n+ new\n= same\n"; got != want {
 		t.Errorf("marks:\n%s\nwant:\n%s", got, want)
 	}
 	// Not compared, they are ignored, with what is below them, and the
@@ -655,7 +655,7 @@ func TestIgnoredEntries(t *testing.T) {
 		t.Errorf("all ignored: root %c", s.Root.State.Mark())
 	}
 	s.Reclassify(Options{})
-	if got := marks(s.Root); !strings.HasPrefix(got, "< gone\n< gone/b\n< gone/b/c\n< gone/a\n! kind\n") {
+	if got := marks(s.Root); !strings.HasPrefix(got, "- gone\n- gone/b\n- gone/b/c\n- gone/a\n! kind\n") {
 		t.Errorf("compared again:\n%s", got)
 	}
 }
@@ -814,7 +814,7 @@ func TestGoneEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Recheck("gone")
-	if n := s.Root.Find("gone"); n.Gone != Missing || n.State != RightOnly || n.Mark() != '>' {
+	if n := s.Root.Find("gone"); n.Gone != Missing || n.State != RightOnly || n.Mark() != '+' {
 		t.Errorf("restored: gone %v, %c", n.Gone, n.Mark())
 	}
 	// Deleted from both sides again, it is gone as the type recorded.

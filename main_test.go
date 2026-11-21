@@ -1026,7 +1026,7 @@ func TestEditOppositeNothing(t *testing.T) {
 	pt.Write("e")
 	screen("edited the right side, as the left side is missing")
 	pt.Write("\r")
-	screen("> │1 changed")
+	screen("+ │1 changed")
 	quit(t, pt, offset, "x")
 	if code := pt.Exit(); code != 0 {
 		t.Errorf("exit status %d", code)

@@ -39,7 +39,7 @@ func TestDiffScreen(t *testing.T) {
 4 four                    4 four
        ··· 1 ···                 ··· 1 ···
 6 six                     6 six
-                        > 7 seven
+                        + 7 seven
 `
 	if got := panes(scr); got != want {
 		t.Errorf("panes:\n%s\nwant:\n%s", got, want)

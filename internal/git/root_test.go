@@ -196,8 +196,8 @@ func TestScanCommits(t *testing.T) {
 	}
 	got := scanned(t, left, right, scan.DefaultAttrs)
 	want := map[string]rune{
-		"a.txt": '|', "empty": '<', "new.txt": '>', "run.sh": '~', "link": '|',
-		"sub": '>',
+		"a.txt": '|', "empty": '-', "new.txt": '+', "run.sh": '~', "link": '|',
+		"sub": '+',
 		"dir": '=', "dir/b.txt": '=', "dir/sub": '=', "dir/sub/c.bin": '=', "dir/sub/d": '|',
 	}
 	for p, m := range want {

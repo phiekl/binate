@@ -107,9 +107,9 @@ func TestTreeScreen(t *testing.T) {
 	v.Draw(scr, m, TreeStatus{})
 	want := `  dir │ ▾ src/               =   dir │ ▾ src/
  file │     main.go          |  file │     main.go
- file │     old.go           <
+ file │     old.go           -
  link │   link -> target     |  link │   link -> other
-                             >  file │   new.txt
+                             +  file │   new.txt
 `
 	if got := panes(scr); got != want {
 		t.Errorf("panes:\n%s\nwant:\n%s", got, want)
@@ -152,9 +152,9 @@ func TestTreeScreen(t *testing.T) {
 		fg   term.Style
 	}{
 		{2, '|', term.Style{SGR: "93"}},
-		{3, '<', term.Style{SGR: "91"}},
+		{3, '-', term.Style{SGR: "91"}},
 		{4, '|', term.Style{SGR: "93"}},
-		{5, '>', term.Style{SGR: "92"}},
+		{5, '+', term.Style{SGR: "92"}},
 	} {
 		if c := scr.Cell(31, tt.y); c.R != tt.mark || c.Style != tt.fg {
 			t.Errorf("mark cell %+v, want %c in %+v", c, tt.mark, tt.fg)
@@ -1121,8 +1121,8 @@ func TestComparePopup(t *testing.T) {
 	text := scr.String()
 	for _, want := range []string{
 		"Compare",
-		"[x]  left      entries on the left only (<)",
-		"[x]  right     entries on the right only (>)",
+		"[x]  left      entries on the left only (-)",
+		"[x]  right     entries on the right only (+)",
 		"[x]  type      entries of different types (!)",
 		"[x]  content   files' size and contents",
 		"[x]  target    symlinks' targets",
@@ -1239,12 +1239,12 @@ func TestTreeStatuses(t *testing.T) {
 	v := &TreeView{Styles: colors.Default(), Left: "HEAD", Right: "/r", Statuses: true, StatusRight: true}
 	scr := term.NewScreen(80, 9)
 	v.Draw(scr, m, TreeStatus{})
-	want := ` added, staged                       >  A  file │   added
+	want := ` added, staged                       +  A  file │   added
  file │   changed                    |   M file │   changed
- untracked                           >  ?? file │   new
+ untracked                           +  ?? file │   new
  file │   same                       =     file │   same
- file │   staged                     <  D  deleted, staged
- file │   unstaged                   <   D deleted, not staged
+ file │   staged                     -  D  deleted, staged
+ file │   unstaged                   -   D deleted, not staged
 `
 	if got := panes(scr); got != want {
 		t.Errorf("panes:\n%s\nwant:\n%s", got, want)
@@ -1277,8 +1277,8 @@ func TestTreeStatuses(t *testing.T) {
 	um.ExpandAll()
 	scr = term.NewScreen(80, 9)
 	v.Draw(scr, um, TreeStatus{})
-	want = ` untracked                           >  ??  dir │ ▾ untr/
-                                     >  ?? file │     f
+	want = ` untracked                           +  ??  dir │ ▾ untr/
+                                     +  ?? file │     f
 `
 	if got := strings.TrimRight(panes(scr), "\n") + "\n"; got != want {
 		t.Errorf("untracked directory:\n%s\nwant:\n%s", got, want)

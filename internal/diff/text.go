@@ -112,7 +112,7 @@ const (
 
 // Mark returns the character shown for a row between the sides.
 func (k RowKind) Mark() rune {
-	return [...]rune{' ', '|', '<', '>'}[k]
+	return [...]rune{' ', '|', '-', '+'}[k]
 }
 
 // Row is a side-by-side row: a line index on each side, or -1.

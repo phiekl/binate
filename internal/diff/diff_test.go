@@ -18,7 +18,7 @@ func layout(rows []Row) string {
 	for _, r := range rows {
 		num := func(i int) string {
 			if i < 0 {
-				return "-"
+				return "."
 			}
 			return fmt.Sprint(i + 1)
 		}
@@ -33,17 +33,17 @@ func TestCompare(t *testing.T) {
 	}{
 		{"same", "a\nb\n", "a\nb\n", "  1 1\n  2 2\n"},
 		{"changed line", "a\nb\nc\n", "a\nB\nc\n", "  1 1\n| 2 2\n  3 3\n"},
-		{"inserted", "a\nc\n", "a\nb\nc\n", "  1 1\n> - 2\n  2 3\n"},
-		{"deleted", "a\nb\nc\n", "a\nc\n", "  1 1\n< 2 -\n  3 2\n"},
-		{"block longer on the left", "a\nx\ny\nz\nc\n", "a\nX\nc\n", "  1 1\n| 2 2\n< 3 -\n< 4 -\n  5 3\n"},
-		{"block longer on the right", "a\nx\nc\n", "a\nX\nY\nc\n", "  1 1\n| 2 2\n> - 3\n  3 4\n"},
-		{"empty left", "", "a\nb\n", "> - 1\n> - 2\n"},
-		{"empty right", "a\n", "", "< 1 -\n"},
+		{"inserted", "a\nc\n", "a\nb\nc\n", "  1 1\n+ . 2\n  2 3\n"},
+		{"deleted", "a\nb\nc\n", "a\nc\n", "  1 1\n- 2 .\n  3 2\n"},
+		{"block longer on the left", "a\nx\ny\nz\nc\n", "a\nX\nc\n", "  1 1\n| 2 2\n- 3 .\n- 4 .\n  5 3\n"},
+		{"block longer on the right", "a\nx\nc\n", "a\nX\nY\nc\n", "  1 1\n| 2 2\n+ . 3\n  3 4\n"},
+		{"empty left", "", "a\nb\n", "+ . 1\n+ . 2\n"},
+		{"empty right", "a\n", "", "- 1 .\n"},
 		{"both empty", "", "", ""},
 		{"missing final newline", "a\nb", "a\nb\n", "  1 1\n| 2 2\n"},
 		{"missing final newline, not text", "x", "x\x00no newline\n", "| 1 1\n"},
 		{"missing final newline on both", "a\nb", "a\nb", "  1 1\n  2 2\n"},
-		{"anchored on unique lines", "}\nfoo\n}\n", "}\nbar\n}\nfoo\n}\n", "  1 1\n> - 2\n> - 3\n  2 4\n  3 5\n"},
+		{"anchored on unique lines", "}\nfoo\n}\n", "}\nbar\n}\nfoo\n}\n", "  1 1\n+ . 2\n+ . 3\n  2 4\n  3 5\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := layout(Compare(Split([]byte(tt.l)), Split([]byte(tt.r))))

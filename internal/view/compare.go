@@ -26,8 +26,8 @@ var compareRows = []struct {
 	key  rune
 	what string
 }{
-	{scan.Left, "left", 'l', "entries on the left only (<)"},
-	{scan.Right, "right", 'r', "entries on the right only (>)"},
+	{scan.Left, "left", 'l', "entries on the left only (-)"},
+	{scan.Right, "right", 'r', "entries on the right only (+)"},
 	{scan.Type, "type", 'y', "entries of different types (!)"},
 	{scan.Content, "content", 'c', "files' size and contents"},
 	{scan.Target, "target", 'a', "symlinks' targets"},

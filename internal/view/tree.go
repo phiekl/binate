@@ -292,9 +292,9 @@ func (v *TreeView) markStyle(n *scan.Node) term.Style {
 			return v.Styles.Mtime
 		}
 		return v.Styles.Changed
-	case '<':
+	case '-':
 		return v.Styles.LeftOnly
-	case '>':
+	case '+':
 		return v.Styles.RightOnly
 	case '?':
 		return v.Styles.Unverified
