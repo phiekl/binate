@@ -150,7 +150,38 @@ func (pt *Term) Exit() int {
 		_ = pt.Cmd.Process.Kill()
 		pt.t.Fatalf("timed out waiting for the program to exit; output:\n%q", pt.Output())
 	}
+	pt.drain()
 	return pt.Cmd.ProcessState.ExitCode()
+}
+
+// drainMark is written to the terminal by drain.
+const drainMark = "\x00ptytest drained\x00"
+
+// drain waits until all the program wrote is in Output: the terminal
+// passes it on after the program exits, in the background. Written after
+// it, a mark comes after it too, and is then taken out.
+func (pt *Term) drain() {
+	pt.t.Helper()
+	if _, err := pt.Slave.WriteString(drainMark); err != nil {
+		pt.t.Fatalf("writing to the terminal: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		pt.mu.Lock()
+		out := pt.out.Bytes()
+		if i := bytes.LastIndex(out, []byte(drainMark)); i >= 0 {
+			rest := bytes.Clone(out[i+len(drainMark):])
+			pt.out.Truncate(i)
+			pt.out.Write(rest)
+			pt.mu.Unlock()
+			return
+		}
+		pt.mu.Unlock()
+		if time.Now().After(deadline) {
+			pt.t.Fatalf("timed out waiting for the terminal's output")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // Termios returns the terminal's current settings.

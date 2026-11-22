@@ -53,7 +53,9 @@ covering the whole file, checking scaling as the row count grows.
 The tests of the main package start the test binary itself as binate
 (`BINATE_TEST_AS_BINATE=1`), in a pseudo-terminal from `/dev/ptmx`, so the
 parent, the child and Landlock run as they do for real. They need
-pseudo-terminals and skip without them.
+pseudo-terminals and skip without them. Once the program exits, the terminal
+passes on the rest of its output in the background, and `ptytest.Term.Exit`
+waits for it.
 
 - **Under Landlock:** a session with a root given through a symlink: rescanning
   after a file was replaced by rename, and opening the diff view on it, plus
