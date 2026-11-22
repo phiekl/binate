@@ -191,7 +191,7 @@ func (d Disk) Entry(rel string, follow bool) (Entry, error) {
 		return Entry{}, &os.PathError{Op: "stat", Path: p, Err: err}
 	}
 	e := Entry{
-		Mode: st.Mode, Size: st.Size, Uid: st.Uid, Gid: st.Gid, Rdev: st.Rdev,
+		Mode: st.Mode, Size: st.Size, Uid: st.Uid, Gid: st.Gid, Rdev: uint64(st.Rdev), // uint32 on mips64
 		Mtime: time.Unix(st.Mtim.Unix()), Ino: st.Ino, Ctime: time.Unix(st.Ctim.Unix()),
 	}
 	if st.Mode&unix.S_IFMT == unix.S_IFLNK {

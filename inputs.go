@@ -256,8 +256,11 @@ func statInput(path string) (input, error) {
 // on Linux.
 func isNull(info fs.FileInfo) bool {
 	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && info.Mode()&fs.ModeCharDevice != 0 && info.Mode()&fs.ModeDevice != 0 &&
-		unix.Major(st.Rdev) == 1 && unix.Minor(st.Rdev) == 3
+	if !ok || info.Mode()&fs.ModeCharDevice == 0 || info.Mode()&fs.ModeDevice == 0 {
+		return false
+	}
+	rdev := uint64(st.Rdev) // uint32 on mips64
+	return unix.Major(rdev) == 1 && unix.Minor(rdev) == 3
 }
 
 // inputCodes are the letters encode gives each kind of input.

@@ -301,7 +301,7 @@ func (w *WorkTree) Entry(rel string, _ bool) (source.Entry, error) {
 // entryOf returns what the scan compares of st.
 func entryOf(st *stat.Stat) source.Entry {
 	return source.Entry{
-		Mode: st.Mode, Size: st.Size, Uid: st.Uid, Gid: st.Gid, Rdev: st.Rdev,
+		Mode: st.Mode, Size: st.Size, Uid: st.Uid, Gid: st.Gid, Rdev: uint64(st.Rdev), // uint32 on mips64
 		Mtime: st.Mtime, Target: st.Target, Ino: st.Ino, Ctime: st.Ctime,
 	}
 }
