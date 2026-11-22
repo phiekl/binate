@@ -15,3 +15,9 @@ SPDX-License-Identifier = "CC0-1.0"
 path = ["doc/screenshots/gen/sshd_config.*"]
 SPDX-FileCopyrightText = "2026 Philip Eklöf"
 SPDX-License-Identifier = "MIT"
+
+# The README screenshots, made by make screenshots with doc/screenshots/gen.
+[[annotations]]
+path = ["doc/screenshots/*.png"]
+SPDX-FileCopyrightText = "2026 Philip Eklöf"
+SPDX-License-Identifier = "MIT"
