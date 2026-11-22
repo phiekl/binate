@@ -42,8 +42,11 @@ anything. The man page,
 ## Inputs
 
 *left* and *right* are directories. Symlinks given on the command line are
-followed. **binate** compares no files on their own. Two files are for
-**diff**(1), or **git diff** for files in a repository.
+followed. Every file in them is compared, also in a Git work tree. Git's ignore
+rules apply only to a side read as a work tree, with **-g**, as **agitate** or
+as **git:**_repository_**@.** (see [Work tree](#work-tree)). **binate** compares
+no files on their own. Two files are for **diff**(1), or **git diff** for files
+in a repository.
 
 **/dev/null** stands for nothing, an empty directory, with everything on the
 other side shown as added or removed. It is told apart by what it is, the null

@@ -16,7 +16,10 @@ staticcheck ./...
 
 Exercise both Landlock configurations with `make test` and
 `make test TAGS=landlocktsync`. Tests that need Landlock skip on a kernel
-without it. Use `go test -v` to see skips.
+without it, and those that make repositories with git skip without git. Use
+`go test -v` to see skips. The tests unset inherited `GIT_` variables first, as
+a Git hook running them sets `GIT_DIR` and `GIT_INDEX_FILE`, which would point
+git at another repository than a test's own.
 
 ## Scan benchmarks
 
@@ -68,7 +71,10 @@ pseudo-terminals and skip without them.
   neither q nor Esc quits.
 - **Tree view:** marks and counts, the panels' full paths and their links,
   showing identical entries, difference jumps and Help, read from the screen as
-  a terminal would show it (`ptytest.Term.Screen`).
+  a terminal would show it (`ptytest.Term.Screen`). Two directories compared
+  without `-g` show files that a `.gitignore`, a repository's exclude file and
+  the user's global one would hide in a work tree, as `git check-ignore`
+  confirms when git is installed.
 - **Diff view:** opened from the tree, with the paths in the panels, binary
   input, and a file on one side only.
 - **Inputs:** files refused, opposite a file or a directory, and `/dev/null`,

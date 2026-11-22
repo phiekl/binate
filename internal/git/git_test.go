@@ -51,6 +51,18 @@ func (r *testRepo) git(args ...string) string {
 	return string(out)
 }
 
+// TestMain unsets Git's variables before the tests, as a Git hook running
+// them sets GIT_DIR and GIT_INDEX_FILE, which would point the git they run
+// at another repository than their fixture's.
+func TestMain(m *testing.M) {
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "GIT_") {
+			_ = os.Unsetenv(name)
+		}
+	}
+	os.Exit(m.Run())
+}
+
 // command returns the command running git in the repository.
 func (r *testRepo) command(args ...string) *exec.Cmd {
 	cmd := exec.Command("git", args...)

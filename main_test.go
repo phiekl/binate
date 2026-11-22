@@ -37,7 +37,20 @@ func TestMain(m *testing.M) {
 		main()
 		return
 	}
+	clearGitEnv()
 	os.Exit(m.Run())
+}
+
+// clearGitEnv unsets Git's variables, as a Git hook running the tests
+// sets GIT_DIR and GIT_INDEX_FILE, which would point the git the tests
+// run at another repository than their fixture's. binate is given the
+// ones a test sets.
+func clearGitEnv() {
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "GIT_") {
+			_ = os.Unsetenv(name)
+		}
+	}
 }
 
 // binate returns a command running binate with args.
@@ -557,6 +570,70 @@ func TestTreeView(t *testing.T) {
 	pt.Write("?")
 	screen("show or hide identical entries")
 	pressEsc(pt)
+	quit(t, pt, offset, "x")
+	pt.Wait(offset, leaveScreen)
+	if code := pt.Exit(); code != 0 {
+		t.Errorf("exit status %d, want 0", code)
+	}
+}
+
+// TestPlainIgnoresNothing checks that two directories compared without
+// -g show every file, as Git's ignore rules are for a work tree alone:
+// neither a .gitignore, a repository's exclude file nor the user's global
+// one hides any. With git installed, the sides are repositories, and git
+// confirms that each rule would hide its file in a work tree.
+func TestPlainIgnoresNothing(t *testing.T) {
+	user := t.TempDir()
+	global := filepath.Join(user, "git", "ignore")
+	for name, data := range map[string]string{
+		global:                        "global-only\n",
+		filepath.Join(user, "config"): "[core]\nexcludesFile = " + global + "\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := []string{"HOME=" + user, "XDG_CONFIG_HOME=" + user, "GIT_CONFIG_GLOBAL=" + filepath.Join(user, "config"), "GIT_CONFIG_NOSYSTEM=1"}
+	_, err := exec.LookPath("git")
+	hasGit := err == nil
+	sides := [2]string{}
+	for i, contents := range []string{"left\n", "right\n"} {
+		sides[i] = writeFiles(t, map[string]string{
+			".gitignore":        ".gitignore\nignored\n",
+			".git/info/exclude": "repo-only\n",
+			"ignored":           contents,
+			"repo-only":         contents,
+			"global-only":       contents,
+		})
+		if !hasGit {
+			continue
+		}
+		for _, args := range [][]string{{"init", "-q"}, {"check-ignore", "ignored", "repo-only", "global-only"}} {
+			cmd := exec.Command("git", args...)
+			cmd.Dir, cmd.Env = sides[i], append(os.Environ(), env...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+			if args[0] == "check-ignore" && string(out) != "ignored\nrepo-only\nglobal-only\n" {
+				t.Fatalf("git ignores %q, want all three", out)
+			}
+		}
+	}
+	cmd := binate(t, sides[0], sides[1])
+	cmd.Env = append(cmd.Env, env...)
+	pt := ptytest.Open(t, 100, 30)
+	pt.Start(cmd)
+	offset := pt.Wait(0, enterScreen)
+	scr := pt.WaitScreen(100, 30, offset, "[3 contents]")
+	for _, name := range []string{"ignored", "repo-only", "global-only"} {
+		if !strings.Contains(scr, " "+name) {
+			t.Errorf("%s hidden:\n%s", name, scr)
+		}
+	}
 	quit(t, pt, offset, "x")
 	pt.Wait(offset, leaveScreen)
 	if code := pt.Exit(); code != 0 {
