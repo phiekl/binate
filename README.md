@@ -184,9 +184,10 @@ staticcheck ./...
 ```
 
 The build targets x86-64-v3 CPUs (roughly 2013 and later) by default.
-`make GOAMD64=v1` can be used for older CPUs. Install `agitate` as a symlink to
-`binate`, as the build makes it. Run by that name, binate compares git revisions
-without `-g`.
+`make GOAMD64=v1` can be used for older CPUs. binate needs a 64-bit platform, as
+x86-64 or arm64, and a 32-bit build stops with an error saying so. Install
+`agitate` as a symlink to `binate`, as the build makes it. Run by that name,
+binate compares git revisions without `-g`.
 
 `make man` builds binate(1) from [doc/binate.1.md](doc/binate.1.md) and
 binate-manual(7) from [doc/manual.md](doc/manual.md), and agitate(1) and
