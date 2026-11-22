@@ -843,6 +843,15 @@ func TestRestrictedSession(t *testing.T) {
 			t.Errorf("no report that Landlock is enabled in %q", out[offset:])
 		}
 	}
+	// Without seccomp filters in the kernel, binate goes on without one,
+	// and says so instead.
+	switch {
+	case strings.Contains(out[offset:], "debug1: seccomp: enabled"):
+	case strings.Contains(out[offset:], "debug1: seccomp: unavailable"):
+		t.Log("seccomp filters unavailable")
+	default:
+		t.Errorf("no report of the seccomp filter in %q", out[offset:])
+	}
 }
 
 func TestColorWarnings(t *testing.T) {

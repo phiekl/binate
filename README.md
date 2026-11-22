@@ -93,6 +93,8 @@ Control characters, bidi overrides and invisible characters in names and
 contents are shown escaped, never sent to the terminal. Landlock prevents the
 process that reads files from writing files or running programs, and restricts
 some network access. With `-g`, it also prevents reads outside the repository.
+A seccomp filter keeps that process from typing into the terminal as if from
+the keyboard, which Landlock doesn't cover.
 
 ### Editor and terminal integration
 

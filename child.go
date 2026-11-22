@@ -24,6 +24,7 @@ import (
 	"pxy.se/go/binate/internal/git"
 	"pxy.se/go/binate/internal/landlock"
 	"pxy.se/go/binate/internal/scan"
+	"pxy.se/go/binate/internal/seccomp"
 	"pxy.se/go/binate/internal/source"
 	"pxy.se/go/binate/internal/stat"
 	"pxy.se/go/binate/internal/supervise"
@@ -144,6 +145,11 @@ func (c *child) restrict() error {
 // What can fail before the screens run, as resolving git revisions, is
 // done before the terminal is taken, so that its error is plain to see.
 func (c *child) run() (code int) {
+	// The terminal, which Landlock leaves alone, can't be made to type
+	// into the shell, before anything is read.
+	if err := seccomp.Restrict(c.log); err != nil {
+		return fail("restricting the process: %v", err)
+	}
 	t, err := term.Open(os.Stdin, os.Stdout)
 	if err != nil {
 		return fail("opening the terminal: %v", err)

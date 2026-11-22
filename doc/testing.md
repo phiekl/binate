@@ -59,7 +59,8 @@ waits for it.
 
 - **Under Landlock:** a session with a root given through a symlink: rescanning
   after a file was replaced by rename, and opening the diff view on it, plus
-  `-v` reporting Landlock as enabled.
+  `-v` reporting Landlock and the seccomp filter as enabled, or the filter as
+  unavailable on a kernel without seccomp filters.
 - **Process split:** quitting, `kill -9` of the child, and SIGTERM and SIGHUP
   sent to the parent all leave the terminal in its saved settings and off the
   alternate screen, with the expected exit status and the cursor on a fresh line
@@ -275,6 +276,12 @@ waits for it.
   outside the inputs, running a program and signalling the parent are
   denied. ABI reporting tests cover the errata downgrade, the build's
   minimum, ABI 10 and 11, and the cap on newer kernels.
+- **seccomp:** the filter, in a re-executed test process that installs it,
+  refusing TIOCSTI and TIOCLINUX, also with bits set above the request's 32 and
+  on a thread started before it, while other requests still reach the kernel,
+  and setting no_new_privs. The program is also run by a small BPF interpreter,
+  for what a live process can't try, as syscalls of i386 or x32, x32's numbers
+  without its bit among them, and the request's half on a big-endian machine.
 - **supervise:** the request protocol, and the parent's checks: `..` and
   symlinks out of the root, absolute paths, directories and FIFOs, a missing
   file, an invalid side, a request without a path, and a side that is no

@@ -37,6 +37,7 @@ anything. The man page,
 - [Exit status](#exit-status)
 - [Process structure](#process-structure)
 - [Landlock](#landlock)
+- [Seccomp](#seccomp)
 - [Caveats](#caveats)
 
 ## Inputs
@@ -1243,8 +1244,9 @@ plus the signal's number, as the shell reports it.
 **binate** runs as two processes. The first, the parent, parses the arguments,
 reads **VISUAL** and **EDITOR**, saves the terminal settings and starts the
 second, the child, which does everything else: scanning, comparing and drawing.
-The child runs restricted by Landlock (see [Landlock](#landlock)). The parent
-does not, so it can run your editor and stop the job for **Ctrl+z**.
+The child runs restricted by Landlock (see [Landlock](#landlock)) and a seccomp
+filter (see [Seccomp](#seccomp)). The parent does not, so it can run your editor
+and stop the job for **Ctrl+z**.
 
 Landlock can't be lifted once applied, and every program a restricted process
 starts inherits it. Restricting only some threads doesn't work in Go, which
@@ -1314,6 +1316,26 @@ partial: below ABI 10, a restricted child can still send UDP datagrams, as to a
 DNS server. On a kernel without Landlock, or with it disabled, **binate** runs
 unprotected without failing. **-v** reports whether Landlock is active and at
 which ABI.
+
+## Seccomp
+
+The child inherits the terminal from the parent, and Landlock doesn't restrict
+what a process does with a file it opened before. On a kernel that allows it,
+the **TIOCSTI** request of **ioctl**(2) types a byte into a terminal as if from
+its keyboard. A compromised child could type commands for the shell to run
+once **binate** exits. **TIOCLINUX** can paste the selection of a virtual
+console the same way. Before it opens the terminal or reads any input, the child
+installs a seccomp filter on all its threads that refuses both with **EPERM**.
+
+The filter compares only the request's low 32 bits, as the kernel does. It
+refuses every syscall made through another architecture's interface, as the
+32-bit one or x32 on x86-64, which number their syscalls differently. That
+includes x32's own numbers without its bit, which kernels before Linux 5.4 still
+ran as x32's. It also sets **no_new_privs**, as Landlock does. Since Linux 6.2,
+the kernel itself refuses **TIOCSTI** to a process without **CAP_SYS_ADMIN**
+when **dev.tty.legacy_tiocsti** is 0. The filter covers kernels where it is 1,
+and older ones. On a kernel without seccomp filters, **binate** runs without
+one, without failing. **-v** reports whether the filter is active.
 
 ## Caveats
 
