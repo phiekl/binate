@@ -27,7 +27,8 @@ major and minor numbers, and FIFOs and sockets by their type. Symlinks in the
 trees are never followed, and special files in them are never opened.
 
 <img src="doc/screenshots/tree.png"
-     alt="binate comparing two directory trees with a preview of changes to sshd_config and file metadata"
+     alt="binate comparing two directory trees with a preview of changes to
+          sshd_config and file metadata"
      width="800">
 
 Panels under each side show the selected entry's details and highlight
@@ -40,7 +41,8 @@ before you open the diff view.
 changed lines.
 
 <img src="doc/screenshots/diff.png"
-     alt="Side-by-side diff of sshd_config with changed words and added or removed lines highlighted"
+     alt="Side-by-side diff of sshd_config with changed words and added or
+          removed lines highlighted"
      width="800">
 
 ### Navigation and search
@@ -50,7 +52,8 @@ names using regular expressions or literal text. Filtering covers the whole
 tree.
 
 <img src="doc/screenshots/filter.png"
-     alt="binate filtering both directory trees to Stockholm, highlighting a file type difference"
+     alt="binate filtering both directory trees to Stockholm, highlighting a
+          file type difference"
      width="800">
 
 ### Native git object reader
@@ -79,7 +82,8 @@ Repeating this follows a file back through its history, one change at a time.
 `Esc` goes back a step.
 
 <img src="doc/screenshots/git.png"
-     alt="binate comparing Linux git revisions with a file diff preview and each file's last commit details"
+     alt="binate comparing Linux git revisions with a file diff preview and each
+          file's last commit details"
      width="800">
 
 ### Read-only, escaped output and Landlock sandbox
