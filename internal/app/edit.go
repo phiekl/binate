@@ -64,10 +64,13 @@ const inIndex = "in the git index"
 
 const readOnlyWorkTree = "in the read-only work tree"
 
-// inGit reports whether why is that of a side in a git revision or the
-// index, which no editor can edit.
-func inGit(why string) bool {
-	return why == notOnDisk || why == inIndex
+// inArchive is why a side in an archive, as a tar file, can't be edited.
+const inArchive = "in an archive"
+
+// noFile reports whether why is that of a side in a git revision, the
+// index or an archive, which no editor can edit.
+func noFile(why string) bool {
+	return why == notOnDisk || why == inIndex || why == inArchive
 }
 
 // onDisk reports whether root is in the file system.
@@ -76,9 +79,26 @@ func onDisk(root source.Root) bool {
 	return ok
 }
 
+// isArchive reports whether root is an archive, which records what a file
+// system does but holds no files on disk.
+func isArchive(root source.Root) bool {
+	_, ok := root.(source.Archive)
+	return ok
+}
+
+// inRevision reports whether root is a revision of a version control
+// system, as git's, or its index, which records neither owners nor
+// times.
+func inRevision(root source.Root) bool {
+	return !onDisk(root) && !isArchive(root)
+}
+
 func editRestriction(root source.Root) string {
 	if x, ok := root.(source.Index); ok && x.IsIndex() {
 		return inIndex
+	}
+	if isArchive(root) {
+		return inArchive
 	}
 	disk, ok := root.(source.DiskRoot)
 	if !ok {
@@ -112,7 +132,7 @@ func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []st
 	if sides[0].Why == notOnDisk && sides[1].Why == notOnDisk {
 		return nil, []string{"Files in git revisions can't be edited."}
 	}
-	if inGit(sides[0].Why) && inGit(sides[1].Why) {
+	if noFile(sides[0].Why) && noFile(sides[1].Why) {
 		return nil, []string{"Neither side can be edited:", "The left side is " + sides[0].Why + ".", "The right side is " + sides[1].Why + "."}
 	}
 	if sides[0].Why != "" && sides[1].Why != "" &&
@@ -128,7 +148,7 @@ func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []st
 	}
 	why := "Neither side is a regular file"
 	l, r := sides[0].Why, sides[1].Why
-	if inGit(l) || inGit(r) {
+	if noFile(l) || noFile(r) {
 		return nil, []string{"Neither side can be edited:", "The left side is " + l + ".", "The right side is " + r + "."}
 	}
 	if l == r || l == notRegular || r == notRegular {

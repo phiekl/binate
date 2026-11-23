@@ -2221,3 +2221,41 @@ func TestGitOtherRepositoryErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestReadStatus checks that the archives' size is known unless one is a
+// pipe, also with one empty.
+func TestReadStatus(t *testing.T) {
+	for _, tc := range []struct {
+		sizes [2]int64
+		total int64
+	}{
+		{[2]int64{0, 100}, 100},
+		{[2]int64{50, 100}, 150},
+		{[2]int64{-1, 100}, 0},
+	} {
+		c := &child{sizes: tc.sizes}
+		c.archives = [2]*os.File{os.Stdin, os.Stdin}
+		if got := c.readStatus().Total; got != tc.total {
+			t.Errorf("sizes %v: total %d, want %d", tc.sizes, got, tc.total)
+		}
+	}
+}
+
+// The loading box shows the entry of an archive still being read, not of
+// one read whole.
+func TestReadStatusCurrent(t *testing.T) {
+	c := &child{archives: [2]*os.File{os.Stdin, os.Stdin}, sizes: [2]int64{-1, -1}}
+	c.progress[0].Begin("a.tar:second")
+	c.progress[1].Begin("b.tar:last")
+	if got := c.readStatus().Current; got != "b.tar:last" {
+		t.Errorf("both being read: %q", got)
+	}
+	c.done[1].Store(true)
+	if got := c.readStatus().Current; got != "a.tar:second" {
+		t.Errorf("the right read: %q", got)
+	}
+	c.done[0].Store(true)
+	if got := c.readStatus().Current; got != "" {
+		t.Errorf("both read: %q", got)
+	}
+}

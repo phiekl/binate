@@ -9,8 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -268,5 +270,141 @@ func TestRegularFileOpensWhatItChecks(t *testing.T) {
 	}
 	if _, err := OpenRegular(name, true); !errors.Is(err, ErrNotRegular) {
 		t.Errorf("device: %v", err)
+	}
+}
+
+// TestOpenStreamClose checks that closing a pipe OpenStream opened ends a
+// read waiting for more, which then fails.
+func TestOpenStreamClose(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened := make(chan *os.File, 1)
+	go func() {
+		w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+		if err != nil {
+			opened <- nil
+			return
+		}
+		opened <- w
+	}()
+	f, err := OpenStream(fifo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := <-opened
+	if w == nil {
+		t.Fatal("opening the FIFO to write failed")
+	}
+	defer func() { _ = w.Close() }()
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.Read(make([]byte, 1))
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("read after Close succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close left the read waiting")
+	}
+}
+
+// TestPipeReader checks that reading a FIFO OpenStream opened waits for a
+// writer rather than ending, ends once a writer has come and gone, and
+// that a pipe whose writer is gone before it is opened, as a process
+// substitution's, ends after what it holds.
+func TestPipeReader(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenStream(fifo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	got := make(chan string, 1)
+	go func() {
+		b, err := io.ReadAll(PipeReader(f))
+		if err != nil {
+			got <- "error: " + err.Error()
+			return
+		}
+		got <- string(b)
+	}()
+	select {
+	case s := <-got:
+		t.Fatalf("read %q without a writer", s)
+	case <-time.After(100 * time.Millisecond):
+	}
+	w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A writer, writing nothing yet.
+	time.Sleep(50 * time.Millisecond)
+	_, _ = w.WriteString("data")
+	_ = w.Close()
+	select {
+	case s := <-got:
+		if s != "data" {
+			t.Errorf("read %q", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting once the writer is gone")
+	}
+
+	r, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	_, _ = pw.WriteString("held")
+	_ = pw.Close()
+	p, err := OpenStream("/proc/self/fd/" + strconv.Itoa(int(r.Fd())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = p.Close() }()
+	if b, err := io.ReadAll(PipeReader(p)); err != nil || string(b) != "held" {
+		t.Errorf("a pipe without a writer: %q, %v", b, err)
+	}
+}
+
+// TestPipeReaderFastWriter checks that a writer that opens a FIFO, writes
+// and closes it between reading it and polling it, which then reports both
+// data and a hangup, has what it wrote read before the end.
+func TestPipeReaderFastWriter(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 2000 {
+		fifo := filepath.Join(dir, strconv.Itoa(i))
+		if err := unix.Mkfifo(fifo, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := OpenStream(fifo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+			if err != nil {
+				return
+			}
+			_, _ = w.Write([]byte{'x'})
+			_ = w.Close()
+		}()
+		b, err := io.ReadAll(PipeReader(f))
+		_ = f.Close()
+		if err != nil || string(b) != "x" {
+			t.Fatalf("round %d: read %q, %v", i, b, err)
+		}
 	}
 }

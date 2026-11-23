@@ -52,14 +52,19 @@ func (k Kind) String() string {
 type Side struct {
 	Kind Kind
 	// Size is -1 if unknown (see source.Entry).
-	Size   int64
-	Mtime  time.Time
-	Target string // of a symlink, or a submodule's commit
-	Rdev   uint64 // of a device
-	Perm   uint32 // permission bits, with setuid, setgid and sticky
-	Uid    uint32
-	Gid    uint32
-	Count  int // entries in a directory, after excludes
+	Size  int64
+	Mtime time.Time
+	// MtimePrecision is how finely Mtime is recorded (see SameMtime).
+	MtimePrecision time.Duration
+	Target         string // of a symlink, or a submodule's commit
+	Rdev           uint64 // of a device
+	Perm           uint32 // permission bits, with setuid, setgid and sticky
+	Uid            uint32
+	Gid            uint32
+	Count          int // entries in a directory, after excludes
+	// Implied is set for a directory an archive doesn't list, whose mode,
+	// owner and mtime aren't compared.
+	Implied bool
 	// Err is why this side could not be read fully: its type, a
 	// directory's entries, a symlink's target or a file's contents.
 	Err error
@@ -806,13 +811,15 @@ func readSide(root source.Root, rel string, follow bool) (Side, source.Entry) {
 		return Side{Kind: Unknown, Err: files.UnwrapPath(err)}, e
 	}
 	sd := Side{
-		Kind:  kindOf(e.Mode),
-		Size:  e.Size,
-		Mtime: e.Mtime,
-		Rdev:  e.Rdev,
-		Perm:  e.Mode & 0o7777,
-		Uid:   e.Uid,
-		Gid:   e.Gid,
+		Kind:           kindOf(e.Mode),
+		Size:           e.Size,
+		Mtime:          e.Mtime,
+		MtimePrecision: e.MtimePrecision,
+		Rdev:           e.Rdev,
+		Perm:           e.Mode & 0o7777,
+		Uid:            e.Uid,
+		Gid:            e.Gid,
+		Implied:        e.Implied,
 	}
 	switch sd.Kind {
 	case Dir:
@@ -849,9 +856,10 @@ func kindOf(mode uint32) Kind {
 }
 
 // attrsDiffer returns the attributes in set that every type has, such as
-// the mode, that differ between two sides of the same type.
+// the mode, that differ between two sides of the same type, of which a
+// directory an archive doesn't list records none.
 func attrsDiffer(l, r *Side, set Attrs) Attrs {
-	if l.Kind != r.Kind || l.Kind == Missing || l.Kind == Unknown {
+	if l.Kind != r.Kind || l.Kind == Missing || l.Kind == Unknown || l.Implied || r.Implied {
 		return 0
 	}
 	var diff Attrs
@@ -861,10 +869,41 @@ func attrsDiffer(l, r *Side, set Attrs) Attrs {
 	if l.Uid != r.Uid || l.Gid != r.Gid {
 		diff |= Owner
 	}
-	if !l.Mtime.Equal(r.Mtime) {
+	if !SameMtime(l.Mtime, r.Mtime, l.MtimePrecision, r.MtimePrecision) {
 		diff |= Mtime
 	}
 	return diff & set
+}
+
+// SameMtime reports whether mtimes l and r are the same, as finely as
+// one is recorded, by lp and rp, or exactly if 0. Two recorded less
+// finely, as both in archives, are the same only if exactly so, as
+// extracting them makes them differ otherwise. One recorded less finely
+// is the same as a time recorded exactly if within its precision. Below
+// a second, they must be less than precision apart, as NTFS truncates to
+// 100 nanoseconds, and a PAX record written from floating point rounds
+// to the microsecond. Of whole seconds, their seconds must be less than
+// precision apart: the same to the second, as in a tar archive, which
+// tar truncates, or no more than a second apart to two, as in a zip
+// archive's DOS time, which some tools round up and others down.
+func SameMtime(l, r time.Time, lp, rp time.Duration) bool {
+	precision := max(lp, rp)
+	if precision <= 0 || lp > 0 && rp > 0 {
+		return l.Equal(r)
+	}
+	// Apart by their seconds as unsigned, and nanoseconds, as neither
+	// l.Sub(r), which saturates centuries apart, nor adding precision,
+	// which overflows at the last second, works for any time a PAX
+	// record can hold. They are ordered by their Unix seconds too, which
+	// time.Time's own, from the year 1, wrap away from near the ends of.
+	if l.Unix() < r.Unix() || l.Unix() == r.Unix() && l.Nanosecond() < r.Nanosecond() {
+		l, r = r, l
+	}
+	secs := uint64(l.Unix()) - uint64(r.Unix())
+	if precision >= time.Second {
+		return secs < uint64(precision/time.Second)
+	}
+	return secs < 2 && time.Duration(secs)*time.Second+time.Duration(l.Nanosecond()-r.Nanosecond()) < precision
 }
 
 // classify sets the state of a pair from what was read of it, or leaves
@@ -919,7 +958,7 @@ func classify(n *Node, opts Options) {
 		case set&Content == 0:
 		case l.Size >= 0 && r.Size >= 0 && l.Size != r.Size:
 			data = Differ
-		case opts.Quick && l.Mtime.Equal(r.Mtime):
+		case opts.Quick && SameMtime(l.Mtime, r.Mtime, l.MtimePrecision, r.MtimePrecision):
 		case opts.Quick:
 			data = Unverified
 		default:

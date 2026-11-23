@@ -62,9 +62,11 @@ type TreeScreen struct {
 	// a commit's trees.
 	back func()
 	// roots are the sides, and unrecorded the attributes they don't
-	// record, which are not compared.
-	roots      [2]source.Root
-	unrecorded scan.Attrs
+	// record, which are not compared, of which git doesn't record those
+	// in unrecordedByGit.
+	roots           [2]source.Root
+	unrecorded      scan.Attrs
+	unrecordedByGit scan.Attrs
 	// rechecks are paths to compare again, after an edit, once the
 	// recheck running in the background, which recheckDone closes, is done.
 	rechecks    []string
@@ -115,6 +117,7 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 	}
 	t.roots = [2]source.Root{cfg.Left, cfg.Right}
 	t.unrecorded = unrecordedAttrs(cfg.Left, cfg.Right)
+	t.unrecordedByGit = gitUnrecorded(cfg.Left, cfg.Right)
 	t.opts.Compare = recorded(t.opts.Compare, t.unrecorded)
 	t.view.Compare = t.opts.Compare
 	t.stats.app, t.changes.app, t.previews.app = a, a, a
@@ -126,12 +129,43 @@ func NewTreeScreen(a *App, cfg TreeConfig) *TreeScreen {
 
 // unrecordedAttrs returns the attributes not compared between left and
 // right: owners and times, which git records neither of, where either is
-// a side of git or compared as one.
+// a side of git or compared as one, and modes or owners an archive leaves
+// out (see source.Recorder).
 func unrecordedAttrs(left, right source.Root) scan.Attrs {
-	if !onDisk(left) || !onDisk(right) || asGit(left) || asGit(right) {
+	return gitUnrecorded(left, right) | rootUnrecorded(left) | rootUnrecorded(right)
+}
+
+// gitUnrecorded returns the attributes git doesn't record, owners and
+// times, where left or right is a side of git or compared as one.
+func gitUnrecorded(left, right source.Root) scan.Attrs {
+	if besideGit(left, right) {
 		return scan.Owner | scan.Mtime
 	}
 	return 0
+}
+
+// besideGit reports whether left and right are compared as git compares
+// them: either is a side of git, or compared as one.
+func besideGit(left, right source.Root) bool {
+	return inRevision(left) || inRevision(right) || asGit(left) || asGit(right)
+}
+
+// rootUnrecorded returns the attributes root leaves out of some entry, as
+// a zip archive made on Windows, its modes and owners.
+func rootUnrecorded(root source.Root) scan.Attrs {
+	rec, ok := root.(source.Recorder)
+	if !ok {
+		return 0
+	}
+	var attrs scan.Attrs
+	modes, owners := rec.Unrecorded()
+	if modes {
+		attrs |= scan.Mode
+	}
+	if owners {
+		attrs |= scan.Owner
+	}
+	return attrs
 }
 
 // asGit reports whether root is a directory compared as a side of git
@@ -268,8 +302,10 @@ func (t *TreeScreen) panelStats(n *scan.Node) [2]view.StatSide {
 			}
 		}
 		sides[i].Path = panelPath(t.roots[i], n.Path())
-		sides[i].InRevision = !onDisk(t.roots[i])
-		sides[i].BesideGit = onDisk(t.roots[i]) && t.unrecorded != 0
+		sides[i].InRevision = inRevision(t.roots[i])
+		sides[i].InArchive = isArchive(t.roots[i])
+		sides[i].BesideGit = !sides[i].InRevision && besideGit(t.roots[0], t.roots[1])
+		sides[i].Unrecorded = rootUnrecorded(t.roots[i])
 		sides[i].RepoPath = repoPath(t.roots[i], n.Path())
 		sides[i].Change = changeSide(ckey.sides[i], changes[i], changesDone)
 		if t.view.Statuses && t.view.StatusRight == (i == 1) {
@@ -405,7 +441,7 @@ func (t *TreeScreen) Key(k term.Key) bool {
 		return true
 	}
 	if k == term.Rune('c') {
-		t.compare = view.NewComparePopup(t.opts.Compare, t.opts.Quick, t.unrecorded)
+		t.compare = view.NewComparePopup(t.opts.Compare, t.opts.Quick, t.unrecorded, t.unrecordedByGit)
 		return true
 	}
 	t.scan.Lock()

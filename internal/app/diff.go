@@ -344,8 +344,10 @@ func (d *DiffScreen) panelStats() [2]view.StatSide {
 			sides[i] = statSide(got[i], done, d.app.Names)
 		}
 		sides[i].Path = d.abs[i]
-		sides[i].InRevision = !onDisk(src.Root)
-		sides[i].BesideGit = onDisk(src.Root) && srcs[1-i].Root != nil && unrecordedAttrs(src.Root, srcs[1-i].Root) != 0
+		sides[i].InRevision = inRevision(src.Root)
+		sides[i].InArchive = isArchive(src.Root)
+		sides[i].BesideGit = !sides[i].InRevision && srcs[1-i].Root != nil && besideGit(src.Root, srcs[1-i].Root)
+		sides[i].Unrecorded = rootUnrecorded(src.Root)
 		if !src.Missing {
 			sides[i].RepoPath = repoPath(src.Root, src.Rel)
 		}

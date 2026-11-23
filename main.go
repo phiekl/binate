@@ -87,7 +87,7 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	s.Count(&o.verbose, "verbose", "v", "write debug messages (repeat for more)")
 	s.Bool(&o.version, "version", "V", "show version and exit")
 	s.Global("verbose", "version")
-	sides, directory := "%s dir or git:dir@rev, or with --git a revision, . or :", "with --git, find the repository from directory, as git -C"
+	sides, directory := "%s dir, git:dir@rev, "+archiveUsage()+"-g rev, . or :", "with --git, find the repository from directory, as git -C"
 	cached := "with --git, compare left, or HEAD, with the index"
 	if gitOnly {
 		sides, directory = "%s [dir@]rev, . (work tree) or : (index)", "find the repository from directory, as git -C"

@@ -8,12 +8,15 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -21,6 +24,8 @@ import (
 	"pxy.se/go/binate/internal/app"
 	"pxy.se/go/binate/internal/cli"
 	"pxy.se/go/binate/internal/colors"
+	"pxy.se/go/binate/internal/files"
+	"pxy.se/go/binate/internal/formats/archive"
 	"pxy.se/go/binate/internal/git"
 	"pxy.se/go/binate/internal/landlock"
 	"pxy.se/go/binate/internal/scan"
@@ -60,6 +65,17 @@ type child struct {
 	// directory, and nil for a side on disk.
 	locs   [2]*git.Location
 	ignore git.GlobalIgnore
+	// archives are the open files of the sides that are archives, and
+	// blobs the temporary files their files are copied to, opened before
+	// the process is restricted; sizes are the archives' sizes, or -1 for a
+	// pipe, and progress how far reading each has got. read are the
+	// archives once read.
+	archives, blobs [2]*os.File
+	// done is whether reading each archive has ended, once it has.
+	done     [2]atomic.Bool
+	sizes    [2]int64
+	progress [2]archive.Progress
+	read     [2]*archive.Root
 }
 
 func runChild(specText string) int {
@@ -164,6 +180,9 @@ func (c *child) run() (code int) {
 			return fail("reading global git ignore rules: %v", err)
 		}
 	}
+	if err := c.openArchives(); err != nil {
+		return fail("%v", err)
+	}
 	if c.in.hasGit() {
 		if err := c.discover(); err != nil {
 			return fail("%v", err)
@@ -172,6 +191,7 @@ func (c *child) run() (code int) {
 	if err := c.restrict(); err != nil {
 		return fail("restricting the process: %v", err)
 	}
+	// The sides of archives are nil until they are read.
 	var roots [2]source.Root
 	if c.in.hasGit() {
 		if roots, err = c.gitRoots(); err != nil {
@@ -179,7 +199,9 @@ func (c *child) run() (code int) {
 		}
 		a.Header = c.header()
 	} else {
-		roots = [2]source.Root{diskRoot(c.in.left), diskRoot(c.in.right)}
+		for i, side := range c.in.sides() {
+			roots[i] = c.otherRoot(i, side)
+		}
 	}
 
 	if err := a.Enter(); err != nil {
@@ -195,20 +217,59 @@ func (c *child) run() (code int) {
 	a.HasEditor = len(editorCommand()) > 0
 	styles := colors.Parse(colors.FromEnv(os.Getenv)).Styles
 	a.Styles = styles
-	a.Main = app.NewTreeScreen(a, app.TreeConfig{
-		Styles: styles,
-		Home:   os.Getenv("HOME"),
-		Left:   roots[0],
-		Right:  roots[1],
-		Options: scan.Options{
-			Compare:  c.opts.compare,
-			Quick:    c.opts.quick,
-			Excludes: c.opts.excludes,
-		},
-		Context: c.opts.context,
-	})
+	home := os.Getenv("HOME")
+	tree := func() app.Screen {
+		for i, root := range c.read {
+			if root != nil {
+				if c.in.hasGit() {
+					// An archive opposite git has the modes git records, as
+					// a directory has.
+					root.SetGitModes()
+				}
+				roots[i] = root
+			}
+		}
+		return app.NewTreeScreen(a, app.TreeConfig{
+			Styles: styles,
+			Home:   home,
+			Left:   roots[0],
+			Right:  roots[1],
+			Options: scan.Options{
+				Compare:  c.opts.compare,
+				Quick:    c.opts.quick,
+				Excludes: c.opts.excludes,
+			},
+			Context: c.opts.context,
+		})
+	}
+	// Archives are read on the screen, which shows how far, restricted,
+	// as what they hold could be anything.
+	var reading *app.ReadScreen
+	if c.archives == [2]*os.File{} {
+		a.Main = tree()
+	} else {
+		var titles [2]string
+		for i, side := range c.in.sides() {
+			titles[i] = side.path
+			if roots[i] != nil {
+				titles[i] = roots[i].Path("")
+			}
+		}
+		reading = app.NewReadScreen(a, app.ReadConfig{
+			Styles: styles, Home: home, Left: titles[0], Right: titles[1],
+			Read: c.readArchives, Status: c.readStatus, Next: tree,
+		})
+		a.Main = reading
+	}
 	code = a.Run()
 	_ = a.Leave()
+	// Reading fails, once its popup is closed, as what fails before the
+	// screen does, plainly too, for the error to outlast the screen.
+	if reading != nil {
+		if err := reading.Err(); err != nil {
+			return fail("%v", err)
+		}
+	}
 	return code
 }
 
@@ -369,11 +430,11 @@ func (c *child) gitRoots() ([2]source.Root, error) {
 	for i, side := range sides {
 		switch {
 		case roots[i] != nil:
-		case side.kind == inputNull:
-			roots[i] = source.Nothing(side.path)
-		default:
+		case side.kind == inputDir:
 			// A directory opposite git has the modes git records.
 			roots[i] = source.GitModes{Disk: source.Disk(side.path)}
+		default:
+			roots[i] = c.otherRoot(i, side)
 		}
 	}
 	return roots, nil
@@ -395,12 +456,139 @@ func gitPrefixHint(side input, err error) error {
 	return fmt.Errorf("%w (with -g, give another repository's side without git:, as %s)", err, rest)
 }
 
-// diskRoot returns the root of side, on disk: a directory, or nothing.
-func diskRoot(side input) source.Root {
-	if side.kind == inputNull {
+// otherRoot returns the root of side i, not of git: a directory, nothing,
+// or an archive, or nil for one not read yet.
+func (c *child) otherRoot(i int, side input) source.Root {
+	switch side.kind {
+	case inputNull:
 		return source.Nothing(side.path)
+	case inputArchive:
+		if c.read[i] == nil {
+			return nil
+		}
+		return c.read[i]
 	}
 	return source.Disk(side.path)
+}
+
+// openArchives opens the files of the sides that are archives, and a temporary
+// file in TMPDIR, or /tmp, for each to copy its files to, which the
+// restricted process can't create. A FIFO is opened without waiting for a
+// writer, which may come only once the other is read, and reading it
+// waits instead (see files.PipeReader).
+func (c *child) openArchives() error {
+	if !c.in.left.isArchive() && !c.in.right.isArchive() {
+		return nil
+	}
+	for i, side := range c.in.sides() {
+		if !side.isArchive() {
+			continue
+		}
+		f, err := files.OpenStream(side.path)
+		if err != nil {
+			return fmt.Errorf("%s: %w", side.path, files.UnwrapPath(err))
+		}
+		c.archives[i] = f
+		c.sizes[i] = -1
+		if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+			c.sizes[i] = info.Size()
+		}
+		if c.blobs[i], err = archive.NewBlob(os.TempDir()); err != nil {
+			return fmt.Errorf("%s: %w", side.path, err)
+		}
+	}
+	return nil
+}
+
+// readArchives reads the archives opened, and closes them: both at once
+// if one is a pipe, as one program may write all of either before the
+// other, and else one after the other, as a disk reads one file at a time
+// fastest. The first to fail stops the other, by closing its file, and
+// its error is given.
+func (c *child) readArchives() error {
+	sides := c.in.sides()
+	var (
+		mu     sync.Mutex
+		failed = -1
+		errs   [2]error
+	)
+	read := func(i int) {
+		err := c.readArchive(i, sides[i])
+		mu.Lock()
+		defer mu.Unlock()
+		errs[i] = err
+		if err != nil && failed < 0 {
+			failed = i
+			// Unblocks reading a pipe, which then fails too.
+			if other := c.archives[1-i]; other != nil {
+				_ = other.Close()
+			}
+		}
+	}
+	if c.sizes[0] < 0 && c.archives[0] != nil || c.sizes[1] < 0 && c.archives[1] != nil {
+		var wg sync.WaitGroup
+		for i, f := range c.archives {
+			if f != nil {
+				wg.Go(func() { read(i) })
+			}
+		}
+		wg.Wait()
+	} else {
+		for i, f := range c.archives {
+			if f != nil && failed < 0 {
+				read(i)
+			}
+		}
+	}
+	if failed >= 0 {
+		return errs[failed]
+	}
+	return nil
+}
+
+// readArchive reads archive i, of side, and closes it.
+func (c *child) readArchive(i int, side input) error {
+	f := c.archives[i]
+	defer func() {
+		_ = f.Close()
+		c.done[i].Store(true)
+	}()
+	var src io.Reader = f
+	if c.sizes[i] < 0 {
+		src = files.PipeReader(f)
+	}
+	cli.Debug(c.log, cli.LevelDebug1, "reading the archive", "path", side.path, "temp", c.blobs[i].Name())
+	root, err := archiveFormats[side.format](src, c.blobs[i], side.path, &c.progress[i])
+	if err != nil {
+		return &app.ReadError{Side: i, Path: side.path, Err: err}
+	}
+	c.read[i] = root
+	return nil
+}
+
+// readStatus returns how far readArchives has got, from any goroutine:
+// both archives as one, of a size known unless one is a pipe.
+func (c *child) readStatus() view.ReadStatus {
+	var st view.ReadStatus
+	known := true
+	for i, f := range c.archives {
+		if f == nil {
+			continue
+		}
+		p := &c.progress[i]
+		st.Entries += p.Entries()
+		st.Read += p.Read()
+		st.Total += max(c.sizes[i], 0)
+		known = known && c.sizes[i] >= 0
+		// Of one still being read, not one read whole.
+		if current := p.Current(); current != "" && !c.done[i].Load() {
+			st.Current = current
+		}
+	}
+	if !known {
+		st.Total = 0
+	}
+	return st
 }
 
 // header returns what each side is: a repository's work tree, or its git
@@ -417,9 +605,13 @@ func (c *child) header() view.Header {
 		if abs, err := filepath.Abs(side.path); err == nil {
 			s.Path = abs
 		}
-		s.Label = "(dir)"
-		if side.kind == inputNull {
+		switch side.kind {
+		case inputNull:
 			s.Label = "(nothing)"
+		case inputArchive:
+			s.Label = "(" + side.format + ")"
+		default:
+			s.Label = "(dir)"
 		}
 	}
 	return h

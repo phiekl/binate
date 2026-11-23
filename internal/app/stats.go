@@ -207,7 +207,8 @@ func absPath(path string) string {
 }
 
 // statSide returns what a panel shows of a side read as res: nothing while
-// reading, and owner names where names has them.
+// reading, and the owner's names as recorded with the entry, or else
+// where names has them.
 func statSide(res statResult, done bool, names *stat.Names) view.StatSide {
 	sd := view.StatSide{Entries: -1}
 	if !done {
@@ -215,7 +216,13 @@ func statSide(res statResult, done bool, names *stat.Names) view.StatSide {
 	}
 	sd.Stat, sd.Err = res.st, files.UnwrapPath(res.err)
 	if sd.Stat != nil {
-		sd.User, sd.Group = names.User(sd.Stat.Uid), names.Group(sd.Stat.Gid)
+		sd.User, sd.Group = sd.Stat.User, sd.Stat.Group
+		if sd.User == "" {
+			sd.User = names.User(sd.Stat.Uid)
+		}
+		if sd.Group == "" {
+			sd.Group = names.Group(sd.Stat.Gid)
+		}
 	}
 	return sd
 }

@@ -63,6 +63,24 @@ type Index interface {
 	IsIndex() bool
 }
 
+// Archive is a root read from an archive, as a tar file. Its entries
+// record what a file system's do, owners and times too, but are no files
+// that could be edited, or their paths linked to. Archive names the
+// format, as "tar".
+type Archive interface {
+	Root
+	Archive() string
+}
+
+// Recorder is an archive that leaves out some of what a file system
+// records of an entry, for some of its entries, as a zip archive made on
+// Windows records no modes or owners. Unrecorded reports whether it leaves
+// out modes, and owners.
+type Recorder interface {
+	Root
+	Unrecorded() (modes, owners bool)
+}
+
 // ModeGitlink is the type, in Mode, of a git submodule: a commit of another
 // repository, named by Target, as git's S_IFGITLINK. No file has it.
 const ModeGitlink = 0o160000
@@ -80,8 +98,14 @@ type Entry struct {
 	// Rdev is a device's number.
 	Rdev  uint64
 	Mtime time.Time
+	// MtimePrecision is how finely Mtime is recorded, as to the second in
+	// most tar archives, or 0 if exactly (see stat.Stat).
+	MtimePrecision time.Duration
 	// Target is a symlink's target, or a submodule's commit.
 	Target string
+	// Implied is set for a directory an archive doesn't list, whose mode,
+	// owner and times aren't compared (see stat.Stat).
+	Implied bool
 	// Ino and Ctime are the inode and status change time of an entry on
 	// disk, which a work tree's status compares, or zero.
 	Ino   uint64
@@ -274,20 +298,20 @@ type GitModes struct{ Disk }
 
 func (g GitModes) Entry(rel string, follow bool) (Entry, error) {
 	e, err := g.Disk.Entry(rel, follow)
-	e.Mode = gitMode(e.Mode)
+	e.Mode = GitMode(e.Mode)
 	return e, err
 }
 
 func (g GitModes) Stat(rel string) (*stat.Stat, error) {
 	st, err := g.Disk.Stat(rel)
 	if st != nil {
-		st.Mode = gitMode(st.Mode)
+		st.Mode = GitMode(st.Mode)
 	}
 	return st, err
 }
 
-// gitMode returns the mode git records of an entry of mode m.
-func gitMode(m uint32) uint32 {
+// GitMode returns the mode git records of an entry of mode m.
+func GitMode(m uint32) uint32 {
 	switch m & unix.S_IFMT {
 	case unix.S_IFREG:
 		if m&unix.S_IXUSR != 0 {

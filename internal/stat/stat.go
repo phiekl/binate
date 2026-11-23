@@ -30,11 +30,22 @@ type Stat struct {
 	// Rdev is a device's number.
 	Rdev                uint64
 	Mtime, Ctime, Atime time.Time
+	// MtimePrecision is how finely Mtime is recorded, as to the second in
+	// most tar archives, or 0 if exactly: it is compared that finely (see
+	// scan.SameMtime).
+	MtimePrecision time.Duration
 	// Btime is when the entry was created, or zero where the file system
 	// doesn't record it.
 	Btime time.Time
 	// Target is a symlink's target.
 	Target string
+	// Implied is set for a directory an archive holds entries of but
+	// doesn't list, which records no mode, owner or times.
+	Implied bool
+	// User and Group name the owner as recorded with the entry, as in an
+	// archive, where they may differ from this system's names of its ids,
+	// or are "" to look the names up.
+	User, Group string
 }
 
 // mask is what is asked of statx: the basic fields and the birth time.

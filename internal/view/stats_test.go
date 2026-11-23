@@ -126,13 +126,13 @@ func TestPanels(t *testing.T) {
 	st := colors.Default()
 	l := StatSide{Stat: file(t, 10, 0o644, "2026-11-02 14:10:00"), User: "al", Group: "st", Entries: -1}
 	r := StatSide{Stat: file(t, 4300, 0o4755, "2026-11-03 09:00:00"), Entries: -1}
-	r.Stat.Ino = 8
+	r.Stat.Ino, r.Stat.Gid = 8, 51
 	scr := drawPanelsOn(13, 10, [2]StatSide{l, r})
 	want := []string{
 		pair(" type │ file", " type │ file"),
 		marked(" size │ 10", '|', " size │ 4300 (4.2 KiB)"),
 		marked(" mode │ 0644", '~', " mode │ 4755"),
-		marked("owner │ al:st (1000:50)", '~', "owner │ 1000:50"),
+		marked("owner │ al:st (1000:50)", '~', "owner │ 1000:51"),
 		pair("links │ 1", "links │ 1"),
 		pair("inode │ 7", "inode │ 8"),
 		marked("mtime │ 2026-11-02 14:10:00", '#', "mtime │ 2026-11-03 09:00:00 (newer)"),
@@ -184,6 +184,39 @@ func TestPanels(t *testing.T) {
 	if got := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6]; strings.Contains(got, "newer") || strings.Contains(got, "#") {
 		t.Errorf("equal mtime %q", got)
 	}
+	// One recorded only to the second, as in an archive, is compared to
+	// it.
+	l.Stat.MtimePrecision, r.Stat.Mtime = time.Second, l.Stat.Mtime.Add(500*time.Millisecond)
+	if got := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6]; strings.Contains(got, "newer") || strings.Contains(got, "#") || strings.Contains(got, ".5") {
+		t.Errorf("mtime within the second of one to it %q", got)
+	}
+	r.Stat.Mtime = l.Stat.Mtime.Add(time.Second)
+	if got, want := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6],
+		marked("mtime │ 2026-11-02 14:10:00", '#', "mtime │ 2026-11-02 14:10:01 (newer)"); got != want {
+		t.Errorf("mtime a second after one to it %q, want %q", got, want)
+	}
+	// One recorded to two seconds, as a zip archive's DOS time, rounded
+	// up or down, is the same a second apart, but not two.
+	l.Stat.MtimePrecision, r.Stat.Mtime = 2*time.Second, l.Stat.Mtime.Add(time.Second)
+	if got := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6]; strings.Contains(got, "newer") || strings.Contains(got, "#") {
+		t.Errorf("mtime a second from one to two %q", got)
+	}
+	r.Stat.Mtime = l.Stat.Mtime.Add(2 * time.Second)
+	if got := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6]; !strings.Contains(got, "newer") || !strings.Contains(got, "#") {
+		t.Errorf("mtime two seconds from one to two %q", got)
+	}
+	// Both recorded so, as in two archives, they differ a second apart,
+	// as extracting them makes them, and below the second, the fraction
+	// shown.
+	r.Stat.MtimePrecision, r.Stat.Mtime = time.Second, l.Stat.Mtime.Add(time.Second)
+	if got := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6]; !strings.Contains(got, "newer") || !strings.Contains(got, "#") {
+		t.Errorf("mtimes of two archives a second apart %q", got)
+	}
+	l.Stat.MtimePrecision, r.Stat.MtimePrecision, r.Stat.Mtime = time.Microsecond, time.Microsecond, l.Stat.Mtime.Add(500*time.Nanosecond)
+	if got := panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r}))[6]; !strings.Contains(got, "newer") || !strings.Contains(got, "#") {
+		t.Errorf("mtimes of two archives below a microsecond apart %q", got)
+	}
+	l.Stat.MtimePrecision, r.Stat.MtimePrecision, r.Stat.Mtime = 0, 0, l.Stat.Mtime
 
 	// A short panel keeps the first rows.
 	got := panelRowsText(drawPanelsOn(13, 3, [2]StatSide{l, r}))
@@ -465,6 +498,49 @@ func TestPanelNotNewerBesideGit(t *testing.T) {
 	text := strings.Join(panelRowsText(drawPanelsOn(13, 10, [2]StatSide{l, r})), "\n")
 	if strings.Contains(text, "newer") {
 		t.Errorf("mtime marked newer beside git:\n%s", text)
+	}
+}
+
+// TestPanelOwnerNames checks that owners are compared by their ids, as
+// the tree compares them, not by the names an archive records for them.
+func TestPanelOwnerNames(t *testing.T) {
+	l := StatSide{Stat: file(t, 10, 0o644, "2026-11-02 14:10:00"), Entries: -1, User: "alice", Group: "staff"}
+	for _, tc := range []struct {
+		uid  uint32
+		want bool
+	}{{1000, false}, {1001, true}} {
+		st := file(t, 10, 0o644, "2026-11-02 14:10:00")
+		st.Uid, st.User, st.Group = tc.uid, "build", "build"
+		r := StatSide{Stat: st, Entries: -1, InArchive: true, User: "build", Group: "build"}
+		text := strings.Join(panelRowsText(drawPanelsOn(14, 11, [2]StatSide{l, r})), "\n")
+		if marked := strings.Contains(text, "~ owner"); marked != tc.want {
+			t.Errorf("uid %d: owner marked %v:\n%s", tc.uid, marked, text)
+		}
+	}
+}
+
+// TestPanelImplied checks that a directory an archive doesn't list shows
+// no mode, owner or mtime, and none differs from the other side's.
+func TestPanelImplied(t *testing.T) {
+	dir := file(t, 0, 0o700, "2026-11-02 14:10:00")
+	dir.Mode = unix.S_IFDIR | 0o700
+	l := StatSide{Stat: dir, Entries: 1}
+	r := StatSide{Stat: &stat.Stat{Mode: unix.S_IFDIR | 0o755, Implied: true}, Entries: 1, InArchive: true}
+	scr := drawPanelsOn(14, 11, [2]StatSide{l, r})
+	text := strings.Join(panelRowsText(scr), "\n")
+	for _, label := range []string{"mode", "owner", "mtime"} {
+		var row string
+		for _, line := range panelRowsText(scr) {
+			if i := strings.LastIndex(line, " "+label+" │"); i >= 0 {
+				row = line[i:]
+			}
+		}
+		if !strings.Contains(row, "│ —") {
+			t.Errorf("%s: %q", label, row)
+		}
+	}
+	if strings.Contains(text, "newer") || strings.ContainsAny(text, "~#") {
+		t.Errorf("marked as differing:\n%s", text)
 	}
 }
 

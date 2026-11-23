@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"pxy.se/go/binate/internal/files"
+	"pxy.se/go/binate/internal/formats/archive"
 )
 
 // inputKind is what a command-line argument names.
@@ -29,14 +32,18 @@ const (
 	inputGit                       // a git revision, resolved by the child
 	inputWorkTree                  // the repository's work tree, resolved by the child
 	inputIndex                     // the repository's index, resolved by the child
+	inputArchive                   // an archive, a file or pipe, read by the child
 )
 
 // input is one side as given on the command line.
 type input struct {
-	// path is a path on disk, or of a side of git, what to compare in the
-	// repository: a revision, "." or ":".
+	// path is a path on disk, of an archive's file for an archive, or of a
+	// side of git, what to compare in the repository: a revision, "." or
+	// ":".
 	path string
 	kind inputKind
+	// format is an archive's format, its backend, as "tar".
+	format string
 	// repo is the directory a side of git in another repository than the
 	// current one is found from, and at where the argument's @ before
 	// what to compare is, else -1.
@@ -57,6 +64,40 @@ type inputs struct {
 
 // gitBackend is the backend of git sides, given as "git:" without --git.
 const gitBackend = "git"
+
+// archiveFormats are the formats of archives read, by the backends that
+// name them, given as "tar:" without --git, and their readers.
+var archiveFormats = map[string]archive.Reader{}
+
+// archiveBackends returns the backends of archives, sorted.
+func archiveBackends() []string {
+	return slices.Sorted(maps.Keys(archiveFormats))
+}
+
+// backendList returns the backends, of git and archives, as "git, tar
+// or zip".
+func backendList() string {
+	names := append([]string{gitBackend}, archiveBackends()...)
+	if len(names) == 1 {
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+}
+
+// archiveUsage returns the sides of archives as the usage lists them,
+// each followed by a comma, as "tar:file, ".
+func archiveUsage() string {
+	var b strings.Builder
+	for _, name := range archiveBackends() {
+		fmt.Fprintf(&b, "%s:file, ", name)
+	}
+	return b.String()
+}
+
+// isArchive reports whether the side is an archive, read by the child.
+func (i input) isArchive() bool {
+	return i.kind == inputArchive
+}
 
 // backendOf returns the backend an argument names a side of, before a
 // colon, as a URL's scheme: a letter, then letters, digits, "+", "-" and
@@ -142,7 +183,7 @@ func gitSide(arg string, at int, git bool) input {
 // parseInputs returns the sides left and right name. With git, they are
 // sides of git, of the current repository or, by their paths, others,
 // found from base if relative. Without, they are paths, or sides of a
-// backend, of which git is the only one.
+// backend: git, or an archive's (see archiveFormats).
 func parseInputs(left, right string, git bool, base string) (inputs, error) {
 	var sides [2]input
 	var onDisk [2]bool
@@ -154,8 +195,15 @@ func parseInputs(left, right string, git bool, base string) (inputs, error) {
 		case !git && !ok:
 			onDisk[i] = true
 			continue
+		case !git && archiveFormats[name] != nil:
+			side, err := statArchive(arg, name)
+			if err != nil {
+				return inputs{}, err
+			}
+			sides[i] = side
+			continue
 		case !git && name != gitBackend:
-			return inputs{}, fmt.Errorf("%s: unknown backend %q: give a path with a colon as ./%s, or a revision with --git", arg, name, arg)
+			return inputs{}, fmt.Errorf("%s: unknown backend %q, not %s: give a path with a colon as ./%s, or a revision with --git", arg, name, backendList(), arg)
 		}
 		at, err := splitRepo(arg, repoStart(arg, git), base)
 		if err != nil {
@@ -252,6 +300,32 @@ func statInput(path string) (input, error) {
 	return input{}, fmt.Errorf("%s: not a directory, which binate compares, or /dev/null for an empty one", path)
 }
 
+// archivePath returns the path of the archive arg, of backend, as tar:,
+// names, with a leading "~" expanded, as the shell leaves it after "tar:".
+func archivePath(arg, backend string) string {
+	return expandHome(arg[len(backend)+1:])
+}
+
+// statArchive returns the side of backend, an archive's, arg names: a file,
+// or a pipe, as from a process substitution, following symlinks. A
+// directory, a device or a socket is refused.
+func statArchive(arg, backend string) (input, error) {
+	path := archivePath(arg, backend)
+	if path == "" {
+		return input{}, fmt.Errorf("%s: no archive after %s:, as %s:old.%s", arg, backend, backend, backend)
+	}
+	info, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return input{}, fmt.Errorf("%s: %w", path, files.UnwrapPath(err))
+	case info.Mode().IsRegular() || info.Mode()&fs.ModeNamedPipe != 0:
+		return input{path: path, kind: inputArchive, format: backend, at: -1}, nil
+	case info.IsDir():
+		return input{}, fmt.Errorf("%s: a directory: give it without the %s: prefix", path, backend)
+	}
+	return input{}, fmt.Errorf("%s: not a file or a pipe, which %s: reads an archive from", path, backend)
+}
+
 // isNull reports whether info is of the null device, character device 1:3
 // on Linux.
 func isNull(info fs.FileInfo) bool {
@@ -264,7 +338,7 @@ func isNull(info fs.FileInfo) bool {
 }
 
 // inputCodes are the letters encode gives each kind of input.
-const inputCodes = "dngwi"
+const inputCodes = "dngwia"
 
 // encode returns the kinds of both sides, and where each side of git in
 // another repository has the @ after its directory, or -1, for the child,
@@ -301,6 +375,13 @@ func decodeInputs(left, right, code string, git bool) (inputs, error) {
 			continue
 		case at >= 0:
 			return inputs{}, fmt.Errorf("invalid input kinds %q", code)
+		case kind == inputArchive:
+			name, ok := backendOf(args[i])
+			if git || !ok || archiveFormats[name] == nil {
+				return inputs{}, fmt.Errorf("invalid input kinds %q", code)
+			}
+			sides[i] = input{path: archivePath(args[i], name), kind: kind, format: name, at: -1}
+			continue
 		}
 		sides[i] = input{path: args[i], kind: kind, at: -1}
 	}

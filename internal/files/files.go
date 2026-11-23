@@ -8,6 +8,7 @@ package files
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"strconv"
@@ -283,6 +284,42 @@ func OpenRegularAt(dir int, path string, follow bool) (*os.File, error) {
 	return regularFile(fd, path)
 }
 
+// ErrNotStream is the error opening what is neither a regular file nor a
+// pipe, to read as a stream.
+var ErrNotStream = errors.New("not a file or a pipe")
+
+// OpenStream opens path, following symlinks, for reading only if it is a
+// regular file or a pipe, as a FIFO or a process substitution's
+// /dev/fd/N. What it checks is what it opens: a device put in its place
+// is never opened. A pipe is opened without waiting for a FIFO's writer,
+// which may come only once another is read, and read through Go's poller,
+// for Close to end a read that waits for more: read it with PipeReader.
+func OpenStream(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return nil, &os.PathError{Op: "stat", Path: path, Err: err}
+	}
+	switch st.Mode & unix.S_IFMT {
+	case unix.S_IFREG, unix.S_IFIFO:
+	default:
+		return nil, &os.PathError{Op: "open", Path: path, Err: ErrNotStream}
+	}
+	flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOCTTY
+	if st.Mode&unix.S_IFMT == unix.S_IFIFO {
+		flags |= unix.O_NONBLOCK
+	}
+	f, err := reopen(fd, path, flags)
+	if err != nil && err != ErrNoProc {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return f, err
+}
+
 // regularFile opens fd, an O_PATH descriptor of path, which it closes,
 // for reading if it is a regular file. What it checks is what it opens,
 // though path may have changed since: a device put in its place is never
@@ -321,6 +358,71 @@ func reopen(fd int, path string, flags int) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(rfd), path), nil
+}
+
+// PipeReader returns a reader of f, a pipe OpenStream opened, which waits
+// for a FIFO's writer, as reading one opened to wait for it would, rather
+// than taking there being none yet for its end. A FIFO opened without
+// waiting reports a hangup only once a writer has come and gone, and a
+// pipe of a process substitution once its writers are gone.
+func PipeReader(f *os.File) io.Reader {
+	return &pipeReader{f: f}
+}
+
+type pipeReader struct {
+	f *os.File
+}
+
+func (p *pipeReader) Read(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	rc, err := p.f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	var readErr error
+	err = rc.Read(func(fd uintptr) bool {
+		for {
+			n, readErr = unix.Read(int(fd), b)
+			switch {
+			case readErr == unix.EINTR:
+				continue
+			case readErr == unix.EAGAIN:
+				// A writer, but nothing written yet.
+				return false
+			case readErr != nil || n > 0:
+				return true
+			}
+			// No writer: the end, once one has been, or none yet. One may
+			// have come, written and gone since the read, which leaves
+			// data, read again, before the hangup.
+			fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+			var err error
+			for {
+				if _, err = unix.Poll(fds, 0); err != unix.EINTR {
+					break
+				}
+			}
+			switch {
+			case err != nil:
+				return true
+			case fds[0].Revents&unix.POLLIN != 0:
+				continue
+			}
+			return fds[0].Revents&unix.POLLHUP != 0
+		}
+	})
+	switch {
+	case err != nil:
+		return 0, err
+	case readErr != nil:
+		return 0, os.NewSyscallError("read", readErr)
+	case n == 0:
+		return 0, io.EOF
+	}
+	return n, nil
 }
 
 // UnwrapPath returns the error of a *fs.PathError or *os.LinkError without

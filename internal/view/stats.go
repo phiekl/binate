@@ -87,18 +87,26 @@ type StatSide struct {
 	// Entries is a directory's number of entries found by the scan, or -1.
 	Entries int
 	// Path, if set, is the side's full path, shown first, and linked to
-	// unless the side is missing or in a revision.
+	// unless the side is missing, in a revision or in an archive.
 	Path string
 	// InRevision is set for a side in a git revision, which records only
 	// an entry's type, target, size and mode: the rest is left out, and
 	// the path, which names no file, is linked only by RepoPath.
 	InRevision bool
-	// BesideGit is set for a side on disk compared as git compares it:
-	// with a revision, as a work tree is, or a work tree with a directory.
-	// Its owner, links, inode and times but the modification time, which
+	// InArchive is set for a side in an archive, which records what a
+	// file system does, but has no file at the path, to link to, and
+	// no inode or birth time.
+	InArchive bool
+	// BesideGit is set for a side on disk, or in an archive, compared as
+	// git compares it: with a revision, as a work tree is, or a work tree
+	// with a directory. Its owner, links, inode and times but the modification time, which
 	// Git neither records nor compares, are left out, and its modification
 	// time isn't marked newer.
 	BesideGit bool
+	// Unrecorded are the attributes the side's root leaves out of some
+	// entry, as an archive made on Windows, its mode and owner: shown as
+	// "—", as none can be trusted.
+	Unrecorded scan.Attrs
 	// RepoPath, if set, of a side in a revision, is the entry's path from
 	// the top of the repository, as git commands take it, linked to from
 	// the part of Path after the revision and the colon.
@@ -159,7 +167,7 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 	if sd.Path != "" {
 		row := statRow{label: "path", value: display.Name(HomePath(sd.Path, home)), path: true, dim: sd.Missing}
 		switch {
-		case sd.Missing:
+		case sd.Missing, sd.InArchive:
 		case !sd.InRevision:
 			// Quoted, to paste into a command line, which also keeps
 			// controls out of the link.
@@ -223,25 +231,44 @@ func statRows(sd *StatSide, compare scan.Attrs, home string) []statRow {
 		plain("mode", "—", 0, 0)
 	} else {
 		plain("size", sizeValue(st, sd.Entries), sizeAttr, '|')
-		plain("mode", fmt.Sprintf("%04o", st.Mode&0o7777), scan.Mode, '~')
+		if sd.Unrecorded&scan.Mode != 0 || st.Implied {
+			plain("mode", "—", 0, 0)
+		} else {
+			plain("mode", fmt.Sprintf("%04o", st.Mode&0o7777), scan.Mode, '~')
+		}
 	}
 	if sd.InRevision {
 		return append(rows, changeRows(sd.Change)...)
 	}
 	if !sd.BesideGit {
-		field("owner", ownerValue(st, sd.User, sd.Group), scan.Owner, '~')
+		if sd.Unrecorded&scan.Owner != 0 || st.Implied {
+			plain("owner", "—", 0, 0)
+		} else {
+			field("owner", ownerValue(st, sd.User, sd.Group), scan.Owner, '~')
+			// Compared by its ids, as the tree compares it, whatever names
+			// each side has for them.
+			rows[len(rows)-1].key = fmt.Sprintf("%d:%d", st.Uid, st.Gid)
+		}
 		plain("links", fmt.Sprint(st.Nlink), 0, 0)
-		plain("inode", fmt.Sprint(st.Ino), 0, 0)
+		if !sd.InArchive {
+			plain("inode", fmt.Sprint(st.Ino), 0, 0)
+		}
 	}
-	plain("mtime", formatStatTime(st.Mtime, 0), scan.Mtime, '#')
-	// Compared to the nanosecond, as the tree compares it.
-	rows[len(rows)-1].key = fmt.Sprint(st.Mtime.UnixNano())
+	if st.Implied {
+		plain("mtime", "—", 0, 0)
+	} else {
+		plain("mtime", formatStatTime(st.Mtime, 0), scan.Mtime, '#')
+		// Compared to the nanosecond, as the tree compares it.
+		rows[len(rows)-1].key = fmt.Sprint(st.Mtime.UnixNano())
+	}
 	if sd.BesideGit {
 		return rows
 	}
 	plain("ctime", formatStatTime(st.Ctime, 0), 0, 0)
 	plain("atime", formatStatTime(st.Atime, 0), 0, 0)
-	plain("btime", formatStatTime(st.Btime, 0), 0, 0)
+	if !sd.InArchive {
+		plain("btime", formatStatTime(st.Btime, 0), 0, 0)
+	}
 	return rows
 }
 
@@ -451,15 +478,48 @@ func drawPanels(s *term.Screen, p Panes, y, rows int, sides [2]StatSide, compare
 				}
 			}
 		}
+		if l.Implied || r.Implied {
+			// A directory an archive doesn't list has no mode, owner or
+			// mtime to differ, as the tree compares none.
+			for i := range all {
+				for j := range all[i] {
+					switch all[i][j].label {
+					case "mode", "owner", "mtime":
+						all[i][j].compared = false
+					}
+				}
+			}
+		}
 		isFileOrLink := func(t uint32) bool { return t == unix.S_IFREG || t == unix.S_IFLNK }
 		bright = isFileOrLink(lt) || isFileOrLink(rt)
 		// Mtimes that differ within a second are shown with as much of the
 		// fraction as tells them apart, so that the mark, and which is
 		// newer, can be seen. A revision has no mtime to compare, and
-		// beside git the tree compares none.
+		// beside git the tree compares none. One recorded only to the
+		// second, or two, is compared as finely, as the tree compares it,
+		// and shown so unless that hides a difference, as between two
+		// archives, which are compared exactly.
 		mtimes := !sides[0].InRevision && !sides[1].InRevision &&
-			!sides[0].BesideGit && !sides[1].BesideGit
-		if digits := fractionDigits(l.Mtime, r.Mtime); mtimes && !l.Mtime.Equal(r.Mtime) && digits > 0 {
+			!sides[0].BesideGit && !sides[1].BesideGit && !l.Implied && !r.Implied
+		lm, rm := l.Mtime, r.Mtime
+		if p := max(l.MtimePrecision, r.MtimePrecision); p > 0 {
+			same := scan.SameMtime(lm, rm, l.MtimePrecision, r.MtimePrecision)
+			step := min(p, time.Second)
+			if tl, tr := lm.Truncate(step), rm.Truncate(step); same || !tl.Equal(tr) {
+				lm, rm = tl, tr
+			}
+			if same {
+				rm = lm
+			}
+			for i, t := range []time.Time{lm, rm} {
+				for j := range all[i] {
+					if all[i][j].label == "mtime" {
+						all[i][j].key = fmt.Sprint(t.UnixNano())
+					}
+				}
+			}
+		}
+		if digits := fractionDigits(lm, rm); mtimes && !lm.Equal(rm) && digits > 0 {
 			for i, t := range []time.Time{l.Mtime, r.Mtime} {
 				for j := range all[i] {
 					if all[i][j].label == "mtime" {
@@ -469,7 +529,7 @@ func drawPanels(s *term.Screen, p Panes, y, rows int, sides [2]StatSide, compare
 			}
 		}
 		if mtimes {
-			newer = [2]bool{l.Mtime.After(r.Mtime), r.Mtime.After(l.Mtime)}
+			newer = [2]bool{lm.After(rm), rm.After(lm)}
 		}
 	}
 	drawDividers(s, p, y, st)

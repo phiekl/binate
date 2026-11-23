@@ -84,7 +84,8 @@ waits for it.
   given as it is or through a symlink, as an empty tree opposite a directory on
   either side and opposite a revision's tree, but not on both sides. A pipe
   given as `/dev/fd/3`, a FIFO without a writer and `/dev/zero` are refused
-  without waiting.
+  without waiting. The combined archive size is known for regular files,
+  including zero-length files. A pipe makes the total unknown.
 - **Descriptors:** directories named by inherited descriptors as `/dev/fd/3`
   and `/dev/fd/4`, which keep their numbers in the child beside the socket.
 - **Colours:** warnings about `BINATE_COLORS` before the screen opens, escaped
@@ -137,19 +138,25 @@ waits for it.
   parser never panics and always uses up its input once the Esc timeout has
   passed.
 - **scan:** temporary trees with every state, the order of entries, excludes,
-  unreadable files and directories, both modes, files spanning several blocks, a
-  FIFO on either side (the scan must not block), devices, parsing `--compare`
-  lists, reclassifying a scanned tree with other attributes or quick mode
-  without reading, ignoring entries on one side only or of different types with
-  what is below them, and reporting contents never read, each attribute compared
-  or not, on files, symlinks and directories, the marks for each kind of
-  difference, directories marked by their own attributes alone, including after
-  a re-check, cancelling, the path last read, re-checking an entry after it is
-  edited, replaced by rename, or deleted on one or both sides, and statuses read
+  unreadable files and directories, both modes, files spanning several blocks,
+  a FIFO on either side (the scan must not block),
+  devices, parsing `--compare` lists, reclassifying a scanned tree with other
+  attributes or quick mode without reading, ignoring entries on one side only or
+  of different types with what is below them, and reporting contents never read,
+  each attribute compared or not, on files, symlinks and directories, the marks
+  for each kind of difference, directories marked by their own attributes alone,
+  including after a re-check, cancelling, the path last read, re-checking an
+  entry after it is edited, replaced by rename or deleted on one or both
+  sides, and statuses read
   for every entry of the side having them, left or right, with or without its
   entry, and again on a re-check, and entries recorded on neither side added,
   unmarked, except those excluded, and listed below a file that has some
   recorded below it.
+
+  Timestamp tests cover exact comparison, archive precision of 100 nanoseconds,
+  one microsecond, one second and two seconds, rounding in both directions and
+  dates centuries apart. Two archive timestamps are compared exactly. Implicit
+  archive directories have no attribute differences of their own.
 - **source:** reading through `source.Disk`: paths joined to the root, listing,
   symlinks followed only when asked, missing entries, and opening files, and the
   action cache keeping results only of files on disk, whose versions it can
@@ -201,6 +208,26 @@ waits for it.
   deleted are found on neither side, and those of a directory a staged file
   replaced below the file, also once it is deleted. Terminal tests open the diff
   on a file whose staged and on-disk contents differ.
+- **formats/archive:** Shared tests cover storing file contents sequentially
+  in the temporary file and preserving populated directories, or all
+  directories when `KeepDirectories` is enabled. `Puts` determines
+  whether an entry can be placed before its contents are stored. Directories
+  are listed and their links counted. A member beneath a symlink to a
+  directory follows the link if the format permits it. Otherwise the member
+  replaces the link with a directory.
+
+  A hard link shares the target's contents and link count. Unreadable and
+  directory targets produce an error, and a rejected hard link leaves the
+  link count unchanged. When a target name is replaced, its remaining hard
+  link counts only its own name. A symlink to a missing entry is left
+  unresolved. Marked entries can appear at their own path or at a missing
+  parent. They leave existing entries in place, give way to later entries
+  and contribute no links.
+
+  The mode returned by `Open` agrees with `Stat`, including in git mode.
+  A regular archive file is read directly. A pipe is copied into the
+  temporary file, and the copy's space can be freed after reading. Progress
+  counts distinct bytes, including for overlapping or out-of-order reads.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,
@@ -233,6 +260,14 @@ waits for it.
   screen shows the header of the side whose commit it is above both boxes, and
   going back restores the previous header. The commit picker opens a shared
   commit directly and lists the available sides when a choice is needed.
+  Attribute tests cover ignoring owners and times beside git and omitting
+  modes or owners absent from an archive.
+
+  The read screen shows loading progress, then opens the tree on success.
+  On failure, it hides the loading box and shows a side-specific error.
+  Any key, including Ctrl+c, closes the popup and ends the loop with the
+  error. If the terminal is already too small or shrinks below the minimum,
+  the loop ends immediately.
 - **diff:** side-by-side alignment, line ends (CR+LF throughout, mixed, lone CR,
   no final line feed), the size limit and binary input, and in-line changes,
   including the length cap and escapes inside changes. Fuzzing checks that every
@@ -245,30 +280,39 @@ waits for it.
   finishes, smoothly increasing counts without overshooting, the spinner turning
   while the count is unchanged, digit grouping, the path being read shortened in
   the middle, padding and the white-on-blue box, the compact layout, rescan
-  resets, path shortening, the panels' path row: home as ~, shortened in the
-  middle, escaped, linked in full, and dimmed without a link on a side without
-  the entry, the panels' marks between them and their colours, for each field,
-  only where compared, a regular file's size alone, mtimes within a second shown
-  with as much of the fraction as differs, and lined up past an error row, Help
-  drawn like the loading box, its keys in columns with the vim-like key first
-  and rules between the columns, its sections with their titles between lines
-  joining the rules, the selected row and moving it past titles and lines, and
-  the keys it lists, with Ctrl+c in both and Esc in the diff view's only when
-  opened from a tree, and the letters of a git status only with statuses, git
-  statuses before the types on either side in git's colours, said in words in an
-  empty cell on either side, once for an untracked directory, entries on neither
-  side dimmed, a deleted file kept untracked only by a file in its place, and in
-  the panel's git row, the Edit popup drawn like Help without rules, its
-  selection over the path alone, with escaped and shortened paths, the Compare
-  popup's rows, their boxes and highlighted letters, the diff view's panels
-  following the set, the red error popup with its text wrapped at spaces, at 80
-  columns where the screen is wide enough, and escaped, and more than one text
-  as a list, and the quit prompt as dialog(1) draws it, in full and compact,
-  with its focused button and the x of Exit. The diff view as drawn: collapsed
-  and full context, overlapping and separate context ranges, clipping at file
-  boundaries, very large context values, in-line and escape highlighting,
-  wrapping, scrolling sideways, change jumps, also from a block scrolled to by
-  hand, and keeping the position when the texts are reloaded.
+  resets and path shortening. The archive loading box shows the amount read
+  in binary units and, for a known total, the size and a percentage bar
+  filled in eighths of a cell.
+
+  The panels' path row shows home as `~`, shortens long paths in the middle
+  and links the full escaped path. A missing entry is dimmed and has no link.
+  Difference marks and their colours apply to fields being compared. Owner
+  marks use numeric IDs, and size marks
+  apply to regular files. Mtimes display the fractional digits needed to
+  show a difference. Tests cover the archive timestamp precision rules,
+  exact comparisons between archives and the absence of mode, owner and
+  mtime for implicit directories. The panels stay aligned across error rows.
+  Help is drawn like the loading box, its keys in columns with the vim-like
+  key first and rules between
+  the columns, its sections with their titles between lines joining the rules,
+  the selected row and moving it past titles and lines, and the keys it lists,
+  with Ctrl+c in both and Esc in the diff view's only when opened from a tree,
+  and the letters of a git status only with statuses, git statuses before the
+  types on either side in git's colours, said in words in an empty cell on
+  either side, once for an untracked directory, entries on neither side dimmed,
+  a deleted file kept untracked only by a file in its place, and in the panel's
+  git row, the Edit popup drawn like Help without rules, its selection over the
+  path alone, with escaped and shortened paths, the Compare popup's rows, their
+  boxes and highlighted letters, and attributes not recorded in git revisions or
+  in the archive, the diff view's panels following the set, the red error popup
+  with its text wrapped at spaces, at 80 columns where the screen is wide
+  enough, and escaped, and more than one text as a list, and the quit prompt as
+  dialog(1) draws it, in full and compact, with its focused button and the x of
+  Exit. The diff view as drawn: collapsed and full context, overlapping and
+  separate context ranges, clipping at file boundaries, very large context
+  values, in-line and escape highlighting, wrapping, scrolling sideways, change
+  jumps, also from a block scrolled to by hand, and keeping the position when
+  the texts are reloaded.
 - **colors:** `BINATE_COLORS` with every key, 256-colour and truecolour values,
   unknown keys, values with other characters, empty values, and `NO_COLOR`.
 - **landlock:** the restrictions themselves, and binate's policy, each in a

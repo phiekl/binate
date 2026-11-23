@@ -195,9 +195,8 @@ func (v *TreeView) drawLoading(s *term.Screen, st TreeStatus) {
 
 	// The spinner sits left of the count, the elapsed time at the right
 	// end of its line, and the path, if there is room, below.
-	const spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 	frames := []rune(spinner)
-	frame := frames[int(max(st.Elapsed, 0)/(80*time.Millisecond))%len(frames)]
+	frame := frames[int(max(st.Elapsed, 0)/spinnerFrame)%len(frames)]
 	textX, textW := x+6, max(w-9, 0)
 	rows := min(2, h-2)
 	top := y + 1 + (h-2-rows)/2
@@ -211,6 +210,12 @@ func (v *TreeView) drawLoading(s *term.Screen, st TreeStatus) {
 		s.Text(textX, top+1, textW, path, dim, rowEscape(v.Styles.Escape, accent))
 	}
 }
+
+// spinner is the loading box's spinner, a frame each spinnerFrame.
+const (
+	spinner      = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	spinnerFrame = 80 * time.Millisecond
+)
 
 // entries counts entries in words.
 func entries(n int64) string {

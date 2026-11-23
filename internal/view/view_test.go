@@ -1132,7 +1132,7 @@ func TestDiffMarkStyles(t *testing.T) {
 }
 
 func TestComparePopup(t *testing.T) {
-	c := NewComparePopup(scan.DefaultAttrs, false, 0)
+	c := NewComparePopup(scan.DefaultAttrs, false, 0, 0)
 	scr := term.NewScreen(80, 24)
 	c.Draw(scr, colors.Default())
 	text := scr.String()
@@ -1155,7 +1155,7 @@ func TestComparePopup(t *testing.T) {
 		t.Errorf("selected %v", c.Attr())
 	}
 	// Attributes the sides don't record are shown as such.
-	git := NewComparePopup(scan.DefaultAttrs&^scan.Owner, false, scan.Owner|scan.Mtime)
+	git := NewComparePopup(scan.DefaultAttrs&^scan.Owner, false, scan.Owner|scan.Mtime, scan.Owner|scan.Mtime)
 	gitScr := term.NewScreen(80, 24)
 	git.Draw(gitScr, colors.Default())
 	for _, want := range []string{
@@ -1165,6 +1165,19 @@ func TestComparePopup(t *testing.T) {
 	} {
 		if !strings.Contains(gitScr.String(), want) {
 			t.Errorf("popup without %q:\n%s", want, gitScr.String())
+		}
+	}
+	// Those an archive doesn't record are shown as its, beside git's.
+	archive := NewComparePopup(scan.DefaultAttrs&^(scan.Mode|scan.Owner), false, scan.Mode|scan.Owner|scan.Mtime, scan.Owner|scan.Mtime)
+	archiveScr := term.NewScreen(80, 24)
+	archive.Draw(archiveScr, colors.Default())
+	for _, want := range []string{
+		"[-]  mode      not recorded in the archive",
+		"[-]  owner     not recorded in git revisions",
+		"[-]  mtime     not recorded in git revisions",
+	} {
+		if !strings.Contains(archiveScr.String(), want) {
+			t.Errorf("popup without %q:\n%s", want, archiveScr.String())
 		}
 	}
 	// Each row's letter is highlighted, as the quit prompt's x: l in

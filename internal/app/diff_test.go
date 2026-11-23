@@ -204,6 +204,37 @@ func TestEditIndex(t *testing.T) {
 	}
 }
 
+// recorderRoot is an archive that leaves out modes, owners or both.
+type recorderRoot struct {
+	source.Root
+	modes, owners bool
+}
+
+func (r recorderRoot) Unrecorded() (modes, owners bool) { return r.modes, r.owners }
+func (recorderRoot) Archive() string                    { return "zip" }
+
+// TestUnrecordedAttrs checks the attributes not compared: those git
+// records neither of beside a side of git, and those an archive leaves
+// out, which don't make a side compared as git compares it.
+func TestUnrecordedAttrs(t *testing.T) {
+	disk := source.Disk("a")
+	for _, tc := range []struct {
+		name        string
+		left, right source.Root
+		want        scan.Attrs
+		besideGit   bool
+	}{
+		{"on disk", disk, disk, 0, false},
+		{"beside git", source.GitModes{Disk: disk}, disk, scan.Owner | scan.Mtime, true},
+		{"no owners", recorderRoot{disk, false, true}, disk, scan.Owner, false},
+		{"neither", disk, recorderRoot{disk, true, true}, scan.Mode | scan.Owner, false},
+	} {
+		if got := unrecordedAttrs(tc.left, tc.right); got != tc.want || besideGit(tc.left, tc.right) != tc.besideGit {
+			t.Errorf("%s: %v, beside git %t", tc.name, got, besideGit(tc.left, tc.right))
+		}
+	}
+}
+
 // indexRoot is a side in an index.
 type indexRoot struct{ source.Root }
 

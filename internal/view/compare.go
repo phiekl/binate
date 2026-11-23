@@ -58,15 +58,18 @@ const firstCompareRow = 2
 type ComparePopup struct {
 	*Help
 	// unrecorded are the attributes the sides don't record, as a git
-	// revision has no owners or times: shown as such, and never compared.
-	unrecorded scan.Attrs
+	// revision has no owners or times, or a zip archive made on Windows
+	// no modes or owners: shown as such, and never compared. Of them, git
+	// leaves out those in byGit.
+	unrecorded, byGit scan.Attrs
 }
 
 // NewComparePopup returns the popup for the attributes compare and quick
 // mode, with the first row selected, of sides that don't record the
-// attributes unrecorded.
-func NewComparePopup(compare scan.Attrs, quick bool, unrecorded scan.Attrs) *ComparePopup {
-	c := &ComparePopup{&Help{Plain: true}, unrecorded}
+// attributes unrecorded, those in byGit as git doesn't, and the others
+// as an archive doesn't.
+func NewComparePopup(compare scan.Attrs, quick bool, unrecorded, byGit scan.Attrs) *ComparePopup {
+	c := &ComparePopup{&Help{Plain: true}, unrecorded, byGit}
 	c.Set(compare, quick)
 	c.Selected = firstCompareRow
 	return c
@@ -83,7 +86,11 @@ func (c *ComparePopup) Set(compare scan.Attrs, quick bool) {
 		l := HelpLine{Keys: []string{box}, Text: fmt.Sprintf("%-9s %s", r.name, r.what), Hot: strings.IndexRune(r.name, r.key) + 1}
 		if r.attr&c.unrecorded != 0 {
 			l.Keys[0] = "[-]"
-			l.Text = fmt.Sprintf("%-9s %s", r.name, "not recorded in git revisions")
+			why := "not recorded in the archive"
+			if r.attr&c.byGit != 0 {
+				why = "not recorded in git revisions"
+			}
+			l.Text = fmt.Sprintf("%-9s %s", r.name, why)
 		}
 		if r.attr == scan.Content && compare&scan.Content != 0 && quick {
 			l.Keys[0] = "[q]"

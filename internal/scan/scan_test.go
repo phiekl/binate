@@ -174,6 +174,92 @@ func TestExcludes(t *testing.T) {
 	}
 }
 
+// TestSameMtime checks mtimes compared as finely as one is recorded:
+// exactly, to the second, as tar truncates them, or to two, as zip tools
+// round a DOS time up or down, and two recorded so exactly, as extracting
+// them makes them.
+func TestSameMtime(t *testing.T) {
+	base := time.Unix(1700000000, 0)
+	for _, tc := range []struct {
+		r         time.Time
+		precision time.Duration
+		want      bool
+	}{
+		{base, 0, true},
+		{base.Add(time.Nanosecond), 0, false},
+		{base.Add(99 * time.Nanosecond), 100 * time.Nanosecond, true},
+		{base.Add(100 * time.Nanosecond), 100 * time.Nanosecond, false},
+		// Apart by less than precision across its step, as a PAX record
+		// from floating point rounds up.
+		{base.Add(-50 * time.Nanosecond), 100 * time.Nanosecond, true},
+		{base.Add(999 * time.Nanosecond), time.Microsecond, true},
+		{base.Add(-999 * time.Nanosecond), time.Microsecond, true},
+		{base.Add(time.Microsecond), time.Microsecond, false},
+		// Centuries apart, more than a time.Duration holds, either way.
+		{time.Date(1700, 1, 1, 0, 0, 0, 0, time.UTC), time.Microsecond, false},
+		{time.Date(2400, 1, 1, 0, 0, 0, 0, time.UTC), time.Microsecond, false},
+		{base.Add(999 * time.Millisecond), time.Second, true},
+		{base.Add(time.Second), time.Second, false},
+		{base.Add(-time.Nanosecond), time.Second, false},
+		{base.Add(time.Second + 999*time.Millisecond), 2 * time.Second, true},
+		{base.Add(-time.Second), 2 * time.Second, true},
+		{base.Add(2 * time.Second), 2 * time.Second, false},
+		{base.Add(-2 * time.Second), 2 * time.Second, false},
+	} {
+		if got := SameMtime(base, tc.r, 0, tc.precision); got != tc.want {
+			t.Errorf("%v and %v to %v: %t, want %t", base, tc.r, tc.precision, got, tc.want)
+		}
+	}
+	// Seconds further apart than an int64 holds, either way, as PAX
+	// records can put them, also at the ends of the Unix seconds they can
+	// hold, with a fraction, which time.Time's own seconds, from the year
+	// 1, wrap past, and Before orders the other way.
+	for _, ends := range [][2]time.Time{
+		{time.Unix(-1<<62, 0), time.Unix(1<<62, 0)},
+		{time.Unix(-1<<63, 500_000_000), time.Unix(1<<63-1, 500_000_000)},
+	} {
+		early, late := ends[0], ends[1]
+		for _, precision := range []time.Duration{time.Microsecond, time.Second, 2 * time.Second} {
+			if SameMtime(early, late, 0, precision) || SameMtime(late, early, precision, 0) {
+				t.Errorf("%d and %d seconds to %v: the same", early.Unix(), late.Unix(), precision)
+			}
+		}
+	}
+	// The last second time.Time holds, 1<<63-1 since the year 1, with a
+	// fraction, is the same as itself, and as one less than precision
+	// before it, but not further.
+	last := time.Unix(1<<63-1-62135596800, 999_999_999)
+	for _, tc := range []struct {
+		r    time.Time
+		want bool
+	}{
+		{last, true},
+		{last.Add(-999 * time.Nanosecond), true},
+		{last.Add(-time.Microsecond), false},
+	} {
+		if SameMtime(last, tc.r, 0, time.Microsecond) != tc.want || SameMtime(tc.r, last, time.Microsecond, 0) != tc.want {
+			t.Errorf("%v and %v to a microsecond: not %t", last, tc.r, tc.want)
+		}
+	}
+	// Both recorded less finely, as in two archives, they are the same
+	// only exactly: a second apart to the second and to two, as tar and
+	// unzip would extract them, or two seconds apart to two each.
+	for _, tc := range []struct {
+		r      time.Time
+		lp, rp time.Duration
+		want   bool
+	}{
+		{base, time.Second, 2 * time.Second, true},
+		{base.Add(time.Second), time.Second, 2 * time.Second, false},
+		{base.Add(-2 * time.Second), 2 * time.Second, 2 * time.Second, false},
+		{base.Add(time.Nanosecond), time.Microsecond, time.Microsecond, false},
+	} {
+		if SameMtime(base, tc.r, tc.lp, tc.rp) != tc.want || SameMtime(tc.r, base, tc.rp, tc.lp) != tc.want {
+			t.Errorf("%v and %v to %v and %v: not %t", base, tc.r, tc.lp, tc.rp, tc.want)
+		}
+	}
+}
+
 func TestQuickMode(t *testing.T) {
 	left := tree(t, map[string]string{"same": "abc", "touched": "abc", "size": "abc", "content": "abc"})
 	right := tree(t, map[string]string{"same": "abc", "touched": "abc", "size": "abcd", "content": "abd"})
@@ -510,6 +596,26 @@ func TestCompareOwner(t *testing.T) {
 		classify(n, Options{Compare: Content})
 		if n.State != Pending {
 			t.Errorf("owner not compared: state %c", n.State.Mark())
+		}
+	}
+}
+
+// TestCompareImplied checks that a directory an archive doesn't list,
+// on either side, has no mode, owner or mtime to differ.
+func TestCompareImplied(t *testing.T) {
+	dir := Side{Kind: Dir, Perm: 0o700, Uid: 1000, Gid: 1000, Mtime: time.Unix(1700000000, 0)}
+	implied := Side{Kind: Dir, Perm: 0o755, Implied: true}
+	for _, tc := range []struct {
+		name string
+		l, r Side
+		want Attrs
+	}{
+		{"listed", dir, Side{Kind: Dir, Perm: 0o755}, Mode | Owner | Mtime},
+		{"left implied", implied, dir, 0},
+		{"right implied", dir, implied, 0},
+	} {
+		if got := attrsDiffer(&tc.l, &tc.r, DefaultAttrs|Mtime); got != tc.want {
+			t.Errorf("%s: %v differ, want %v", tc.name, got, tc.want)
 		}
 	}
 }
