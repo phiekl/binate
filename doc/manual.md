@@ -426,17 +426,21 @@ Three actions of the Actions popup, **a**, act on the commit that last changed
 the selected entry, the one its panel shows: **Commit message**, its key **m**,
 shows it, **Commit diff**, **d**, compares the trees before and after it, and
 **Commit stat**, **s**, counts the lines it changed. The diff view has them too:
-there, **a** opens a popup listing these three alone. If the sides' commits
-differ, a box like the one of [Editing](#editing), titled **Select side's commit
-to show**, **to compare** or **to count**, lists each side's commit, abbreviated
-to 12 digits, and its subject: **h** or **Left** takes the left one, **l** or
-**Right** the right one, **Enter** or **Space** the selected one, and **Esc**
-closes it. Going back from the side chosen opens the box again, that side
-selected, to choose the other; closing it, or going back from a commit taken at
-once, opens the Actions popup again, the action selected. If only one side has a
-commit, as when the other is missing, it is taken at once, and the status bar
-says which; with none, a red box says why. While the commits are still being
-found, the status bar says so, and nothing is shown.
+there, **a** opens a popup listing these three alone. If both sides share the
+same commit, the action opens it directly. Otherwise, a picker titled
+**Select side's commit to show**, **to compare** or **to count** lists the
+available commits with their 12-digit abbreviations and subjects.
+
+Press **h** or **Left** for the left side, **l** or **Right** for the right
+side, or **Enter** or **Space** for the selected side. If only one side has a
+commit, the picker lists it and explains why the other side is unavailable.
+The unavailable side's key does nothing. If neither side has a commit, an
+error box explains why. While the commits are being looked up, the status bar
+shows that the lookup is in progress.
+
+Going back from a commit you chose reopens the picker with that side selected.
+Pressing **Esc** in the picker or going back from a shared commit returns to
+the Actions popup with the original action selected.
 
 **Commit message** shows it as **git show --no-patch** does, in git's medium
 format: **commit** and its object name, **Merge:** and its parents abbreviated
@@ -1004,19 +1008,20 @@ lines, the whole file is shown.
 view, in your editor: **VISUAL**, or else **EDITOR** (see
 [Environment](#environment)). It is the only way **binate** changes a file.
 
-If both sides can be edited, a box like Help, titled **Select side to edit**,
-lists both paths after their keys (home as **~**, shortened in the middle when
-long, escaped), with the left one selected. **h** or **Left** opens the left
+A box like Help, titled **Select side to edit**, lists the paths of the sides
+that can be edited after their keys (home as **~**, shortened in the middle when
+long, escaped), with the first one selected. **h** or **Left** opens the left
 file at once, and **l** or **Right** the right one. **j**, **k**, **Down**,
 **Up** and the other keys that move through Help move the selection, and
 **Enter** or **Space** opens the selected file. **Esc** or **e** closes the box
 without editing, and other keys are ignored meanwhile. A side can be edited only
-if it is an existing regular file. Directories, missing sides, symlinks and
-**/dev/null** cannot be edited. If only one side can be edited, **e** opens it
-directly and the status bar says which. If neither can, or neither **VISUAL**
-nor **EDITOR** is set, a red box titled **Unable to edit** says why. If editing
-fails, as when the editor can't be started or exits with an error status, one
-titled **Failed to edit** does. Any key closes it, without acting on the screen
+if it is an existing regular file. Directories, missing sides, symlinks
+and **/dev/null** cannot be edited. If only one side can be
+edited, the box lists it and shows a dimmed explanation for the unavailable
+side. The unavailable side's key does nothing. If neither side can be edited
+or there is no editor configured, a red box titled **Unable to edit** says
+why. If the editor fails to start or exits with an error status, the box is
+titled **Failed to edit**. Any key closes it without acting on the screen
 behind. **Ctrl+c** closes it and asks to quit.
 
 The editor is run by the unrestricted parent (see [Process

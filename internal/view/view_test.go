@@ -910,7 +910,7 @@ func TestEntriesAndDigits(t *testing.T) {
 func TestEditPopup(t *testing.T) {
 	st := colors.Default()
 	scr := term.NewScreen(80, 24)
-	e := NewEditPopup("/home/u", "/home/u/a/f.txt", "/b/new\nline.txt")
+	e := NewEditPopup("/home/u", "/home/u/a/f.txt", "/b/new\nline.txt", [2]string{})
 	e.Draw(scr, st)
 	got := scr.String()
 	// Like Help: the title above a line, then the keys and the paths, set
@@ -956,12 +956,29 @@ func TestEditPopup(t *testing.T) {
 	}
 	// A long path is shortened in the middle to fit.
 	small := term.NewScreen(40, 10)
-	NewEditPopup("", "/a/"+strings.Repeat("x", 60)+"/end.txt", "/b").Draw(small, st)
+	NewEditPopup("", "/a/"+strings.Repeat("x", 60)+"/end.txt", "/b", [2]string{}).Draw(small, st)
 	if s := small.String(); !strings.Contains(s, "…") || !strings.Contains(s, "end.txt") {
 		t.Errorf("long path:\n%s", s)
 	}
 	if e.Side() != 0 {
 		t.Errorf("side %d first", e.Side())
+	}
+
+	scr = term.NewScreen(80, 24)
+	// With one side editable, only it is listed, and selected, and why the
+	// other isn't, dimmed, below it.
+	one := NewEditPopup("", "/a/f", "/b/f", [2]string{"in a git revision", ""})
+	one.Draw(scr, st)
+	got = scr.String()
+	if strings.Contains(got, "/a/f") || !strings.Contains(got, "│  l →  /b/f") || !strings.Contains(got, "│  The left side is in a git revision.") {
+		t.Errorf("one side:\n%s", got)
+	}
+	ox, oy, _, _, _ := one.box(scr)
+	if c := scr.Cell(ox+3, oy+4); c.R != 'T' || c.Style != st.Accent.With(term.Dim) {
+		t.Errorf("reason %+v", c)
+	}
+	if one.Side() != 1 || one.Offers(0) || !one.Offers(1) {
+		t.Errorf("one side: side %d, offers %t, %t", one.Side(), one.Offers(0), one.Offers(1))
 	}
 }
 

@@ -402,16 +402,15 @@ func (d *DiffScreen) actionKey(k term.Key) {
 // editor changed anything, the diff view shows what is on disk now.
 func (d *DiffScreen) startEdit() {
 	sides := [2]EditSide{d.left.editSide(), d.right.editSide()}
-	ed, why := d.app.Edit(sides, d.home, func(note string) {
+	ed, why := d.app.Edit(sides, d.home, func() {
 		if err := d.Load(); err != nil {
 			d.ShowError(err)
 		}
-		d.view.Notice = note
+		d.view.Notice = ""
 		if d.edited != nil {
 			d.edited()
 		}
 	})
-	// With one side editable, the edit is done by now, and its notice set.
 	d.edit = ed
 	if why != nil {
 		d.app.ShowError(unableToEdit, why...)

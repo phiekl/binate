@@ -62,7 +62,7 @@ func TestTextView(t *testing.T) {
 
 func TestSidePopup(t *testing.T) {
 	scr := term.NewScreen(80, 24)
-	NewSidePopup("Select side's commit", display.Name("abc first"), display.Name("def second")).Draw(scr, colors.Default())
+	NewSidePopup("Select side's commit", display.Name("abc first"), display.Name("def second"), [2]string{}).Draw(scr, colors.Default())
 	got := scr.String()
 	for _, want := range []string{"│  Select side's commit", "│  h ←  abc first", "│  l →  def second"} {
 		if !strings.Contains(got, want) {

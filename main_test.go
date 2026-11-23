@@ -1013,14 +1013,17 @@ func TestEditInTree(t *testing.T) {
 		t.Errorf("editor given %q", got)
 	}
 
-	// One side only: edited at once, with a note. Deleted: gone.
+	// One side only: the popup lists it alone, and l doesn't edit the
+	// other. Deleted: gone.
 	pt.Write("*")
 	screen("  other.txt")
 	pt.Write("\x1b[F")
 	e.do("delete")
 	pt.Write("e")
-	screen("edited the left side, as the right side is missing")
-	// The note shows until the next key.
+	if scr := screen("The right side is missing."); !strings.Contains(scr, "h ←") || strings.Contains(scr, "l →") {
+		t.Errorf("popup for the left side:\n%s", scr)
+	}
+	pt.Write("l\r")
 	pt.Write("k")
 	screen("[1 identical] [1 contents]")
 	if _, err := os.Stat(filepath.Join(left, "other.txt")); !os.IsNotExist(err) {
@@ -1101,7 +1104,7 @@ func TestEditInDiffView(t *testing.T) {
 }
 
 // TestEditOppositeNothing checks that /dev/null, nothing, can't be
-// edited: a file opposite it is edited at once.
+// edited: the popup lists only the file opposite it.
 func TestEditOppositeNothing(t *testing.T) {
 	e := newFakeEditor(t)
 	dir := writeFiles(t, map[string]string{"b.txt": "two\n"})
@@ -1110,8 +1113,11 @@ func TestEditOppositeNothing(t *testing.T) {
 	screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
 	screen("[1 right]")
 	pt.Write("e")
-	screen("edited the right side, as the left side is missing")
-	pt.Write("\r")
+	if scr := screen("Select side to edit"); strings.Contains(scr, "h ←") || !strings.Contains(scr, "l →") {
+		t.Errorf("popup for the right side:\n%s", scr)
+	}
+	// Enter edits it, and the next opens the diff view.
+	pt.Write("\r\r")
 	screen("+ │1 changed")
 	quit(t, pt, offset, "x")
 	if code := pt.Exit(); code != 0 {
@@ -2122,13 +2128,16 @@ func TestGitSideAndDirectory(t *testing.T) {
 	screen := func(want string) string { return pt.WaitScreen(100, 30, offset, want) }
 	scr := screen("[1 identical] [1 left] [1 right] [1 contents]")
 	checkHeader(t, pt, offset, scr, [2]string{"(git)", repo}, [2]string{"(dir)", dir})
-	// The revision's side can't be edited, and the directory's is at once.
+	// The revision's side can't be edited, and the popup lists only the
+	// directory's.
 	pt.Write("n")
 	screen("HEAD~:dir/changed")
 	e.do(`write:one\ntwo\n`)
 	pt.Write("e")
-	screen("edited the right side, as the left side is in a git revision")
-	// The note shows until the next key.
+	if scr := screen("The left side is in a git revision."); strings.Contains(scr, "h ←") || !strings.Contains(scr, "l →") {
+		t.Errorf("popup for the right side:\n%s", scr)
+	}
+	pt.Write("l")
 	pt.Write("k")
 	screen("[2 identical] [1 left] [1 right]")
 	real, err := filepath.EvalSymlinks(filepath.Join(dir, "dir", "changed"))

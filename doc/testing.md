@@ -93,8 +93,9 @@ waits for it.
   rewrites it by renaming a new file over it, and deletes it. The tree's marks
   and counts and the diff view's contents follow, and a file deleted from the
   diff view says so in its box. The popup shows both paths, opens the one
-  selected with Down and Enter, ignores other keys and closes on Esc and e. One
-  editable side is edited at once with a note. Directories, `/dev/null` and a
+  selected with Down and Enter, ignores other keys and closes on Esc and e. With
+  one editable side it lists that side alone, says why the other can't be
+  edited and ignores the other side's key. Directories, `/dev/null` and a
   missing editor are refused with a reason in a red popup, which any key closes
   without reaching the tree.
 - **Arguments:** usage errors, a missing terminal, `--help`, `-V` and
@@ -110,12 +111,12 @@ waits for it.
   from a directory in none, relative to `-C`, and of different object formats,
   and `git:` sides without `-g`, each with the header saying what each side is
   and linking to it. A revision against a directory on disk, whose files have
-  the modes Git records whatever theirs, editing the directory's side at once. A
-  work tree against a directory, both on disk, compares no times even when
-  asked. Two work trees, the same index on both sides, also through a symlink, a
-  directory in no repository, a revision naming a file and `-q` with a `git:`
-  side are refused, and a `git:` side under `-g` fails with a hint to drop the
-  prefix.
+  the modes Git records for comparison, and the edit picker offers only the
+  directory side. A work tree against a directory, both on disk, compares no
+  times even when asked. Two work trees, the same index on both sides, also
+  through a symlink, a directory in no repository, a revision naming a file and
+  `-q` with a `git:` side are refused, and a `git:` side under `-g` fails with a
+  hint to drop the prefix.
 
 ## Package tests
 
@@ -230,7 +231,8 @@ waits for it.
   Help navigation and closing without passing the key through, and Esc clearing
   the filter. Both screens leave q, Space and Backspace unbound. A commit's
   screen shows the header of the side whose commit it is above both boxes, and
-  going back shows the screen's again.
+  going back restores the previous header. The commit picker opens a shared
+  commit directly and lists the available sides when a choice is needed.
 - **diff:** side-by-side alignment, line ends (CR+LF throughout, mixed, lone CR,
   no final line feed), the size limit and binary input, and in-line changes,
   including the length cap and escapes inside changes. Fuzzing checks that every

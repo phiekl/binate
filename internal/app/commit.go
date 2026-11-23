@@ -77,25 +77,31 @@ type commitPicker struct {
 	closed func()
 }
 
-// pickCommit runs run on one of sides' commits: at once if only one has
-// one, or both the same, with a note on which if they differ; else it
-// returns the popup choosing. With none, it returns why, for the error
-// popup.
-func pickCommit(sides [2]commitSide, title string, run func(cs commitSide, note string)) (*commitPicker, []string) {
+// pickCommit runs run on one of sides' commits: at once if both have the
+// same, as there is nothing to choose; else it returns the popup choosing,
+// listing only the sides with one, and why the other has none, so that
+// it is plain whose commit is shown. With none, it returns why, for the
+// error popup.
+func pickCommit(sides [2]commitSide, title string, run func(cs commitSide)) (*commitPicker, []string) {
 	l, r := sides[0], sides[1]
 	switch {
 	case l.root != nil && r.root != nil && l.ch.ID == r.ch.ID:
-		run(l, "")
-	case l.root != nil && r.root != nil:
+		run(l)
+	case l.root != nil || r.root != nil:
+		var labels [2][]display.Glyph
+		var why [2]string
+		for i, cs := range sides {
+			if cs.root != nil {
+				labels[i] = commitLabel(cs.ch)
+			} else {
+				why[i] = cs.why
+			}
+		}
 		return &commitPicker{
-			popup: view.NewSidePopup(title, commitLabel(l.ch), commitLabel(r.ch)),
+			popup: view.NewSidePopup(title, labels[0], labels[1], why),
 			sides: sides,
-			run:   func(cs commitSide) { run(cs, "") },
+			run:   run,
 		}, nil
-	case l.root != nil:
-		run(l, "the left side's commit, as the right side is "+r.why)
-	case r.root != nil:
-		run(r, "the right side's commit, as the left side is "+l.why)
 	case l.why == r.why:
 		return nil, []string{"Neither side is " + strings.TrimPrefix(l.why, "not ") + "."}
 	default:
@@ -110,7 +116,7 @@ func commitLabel(ch source.Change) []display.Glyph {
 }
 
 // Key handles a key while the popup is open, and reports whether it's
-// still open: h and l, or Left and Right, choose a side, the keys that
+// still open: h and l, or Left and Right, choose a side listed, the keys that
 // move through Help move the selection, Enter or Space choose the selected
 // side, and Esc closes it.
 func (p *commitPicker) Key(s *term.Screen, k term.Key) bool {
@@ -119,10 +125,10 @@ func (p *commitPicker) Key(s *term.Screen, k term.Key) bool {
 		p.choose(p.popup.Side())
 		return false
 	case listKey(p.popup.Help, s, k):
-	case k == term.Rune('h') || k == term.Key{Code: term.KeyLeft}:
+	case (k == term.Rune('h') || k == term.Key{Code: term.KeyLeft}) && p.popup.Offers(0):
 		p.choose(0)
 		return false
-	case k == term.Rune('l') || k == term.Key{Code: term.KeyRight}:
+	case (k == term.Rune('l') || k == term.Key{Code: term.KeyRight}) && p.popup.Offers(1):
 		p.choose(1)
 		return false
 	case k.Code == term.KeyEsc:
@@ -136,7 +142,7 @@ func (p *commitPicker) Key(s *term.Screen, k term.Key) bool {
 
 // choose runs the side i, selected should the popup open again.
 func (p *commitPicker) choose(i int) {
-	p.popup.Selected = 2 + i
+	p.popup.Select(i)
 	p.run(p.sides[i])
 }
 
@@ -248,8 +254,8 @@ func (c commitView) start(a commitAction, ckey changeKey, changes *changeReader)
 	case commitStat:
 		show, title = commitView.showStat, statTitle
 	}
-	// Going back from a commit shown at once, or closing the popup
-	// choosing a side, opens the Actions popup again.
+	// Going back from a commit shown at once, the same on both sides, or
+	// closing the popup choosing a side, opens the Actions popup again.
 	direct := c
 	if c.reopen != nil {
 		direct.back = func() {
@@ -257,7 +263,7 @@ func (c commitView) start(a commitAction, ckey changeKey, changes *changeReader)
 			c.reopen()
 		}
 	}
-	picker, why := pickCommit(sides, title, func(cs commitSide, note string) { show(direct, cs, note) })
+	picker, why := pickCommit(sides, title, func(cs commitSide) { show(direct, cs) })
 	if picker != nil {
 		picker.closed = c.reopen
 	}
@@ -269,7 +275,7 @@ func (c commitView) start(a commitAction, ckey changeKey, changes *changeReader)
 				c.back()
 				c.repick(picker)
 			}
-			show(cv, cs, "")
+			show(cv, cs)
 		}
 	}
 	if why != nil {
@@ -278,48 +284,43 @@ func (c commitView) start(a commitAction, ckey changeKey, changes *changeReader)
 	return picker, ""
 }
 
-// showMessage shows the commit cs as "git show" does, without its diff,
-// with note in the status bar.
-func (c commitView) showMessage(cs commitSide, note string) {
-	if ts := c.messageScreen(cs, note); ts != nil {
+// showMessage shows the commit cs as "git show" does, without its diff.
+func (c commitView) showMessage(cs commitSide) {
+	if ts := c.messageScreen(cs); ts != nil {
 		c.enter(cs)
 		c.app.Main = ts
 	}
 }
 
 // messageScreen returns the screen showing the commit cs as "git show"
-// does, without its diff, with note in the status bar, or nil, having
-// shown why in the error popup, if it can't be read.
-func (c commitView) messageScreen(cs commitSide, note string) *TextScreen {
+// does, without its diff, or nil, having shown why in the error popup, if
+// it can't be read.
+func (c commitView) messageScreen(cs commitSide) *TextScreen {
 	text, err := cs.root.ShowChange(cs.ch.ID)
 	if err != nil {
 		c.app.ShowError(showFailed, errorTexts(err)...)
 		return nil
 	}
 	// A line apart from the title, as the stat.
-	return c.textScreen(cs, note, append([]string{""}, strings.Split(strings.TrimSuffix(text, "\n"), "\n")...))
+	return c.textScreen(cs, append([]string{""}, strings.Split(strings.TrimSuffix(text, "\n"), "\n")...))
 }
 
 // textScreen returns the screen showing lines of the commit cs, titled by
-// it, with note in the status bar.
-func (c commitView) textScreen(cs commitSide, note string, lines []string) *TextScreen {
+// it.
+func (c commitView) textScreen(cs commitSide, lines []string) *TextScreen {
 	v := &view.TextView{
 		Styles: c.styles, Lead: "(commit) ", Title: commitLabel(cs.ch),
 		Lines: lines,
-	}
-	if note != "" {
-		v.Notice = "showing " + note
 	}
 	return &TextScreen{app: c.app, view: v, back: c.back}
 }
 
 // showStat shows the files the commit cs changed as "git show --stat
-// --summary" does, without the message but a blank line before them,
-// with note in the status bar, once
+// --summary" does, without the message but a blank line before them, once
 // their lines are counted, in the background.
-func (c commitView) showStat(cs commitSide, note string) {
+func (c commitView) showStat(cs commitSide) {
 	// A line apart from the title, as git's stat from the message.
-	ts := c.textScreen(cs, note, []string{""})
+	ts := c.textScreen(cs, []string{""})
 	c.enter(cs)
 	c.app.Main = ts
 	ts.view.SetTail(func(int) []string { return []string{" counting the lines changed…"} })
@@ -340,9 +341,8 @@ type statLoad struct {
 }
 
 // showTrees compares the trees before and after the commit cs, its first
-// parent's with its own, with note in the status bar, and the entry
-// selected in them.
-func (c commitView) showTrees(cs commitSide, note string) {
+// parent's with its own, and the entry selected in them.
+func (c commitView) showTrees(cs commitSide) {
 	before, after, parents, err := cs.root.ChangeTrees(cs.ch.ID)
 	if err != nil {
 		c.app.ShowError(showFailed, errorTexts(err)...)
@@ -355,10 +355,7 @@ func (c commitView) showTrees(cs commitSide, note string) {
 	if p, ok := cs.root.RepoPath(cs.rel); ok && p != "." {
 		t.selectPath = p
 	}
-	switch {
-	case note != "":
-		t.message = "comparing " + note
-	case parents > 1:
+	if parents > 1 {
 		t.message = fmt.Sprintf("comparing with the first of %d parents", parents)
 	}
 	c.enter(cs)

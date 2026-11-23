@@ -24,7 +24,8 @@ type HelpLine struct {
 	// Hot, if not 0, is the position in Text, plus one, of a letter that
 	// is a key for the row, highlighted as the quit prompt's x.
 	Hot int
-	// Dim dims the text, as for a choice that is unavailable.
+	// Dim dims the text, as for a choice that is unavailable, or a row
+	// without keys, which is then a note rather than a title.
 	Dim bool
 }
 
@@ -366,7 +367,12 @@ func (h *Help) Draw(s *term.Screen, st colors.Styles) {
 		}
 		bold, rule := keyStyle.With(term.Bold), st.Border.On(keyStyle)
 		if !l.selectable() {
-			label(0, row, l.Text, bold)
+			if l.Dim {
+				// A note, as why a side isn't offered.
+				label(0, row, l.Text, style.With(term.Dim))
+			} else {
+				label(0, row, l.Text, bold)
+			}
 			continue
 		}
 		label(0, row, l.Keys[0], bold)

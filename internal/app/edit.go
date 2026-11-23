@@ -90,10 +90,9 @@ func editRestriction(root source.Root) string {
 	return ""
 }
 
-// EditDone is called after the editor exits, with a note on which side
-// was edited, if the popup was skipped and the edit succeeded. An error
-// editing has been shown in the error popup by then.
-type EditDone func(note string)
+// EditDone is called after the editor exits. An error editing has been
+// shown in the error popup by then.
+type EditDone func()
 
 // editor is an edit in progress: the popup, then the request.
 type editor struct {
@@ -103,10 +102,11 @@ type editor struct {
 	done  EditDone
 }
 
-// Edit starts editing one of sides. With both editable, it returns the
-// popup's editor; with one, it edits that side at once; with none, or no
-// editor set, it returns why, for the error popup: sides that can't be
-// edited for different reasons as a list.
+// Edit starts editing one of sides. With either editable, it returns the
+// popup's editor, the popup listing only those that are, so that none
+// seems edited that isn't, and why the other isn't. With none, or no editor set, it returns why,
+// for the error popup: sides that can't be edited for different reasons
+// as a list.
 func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []string) {
 	// Setting an editor wouldn't help.
 	if sides[0].Why == notOnDisk && sides[1].Why == notOnDisk {
@@ -122,17 +122,9 @@ func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []st
 	if !a.HasEditor {
 		return nil, []string{"Environment variable VISUAL or EDITOR must be set."}
 	}
-	e := &editor{app: a, sides: sides, done: done}
-	switch {
-	case sides[0].Why == "" && sides[1].Why == "":
-		e.popup = view.NewEditPopup(home, sides[0].Path, sides[1].Path)
-		return e, nil
-	case sides[0].Why == "":
-		e.run(0, "edited the left side, as the right side is "+sides[1].Why)
-		return nil, nil
-	case sides[1].Why == "":
-		e.run(1, "edited the right side, as the left side is "+sides[0].Why)
-		return nil, nil
+	if sides[0].Why == "" || sides[1].Why == "" {
+		return &editor{app: a, sides: sides, done: done,
+			popup: view.NewEditPopup(home, sides[0].Path, sides[1].Path, [2]string{sides[0].Why, sides[1].Why})}, nil
 	}
 	why := "Neither side is a regular file"
 	l, r := sides[0].Why, sides[1].Why
@@ -146,20 +138,20 @@ func (a *App) Edit(sides [2]EditSide, home string, done EditDone) (*editor, []st
 }
 
 // Key handles a key while the popup is open, and reports whether it's
-// still open: h and l, or Left and Right, edit a side, the keys that move
-// through Help move the selection, and Enter or Space edit the selected
-// side. Other keys are ignored.
+// still open: h and l, or Left and Right, edit a side the popup lists, the
+// keys that move through Help move the selection, and Enter or Space edit
+// the selected side. Other keys are ignored.
 func (e *editor) Key(k term.Key) bool {
 	switch {
 	case k == term.Key{Code: term.KeyEnter} || k == term.Rune(' '):
-		e.run(e.popup.Side(), "")
+		e.run(e.popup.Side())
 		return false
 	case listKey(e.popup.Help, e.app.screen, k):
-	case k == term.Rune('h') || k == term.Key{Code: term.KeyLeft}:
-		e.run(0, "")
+	case (k == term.Rune('h') || k == term.Key{Code: term.KeyLeft}) && e.popup.Offers(0):
+		e.run(0)
 		return false
-	case k == term.Rune('l') || k == term.Key{Code: term.KeyRight}:
-		e.run(1, "")
+	case (k == term.Rune('l') || k == term.Key{Code: term.KeyRight}) && e.popup.Offers(1):
+		e.run(1)
 		return false
 	case k == term.Rune('e') || k.Code == term.KeyEsc:
 		return false
@@ -173,8 +165,8 @@ func (e *editor) Draw(s *term.Screen, st colors.Styles) {
 }
 
 // run has the parent edit side i, with the terminal released, and calls
-// done afterwards with note.
-func (e *editor) run(i int, note string) {
+// done afterwards.
+func (e *editor) run(i int) {
 	side := supervise.Left
 	if i == 1 {
 		side = supervise.Right
@@ -185,9 +177,8 @@ func (e *editor) run(i int, note string) {
 	})
 	if err != nil {
 		e.app.ShowError(editFailed, errorTexts(err)...)
-		note = ""
 	}
 	if e.done != nil {
-		e.done(note)
+		e.done()
 	}
 }

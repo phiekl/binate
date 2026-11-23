@@ -231,6 +231,18 @@ func TestEditPopupKeys(t *testing.T) {
 	if e.Key(term.Key{Code: term.KeyEsc}) {
 		t.Error("Esc left the popup open")
 	}
+
+	// With one side editable, the popup lists it alone, and the keys of
+	// the other are ignored.
+	e, why = a.Edit([2]EditSide{{Path: "/a/f", Why: notOnDisk}, {Path: "/b/f"}}, "", nil)
+	if e == nil {
+		t.Fatalf("no popup for one side: %q", why)
+	}
+	for _, k := range []term.Key{term.Rune('h'), {Code: term.KeyLeft}, term.Rune('j'), term.Rune('k')} {
+		if !e.Key(k) || e.popup.Side() != 1 {
+			t.Errorf("%v: open, side %d", k, e.popup.Side())
+		}
+	}
 }
 
 // Opposite a side of git, owners and times are not compared, as in the

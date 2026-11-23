@@ -72,23 +72,30 @@ func TestPickCommit(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		sides  [2]commitSide
-		ran    string // the commit run at once, and its note
-		note   string
-		popup  bool
+		ran    string // the commit run at once
+		popup  []int  // the sides the popup lists
 		errors []string
 	}{
-		{"the same", [2]commitSide{c("a"), c("a")}, "a", "", false, nil},
-		{"different", [2]commitSide{c("a"), c("b")}, "", "", true, nil},
-		{"left", [2]commitSide{c("a"), none("missing")}, "a", "the left side's commit, as the right side is missing", false, nil},
-		{"right", [2]commitSide{none(notInCommit), c("b")}, "b", "the right side's commit, as the left side is " + notInCommit, false, nil},
-		{"neither", [2]commitSide{none(notInCommit), none(notInCommit)}, "", "", false, []string{"Neither side is in a git commit."}},
-		{"neither, why not differs", [2]commitSide{none(notInCommit), none("x")}, "", "", false,
+		{"the same", [2]commitSide{c("a"), c("a")}, "a", nil, nil},
+		{"different", [2]commitSide{c("a"), c("b")}, "", []int{0, 1}, nil},
+		{"left", [2]commitSide{c("a"), none("missing")}, "", []int{0}, nil},
+		{"right", [2]commitSide{none(notInCommit), c("b")}, "", []int{1}, nil},
+		{"neither", [2]commitSide{none(notInCommit), none(notInCommit)}, "", nil, []string{"Neither side is in a git commit."}},
+		{"neither, why not differs", [2]commitSide{none(notInCommit), none("x")}, "", nil,
 			[]string{"Neither side has a commit:", "The left side is " + notInCommit + ".", "The right side is x."}},
 	} {
-		var ran, note string
-		p, why := pickCommit(tt.sides, "title", func(cs commitSide, n string) { ran, note = cs.ch.ID, n })
-		if ran != tt.ran || note != tt.note || (p != nil) != tt.popup || !slices.Equal(why, tt.errors) {
-			t.Errorf("%s: ran %q, note %q, popup %v, errors %q", tt.name, ran, note, p != nil, why)
+		var ran string
+		p, why := pickCommit(tt.sides, "title", func(cs commitSide) { ran = cs.ch.ID })
+		var listed []int
+		if p != nil {
+			for i := range 2 {
+				if p.popup.Offers(i) {
+					listed = append(listed, i)
+				}
+			}
+		}
+		if ran != tt.ran || !slices.Equal(listed, tt.popup) || (p != nil) != (tt.popup != nil) || !slices.Equal(why, tt.errors) {
+			t.Errorf("%s: ran %q, popup %v listing %v, errors %q", tt.name, ran, p != nil, listed, why)
 		}
 	}
 }
@@ -109,7 +116,7 @@ func TestCommitPickerKeys(t *testing.T) {
 		{[]term.Key{term.Key{Code: term.KeyEsc}}, ""},
 	} {
 		var ran string
-		p, _ := pickCommit(sides, "title", func(cs commitSide, _ string) { ran = cs.ch.ID })
+		p, _ := pickCommit(sides, "title", func(cs commitSide) { ran = cs.ch.ID })
 		for i, k := range tt.keys {
 			if open := p.Key(s, k); open != (i < len(tt.keys)-1) {
 				t.Errorf("%v: open %v after %v", tt.keys, open, k)
@@ -130,12 +137,12 @@ func TestShowMessage(t *testing.T) {
 	back := false
 	cv := commitView{app: a, styles: colors.Default(), back: func() { back = true }}
 	root := fakeChanges{"/r"}
-	cv.showMessage(commitSide{root: root, ch: source.Change{ID: "abc", Subject: "subject"}}, "the left side's commit")
+	cv.showMessage(commitSide{root: root, ch: source.Change{ID: "abc", Subject: "subject"}})
 	ts, ok := a.Main.(*TextScreen)
 	if !ok {
 		t.Fatalf("Main is %T", a.Main)
 	}
-	if !slices.Equal(ts.view.Lines, []string{"", "commit abc"}) || ts.view.Notice != "showing the left side's commit" {
+	if !slices.Equal(ts.view.Lines, []string{"", "commit abc"}) || ts.view.Notice != "" {
 		t.Errorf("lines %q, notice %q", ts.view.Lines, ts.view.Notice)
 	}
 	if ts.Key(term.Rune('x')) {
@@ -155,7 +162,7 @@ func TestShowMessage(t *testing.T) {
 		t.Error("Esc didn't go back")
 	}
 	// A failure to show it is shown in the error popup.
-	cv.showTrees(commitSide{root: root, ch: source.Change{ID: "abc"}}, "")
+	cv.showTrees(commitSide{root: root, ch: source.Change{ID: "abc"}})
 	if a.errTitle != showFailed || a.Main != ts {
 		t.Errorf("error %q, Main %T", a.errTitle, a.Main)
 	}
@@ -245,7 +252,7 @@ func TestShowStat(t *testing.T) {
 		a.Main.Draw(scr)
 		return scr.String()
 	}
-	cv.showStat(commitSide{root: root, ch: source.Change{ID: "abc", Subject: "subject"}}, "")
+	cv.showStat(commitSide{root: root, ch: source.Change{ID: "abc", Subject: "subject"}})
 	ts := a.Main.(*TextScreen)
 	if got := text(60); !strings.Contains(got, "counting") {
 		t.Errorf("not counting:\n%s", got)
@@ -267,13 +274,13 @@ func TestShowStat(t *testing.T) {
 		t.Error("Esc didn't go back")
 	}
 	// A commit without files says so.
-	cv.showStat(commitSide{root: root, ch: source.Change{ID: "empty"}}, "")
+	cv.showStat(commitSide{root: root, ch: source.Change{ID: "empty"}})
 	wait(a.Main.(*TextScreen))
 	if got := text(60); !strings.Contains(got, "│  no files changed") {
 		t.Errorf("empty commit:\n%s", got)
 	}
 	// An error reading it is shown in the error popup.
-	cv.showStat(commitSide{root: root, ch: source.Change{ID: "bad"}}, "")
+	cv.showStat(commitSide{root: root, ch: source.Change{ID: "bad"}})
 	wait(a.Main.(*TextScreen))
 	if a.errTitle != showFailed || strings.Contains(text(60), "counting") {
 		t.Errorf("error %q:\n%s", a.errTitle, text(60))
@@ -295,8 +302,10 @@ func TestCommitHeader(t *testing.T) {
 	var changes changeReader
 	changes.app = a
 	key := changeKey{sides: [2]sideKey{{}, {root, "f"}}}
+	var picker *commitPicker
 	for deadline := time.Now().Add(5 * time.Second); ; {
-		if _, wait := cv.start(commitActions[0], key, &changes); wait == "" {
+		var wait string
+		if picker, wait = cv.start(commitActions[0], key, &changes); wait == "" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -304,6 +313,11 @@ func TestCommitHeader(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	// Only the right side has a commit, which the popup lists alone.
+	if picker == nil || !picker.Key(a.screen, term.Rune('h')) {
+		t.Fatal("no popup listing the right side")
+	}
+	picker.Key(a.screen, term.Rune('l'))
 	ts, ok := a.Main.(*TextScreen)
 	if !ok || ts == main {
 		t.Fatalf("Main is %T", a.Main)

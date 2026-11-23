@@ -353,12 +353,10 @@ func (t *TreeScreen) startEdit() {
 	if n == nil {
 		return
 	}
-	ed, why := t.app.Edit(sides, t.home, func(note string) {
+	ed, why := t.app.Edit(sides, t.home, func() {
 		t.statGen++
 		t.Recheck(path)
-		t.message = note
 	})
-	// With one side editable, the edit is done by now, and its message set.
 	t.edit = ed
 	if why != nil {
 		t.app.ShowError(unableToEdit, why...)
