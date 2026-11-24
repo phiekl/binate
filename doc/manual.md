@@ -27,6 +27,7 @@ anything. The man page,
 - [Inputs](#inputs)
 - [Options](#options)
 - [Git](#git)
+- [Tar archives](#tar-archives)
 - [Comparing](#comparing)
 - [Tree view](#tree-view)
 - [Diff view](#diff-view)
@@ -42,19 +43,19 @@ anything. The man page,
 
 ## Inputs
 
-*left* and *right* are directories. Symlinks given on the command line are
-followed. Every file in them is compared, also in a Git work tree. Git's ignore
+A directory path compares all files in that directory, even inside a Git
+work tree. Symlinks given on the command line are followed. Git's ignore
 rules apply only to a side read as a work tree, with **-g**, as **agitate** or
-as **git:**_repository_**@.** (see [Work tree](#work-tree)). **binate** compares
-no files on their own. Two files are for **diff**(1), or **git diff** for files
-in a repository.
+as **git:**_repository_**@.** (see [Work tree](#work-tree)). Use **diff**(1)
+or **git diff** to compare individual files.
 
-**/dev/null** stands for nothing, an empty directory, with everything on the
-other side shown as added or removed. It is told apart by what it is, the null
-device by any name, as through a symlink, without being opened. It can't be
-given on both sides. Any other input is refused without being opened, as a
-file, a pipe, a process substitution such as **<(**_command_**)**, a FIFO,
-another device or a socket.
+**/dev/null** represents an empty directory, so everything on the other side
+appears as added or removed. Any path to the null device works, including a
+symlink. Only one side can be the null device.
+
+Use **tar:** to identify a file, FIFO or process substitution such
+as **<(**_command_**)** as an archive. Other devices and sockets are refused
+without opening them.
 
 An input may be named by a file descriptor **binate** inherits, as **/dev/fd/3**
 given with **3<**_directory_, and is then the directory that descriptor is open
@@ -62,15 +63,16 @@ on. Descriptors keep their numbers in the child, and those **binate** passes it
 besides take free ones.
 
 Without **-g**, an argument starting with a backend's name and a colon, as
-**git:~/src/app@main**, is a side read by that backend instead of a path. The
-name is a letter followed by letters, digits, **+**, **-** and **.**, as a URL's
-scheme is. **git** is the only backend, and any other name is an error. A path
-of that form, as a directory named **notes:old**, is given as **./notes:old**. A
-revision of the current repository, as **HEAD:src**, takes **-g**. With
-**git:**, the rest names a repository's directory and, after an **@**, a
-revision, its work tree or its index (see
-[Other repositories](#other-repositories)). The other argument may be a
-directory, **/dev/null** or another backend's side.
+**git:~/src/app@main** or **tar:old.tar**, is a side read by that backend
+instead of a path. The name is a letter followed by letters, digits, **+**,
+**-** and **.**, as a URL's scheme is. The backends are **git** and **tar**.
+Any other name is an error. A path of that form, as a directory
+named **notes:old**, is given as **./notes:old**. A revision of the current
+repository, as **HEAD:src**, takes **-g**. With **git:**, the rest names a
+repository's directory and, after an **@**, a revision, its work tree or its
+index (see [Other repositories](#other-repositories)). With **tar:**, it names a
+file or pipe holding a [tar archive](#tar-archives). Either side can use one
+of these prefixes, a directory path or **/dev/null**.
 
 ## Options
 
@@ -99,7 +101,10 @@ next arguments are *left* and *right* even if they start with a dash.
   - **device**: a device's major and minor number.
   - **mode**: the permission bits, with setuid, setgid and sticky.
   - **owner**: the user and group, by number.
-  - **mtime**: the modification time, to the nanosecond.
+  - **mtime** is the modification time. Comparisons use nanosecond precision
+    for two filesystem entries. When one side is an archive, the precision
+    depends on how the timestamp was stored. See [Tar archives](#tar-archives).
+    Two archive timestamps are compared exactly.
 
 - **-U**, **--unified** *n*: Show *n* lines of context around changes in the
   collapsed diff view (default 3), as **diff -U** and **git diff -U** do. Must
@@ -475,6 +480,111 @@ parents. The trees are those of any other revisions: their entries have their
 own last changes, and the commit actions and **Enter** work in them too.
 **Esc**, once nothing else is left to close, goes back to the view they were
 opened from, and the comparison is cancelled.
+
+## Tar archives
+
+Use **tar:**_file_, as in **tar:old.tar**, to compare a tar archive with a
+directory, **/dev/null**, a git tree or another archive. **binate** detects
+compression from the archive's first bytes. It accepts uncompressed tar and
+gzip, bzip2, xz, lzma, zstd and lz4 compression, including the frame and legacy
+lz4 formats.
+
+A valid tar header takes precedence over a compression signature because the
+header begins with a file name. Detection checks the first ten bytes for
+bzip2 and validates the full lzma header. Zstd and lz4 streams can begin with
+skippable frames. Errors name recognised but unsupported compression, such as
+lzop or compress, or supported compression that contains something other than
+a tar archive. The reader handles concatenated gzip members and ignores zero
+padding after the last member. It also ignores trailing bytes after the last
+bzip2 stream if those bytes do not begin another stream.
+
+**binate** expands **~** and **~/** after **tar:** itself. With **-g**, an
+argument beginning **tar:** is a git revision expression, as on a branch
+named **tar**.
+
+### Reading archives
+
+A pipe or process substitution lets you compare a tree from another host or
+container without first saving the archive to a file.
+
+```
+$ binate tar:<(ssh host tar -C /etc -c .) /etc
+$ binate tar:<(docker export web) tar:<(docker export web-staging)
+```
+
+If either archive comes from a pipe, **binate** reads both concurrently so one
+producer can finish writing either side first. It reads two archive files in
+sequence. If a read fails, it stops reading the other archive. Opening a FIFO
+doesn't wait for a writer. The loading screen stays active while the read
+waits, and **Ctrl+c** opens the quit prompt. A directory, device, socket or
+zero-byte input is rejected. A valid empty tar archive represents an empty
+tree.
+
+The child reads the archive before scanning the tree. The loading box shows
+elapsed time, the entry count, the bytes read and the current path. It also
+shows a progress bar and total size when the total is known. The child keeps
+entry metadata in memory and copies file contents into an unnamed temporary
+file in **TMPDIR** (default **/tmp**). Its disk usage is roughly the size of
+the uncompressed contents, with holes for blocks of zeros. The kernel frees
+it when **binate** exits. For a large archive, consider a different **TMPDIR**
+such as **/var/tmp** if **/tmp** is backed by memory.
+
+A read error opens a box titled **Unable to read the left side** or **Unable
+to read the right side**. Pressing any key closes the box, prints the error
+and exits with status 2. On a terminal too small for the box, **binate**
+prints the error and exits immediately. Once an archive has loaded, **r**
+rescans the loaded tree. Changes to the archive file require a new session.
+
+### Tar entries and metadata
+
+**binate** drops a leading **/** or **./** from entry names. An entry with a
+**..** component appears as an error under the name GNU **tar** reports. For
+example, **a/../x** appears as **x**. If a parent directory is missing, the
+error appears there. These errors leave existing entries in place and give
+way to valid entries added later. A directory holding only these errors
+counts as empty when deciding whether another entry can replace it. For
+hard-link targets, **binate** drops everything through the last **..**.
+Entry names are read the same way with **GODEBUG=tarinsecurepath=0**, with
+which Go's tar reader reports absolute names and names with **..** as
+errors.
+
+**binate** creates any parent directories the archive leaves implicit. The
+panels show **—** for their mode, owner and time, and those attributes are
+excluded from comparisons. Later entries replace earlier entries with the
+same path. Repeating a directory entry preserves its contents, and a
+non-directory entry can replace a directory only if the directory is empty.
+Volume labels are skipped. An entry of a type GNU **tar** doesn't recognise
+is read as a regular file with its contents, as GNU **tar** extracts it. A
+file continued from another volume appears as an error, as GNU **tar**
+refuses to extract it. **binate** doesn't join volumes, and a volume that
+ends inside a file, as all but the last of a set do, ends early, as GNU
+**tar** reports it. A Solaris extended header (type **X**) is skipped.
+GNU **tar** applies its records to the next entry, but **binate** doesn't.
+
+A hard link refers to the target as it existed when the link was read, and
+keeps that target even if a later entry replaces its name. Each name counts
+towards the link count. The target can be any entry type except a directory.
+If the target is missing when the link is read, the panel shows an error.
+
+Paths beneath symlinks to directories resolve through those symlinks,
+including paths used as hard-link targets. If a symlink points to a file, a
+missing entry, an absolute path or through **..**, a member beneath the link
+replaces the link with a directory. A member beneath a regular file also
+replaces that file with a directory. Symlinks with empty targets are skipped.
+
+Global PAX owner and time fields apply to subsequent entries unless an entry
+has its own value. The panels use recorded owner names where available and
+compare owners by numeric ID. Archive entries have no inode number or birth
+time to show. When comparing against a git side, **binate** uses the modes git
+records. The edit picker offers eligible files on disk only.
+
+Tar archives generally store timestamps in whole seconds. POSIX tar (PAX)
+can store fractional seconds. When comparing an archive with disk, **binate**
+compares whole-second timestamps by their seconds and treats fractional
+timestamps less than a microsecond apart as equal. The tolerance accounts for
+tools such as Python's **tarfile**, which may round a fractional timestamp
+when writing the archive. This applies to **--compare +mtime** and **-q**.
+Two archive timestamps are compared exactly.
 
 ## Comparing
 
@@ -1015,8 +1125,8 @@ file at once, and **l** or **Right** the right one. **j**, **k**, **Down**,
 **Up** and the other keys that move through Help move the selection, and
 **Enter** or **Space** opens the selected file. **Esc** or **e** closes the box
 without editing, and other keys are ignored meanwhile. A side can be edited only
-if it is an existing regular file. Directories, missing sides, symlinks
-and **/dev/null** cannot be edited. If only one side can be
+if it is an existing regular file. Directories, missing sides, symlinks,
+**/dev/null** and files in archives cannot be edited. If only one side can be
 edited, the box lists it and shows a dimmed explanation for the unavailable
 side. The unavailable side's key does nothing. If neither side can be edited
 or there is no editor configured, a red box titled **Unable to edit** says
@@ -1164,6 +1274,9 @@ escapes unambiguous.
 
 - **HOME**: Paths under it are shown with **~**.
 
+- **TMPDIR** sets the directory for temporary archive data. It defaults to
+  **/tmp** when unset or empty. See [Reading archives](#reading-archives).
+
 ### Colours
 
 The keys of **BINATE_COLORS**, with their defaults:
@@ -1288,6 +1401,9 @@ The child restricts itself with Landlock before it reads any input:
   read before the restriction when a disk side is shown. A work-tree
   comparison also reads the user's global Git ignore configuration and rules
   before restricting access.
+- The child opens the archive and its temporary file before applying Landlock.
+  These open files need no additional rules. The child reads and decompresses
+  the archive after applying the sandbox.
 - With **-g** or a **git:** side, before applying the sandbox, the child
   resolves symlinks along each repository's starting directory, possibly
   reading links outside the repository, then finds each repository's top by

@@ -1243,6 +1243,25 @@ func TestInputsEncode(t *testing.T) {
 	if in.left.repo != dir || in.left.path != "HEAD" || in.right.kind != inputDir || in.right.repo != "" {
 		t.Errorf("git side and directory: %+v", in)
 	}
+	// A side of tar is its archive's path, without tar:, which the child
+	// takes only as given with the backend of an archive, as its format,
+	// and without --git.
+	archive := filepath.Join(dir, "a.tar")
+	if err := os.WriteFile(archive, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in = gitIn("tar:"+archive, other, false)
+	if in.left.kind != inputArchive || in.left.format != "tar" || in.left.path != archive || in.encode() != "ad,-1,-1" {
+		t.Errorf("tar side: %+v, encoded %q", in.left, in.encode())
+	}
+	for _, tc := range []struct {
+		left string
+		git  bool
+	}{{archive, false}, {"git:" + archive, false}, {"tar:" + archive, true}, {"foo:" + archive, false}} {
+		if _, err := decodeInputs(tc.left, other, "ad,-1,-1", tc.git); err == nil {
+			t.Errorf("decoded %q as a side of an archive, with --git %v", tc.left, tc.git)
+		}
+	}
 	for _, code := range []string{"", "d", "ddd", "Dd", "ff", "xd", "gW", "dd,0,-1", "gg,1,-1", "gd,-2,-1", "dd,x,-1"} {
 		if _, err := decodeInputs("a@b", "b", code, false); err == nil {
 			t.Errorf("decodeInputs(%q) succeeded", code)

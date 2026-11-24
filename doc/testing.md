@@ -80,12 +80,12 @@ waits for it.
   confirms when git is installed.
 - **Diff view:** opened from the tree, with the paths in the panels, binary
   input, and a file on one side only.
-- **Inputs:** files refused, opposite a file or a directory, and `/dev/null`,
-  given as it is or through a symlink, as an empty tree opposite a directory on
-  either side and opposite a revision's tree, but not on both sides. A pipe
-  given as `/dev/fd/3`, a FIFO without a writer and `/dev/zero` are refused
-  without waiting. The combined archive size is known for regular files,
-  including zero-length files. A pipe makes the total unknown.
+- **Inputs:** Child input encoding preserves explicit `tar:` sides. The
+  default path mode refuses bare files, pipes, FIFOs and
+  `/dev/zero` without waiting. A bare `/dev/null` path or symlink represents
+  an empty tree opposite a directory or revision. It is refused on both
+  sides. The combined archive size is known for regular files, including
+  zero-length files. A pipe makes the total unknown.
 - **Descriptors:** directories named by inherited descriptors as `/dev/fd/3`
   and `/dev/fd/4`, which keep their numbers in the child beside the socket.
 - **Colours:** warnings about `BINATE_COLORS` before the screen opens, escaped
@@ -118,6 +118,33 @@ waits for it.
   through a symlink, a directory in no repository, a revision naming a file and
   `-q` with a `git:` side are refused, and a `git:` side under `-g` fails with a
   hint to drop the prefix.
+- **Tar archives:** The restricted child reads plain archives and archives
+  compressed with gzip, xz, lzma, zstd and lz4. The tests compare an archive
+  with its source tree, another directory, another archive and a revision
+  using git modes. They also read an archive from `/dev/fd/3`. The panels
+  use recorded owner names and omit inode numbers. The edit picker offers
+  the eligible disk file, and rescanning uses the loaded archive even if
+  the file has since changed. Whole-second archive mtimes match the source
+  tree with `+mtime` and `-q`.
+
+  The loading box shows the current entry, entry count and bytes read while
+  a pipe stalls, and Ctrl+c opens the quit prompt. It waits for a FIFO
+  writer and reports the path for an archive still being read. Two FIFOs
+  are read concurrently. The writer can send 2 MiB to the right before
+  writing to the left, or finish the left before opening the right. A
+  failure on one side stops a read waiting on the other.
+
+  The tests reject directories, devices, missing files, an empty `tar:`
+  argument, invalid tar data, lzop compression, gzipped text, zero-byte
+  input and a missing `TMPDIR` directory. Under `-g`, `tar:` starts a
+  revision expression. Read errors appear over the empty comparison
+  panels and are printed when the popup closes.
+
+  Pipe tests check that closing a stream opened by `files.OpenStream`
+  interrupts a pending read. `files.PipeReader` waits for the first FIFO
+  writer, reaches EOF after the writer closes and drains buffered data
+  when the writer has already closed. A 2,000-iteration test checks that a
+  byte written between the read and poll is returned before EOF.
 
 ## Package tests
 
@@ -228,6 +255,46 @@ waits for it.
   A regular archive file is read directly. A pipe is copied into the
   temporary file, and the copy's space can be freed after reading. Progress
   counts distinct bytes, including for overlapping or out-of-order reads.
+- **formats/tar:** Fixtures cover plain tar, gzip, bzip2, xz, lzma, zstd and
+  both lz4 formats. They include unusual lzma headers and skippable zstd
+  and lz4 frames, including a frame larger than the initial read. Tar
+  headers whose file names resemble a compression signature are read as
+  plain tar.
+
+  Stream tests cover concatenated gzip members, trailing gzip zero padding
+  and trailing bytes that do not start another bzip2 stream. They reject
+  other trailing gzip data and damaged or truncated bzip2 streams, even
+  after a complete tar archive. Read errors are propagated at the start,
+  after skippable frames, after a complete stream and after a padding byte.
+  Tests also cover garbage, false compression signatures, unsupported lzop
+  and old gzip formats, truncated skippable frames, truncated tar headers,
+  zero-byte input and valid empty tar archives.
+
+  Entry tests cover owner names, devices, mtime precision and global PAX
+  owner and time fields, including local overrides and removal of global
+  values. Implicit directories have no recorded metadata. Later entries
+  replace earlier ones while preserving populated directories. Tests
+  cover symlinks to directories, including chains and links to `.`, and
+  the replacement of symlinks to absolute paths, files or missing entries
+  when a member appears beneath them. Empty symlink targets are skipped.
+  Entries of unknown types are read as files with their contents, volume
+  labels and Solaris extended headers are skipped, and files continued from
+  another volume are shown as errors.
+
+  Hard links resolve against the entries already read, including through
+  other links and through symlinks to directories. A link keeps the old
+  entry when the target name is replaced. Tests cover links to symlinks,
+  missing and forward targets, absolute paths, `..`, loops and link
+  counts, including a link named as the root. Rejected entry names with
+  `..` are shown at the path GNU tar reports or at a missing parent. They
+  leave existing files in place and give way to later entries. Hard-link
+  targets with `..` are resolved after stripping the earlier components.
+  These names read the same with `GODEBUG=tarinsecurepath=0`.
+
+  The temporary file is unnamed, and holes left for zero blocks read
+  back as zeros. Progress counts input bytes before decompression, entries
+  and the last path. Fuzzing uses the compressed fixtures and exercises
+  each entry in archives that open.
 - **tree:** hiding identical entries, expansion of all directories or just the
   selected subtree, collapsing the selected subtree or the one holding a file,
   the selection returning once shown again, paging, difference jumps (stops,

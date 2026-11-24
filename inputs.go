@@ -21,6 +21,7 @@ import (
 
 	"pxy.se/go/binate/internal/files"
 	"pxy.se/go/binate/internal/formats/archive"
+	"pxy.se/go/binate/internal/formats/tar"
 )
 
 // inputKind is what a command-line argument names.
@@ -67,7 +68,9 @@ const gitBackend = "git"
 
 // archiveFormats are the formats of archives read, by the backends that
 // name them, given as "tar:" without --git, and their readers.
-var archiveFormats = map[string]archive.Reader{}
+var archiveFormats = map[string]archive.Reader{
+	"tar": tar.Read,
+}
 
 // archiveBackends returns the backends of archives, sorted.
 func archiveBackends() []string {

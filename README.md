@@ -86,6 +86,17 @@ Repeating this follows a file back through its history, one change at a time.
           file's last commit details"
      width="800">
 
+### Tar archives
+
+Use `tar:archive` on either side to compare an archive with a directory, a
+git revision or another archive. Tar archives can be uncompressed
+or compressed with gzip, bzip2, xz, lzma, zstd or lz4. Use a pipe or process
+substitution to compare a tree from another host or a container without first
+saving the archive to a file.
+
+binate keeps the archived file contents in an unnamed temporary file in
+`TMPDIR` (default `/tmp`) and uses the metadata the archive records.
+
 ### Read-only, escaped output and Landlock sandbox
 
 binate never changes files itself. Press `e` to open a file in your editor.
@@ -162,6 +173,14 @@ Without `-g`, a `git:` side compares a revision with any directory:
 $ binate git:~/src/project@v1.0 /mnt/project
 ```
 
+Compare a release archive with its source tree or compare a remote host's
+`/etc` with your local copy.
+
+```
+$ binate tar:app-1.0.tar.gz ~/src/app
+$ binate tar:<(ssh host tar -C /etc -c .) /etc
+```
+
 Press `?` to list the current screen's key bindings, or run `binate --help` to
 list command-line options. [binate(1)](doc/binate.1.md) summarises both, and the
 [manual](doc/manual.md) describes everything in detail.
@@ -201,9 +220,11 @@ footer date defaults to the last commit date of its Markdown source. Set
 `MAN_DATE=YYYY-MM-DD` when building without Git metadata.
 
 binate has no TUI library: the terminal layer is written on `golang.org/x/term`
-and `golang.org/x/sys`. `go-landlock` provides the sandbox. The line diff is
-Go's `internal/diff`, changed to return line operations (BSD-3-Clause, see
-[LICENSES](LICENSES)).
+and `golang.org/x/sys`. `go-landlock` provides the sandbox. For archive
+decompression, binate uses `ulikunitz/xz` for xz and lzma,
+`klauspost/compress` for zstd, `pierrec/lz4` for lz4 and Go's standard library
+for gzip and bzip2. The line diff is Go's `internal/diff`, changed to
+return line operations (BSD-3-Clause, see [LICENSES](LICENSES)).
 
 See [doc/CONTRIBUTING.md](doc/CONTRIBUTING.md) for conventions and
 [doc/testing.md](doc/testing.md) for what the tests cover.

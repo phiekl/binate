@@ -69,7 +69,8 @@ FUZZ_TESTS := \
 	display:FuzzContent display:FuzzContentPartial display:FuzzName display:FuzzStderr display:FuzzShellQuote \
 	term:FuzzParseKey diff:FuzzLines diff:FuzzInline \
 	git:FuzzParseTree git:FuzzLooseHeader git:FuzzApplyDelta git:FuzzParseEntry git:FuzzIndex \
-	git:FuzzParseConfig git:FuzzResolve git:FuzzCommitGraph
+	git:FuzzParseConfig git:FuzzResolve git:FuzzCommitGraph \
+	formats/tar:FuzzRead
 # All are run, failing at the end if any failed.
 fuzz:
 	failed=; for t in $(FUZZ_TESTS); do \

@@ -14,18 +14,25 @@ binate -g [-C directory] [options] [left [right]]
 agitate [-C directory] [options] [left [right]]
 ```
 
-**binate** shows two directory trees side by side, and marks where they
-differ. With **-g**, or run as **agitate**, a symlink to it, they are trees of
-two git revisions, or a revision and the work tree. **binate** never changes
-files itself. **e** opens eligible files in your editor. Scanning,
-comparing and drawing run in a child process. Where available, Landlock
-restricts it from writing and running programs, within the kernel's limits.
+**binate** shows two directory trees side by side and marks their differences.
+Use **-g** or the **agitate** symlink to compare git revisions or a revision
+with the work tree. **binate** never changes files itself. **e** opens
+eligible files in your editor. Scanning, comparing and drawing run in a child
+process.
+Where available, Landlock restricts it from writing and running programs,
+within the kernel's limits.
 
-*left* and *right* are directories. **/dev/null** is an empty one. A file is
-refused, as **diff**(1) compares two. Without **-g**,
-**git:**_repository_**@**_revision_ is a side in a git repository, as
-**git:~/src/app@main**, compared with a directory, **/dev/null** or another such
-side.
+Without **-g**, either input can be a directory, **/dev/null** for an empty
+tree, or one of the following.
+
+- **git:**_repository_**@**_revision_ selects a tree in a git repository, as in
+  **git:~/src/app@main**.
+- **tar:**_file_ selects a tar archive, uncompressed or compressed with gzip,
+  bzip2, xz, lzma, zstd or lz4.
+
+Archives can be read from a file or a pipe, as in
+**tar:<(ssh host tar -C /etc -c .)**. Use **diff**(1) to compare individual
+files.
 
 See [**binate-manual**(7)](manual.md) for the full reference.
 
@@ -132,6 +139,8 @@ not, each **A** for added, **M** modified, **D** deleted or **T** type changed.
 - **NO_COLOR**: If set and not empty, turns colour off.
 - **COLORTERM**, **TERM**: Whether to use truecolour backgrounds.
 - **VISUAL**, **EDITOR**: The editor **e** runs.
+- **TMPDIR** sets the directory for temporary archive data. It defaults to
+  **/tmp**.
 
 ## Exit status
 
