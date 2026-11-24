@@ -80,8 +80,8 @@ waits for it.
   confirms when git is installed.
 - **Diff view:** opened from the tree, with the paths in the panels, binary
   input, and a file on one side only.
-- **Inputs:** Child input encoding preserves explicit `tar:` sides. The
-  default path mode refuses bare files, pipes, FIFOs and
+- **Inputs:** Child input encoding preserves explicit `tar:` and `zip:`
+  sides. The default path mode refuses bare files, pipes, FIFOs and
   `/dev/zero` without waiting. A bare `/dev/null` path or symlink represents
   an empty tree opposite a directory or revision. It is refused on both
   sides. The combined archive size is known for regular files, including
@@ -145,6 +145,12 @@ waits for it.
   writer, reaches EOF after the writer closes and drains buffered data
   when the writer has already closed. A 2,000-iteration test checks that a
   byte written between the read and poll is returned before EOF.
+- **Zip archives:** The tests compare a zip archive with its source tree,
+  another directory and a tar archive, and read one from `/dev/fd/3`. A FAT
+  archive with a DOS mtime one second off matches the source tree with
+  `+mtime`. Its panel omits mode and owner. Tests reject directories,
+  devices, an empty `zip:` argument, invalid zip data, zero-byte input and
+  unknown prefixes. Read errors use the same popup as tar.
 
 ## Package tests
 
@@ -255,6 +261,33 @@ waits for it.
   A regular archive file is read directly. A pipe is copied into the
   temporary file, and the copy's space can be freed after reading. Progress
   counts distinct bytes, including for overlapping or out-of-order reads.
+- **formats/zip:** Info-ZIP fixtures cover Unix modes, owner ID field widths
+  and extended timestamps. Timestamp tests cover local DOS time, NTFS
+  precision, the PKWARE Unix field and choosing the most precise extra field
+  regardless of order. A high-bit Unix timestamp is accepted with a DOS
+  timestamp in 2038 and otherwise gives way to the DOS timestamp.
+
+  Name tests cover UTF-8, Unix names, matching Unicode path fields and code
+  page 437, including byte sequences that also form UTF-8. Tests cover
+  translating backslashes for FAT entries with no slashes and treating a
+  trailing backslash as a directory separator in that case. Names containing
+  `..` have those components removed.
+
+  Content tests cover stored data, deflate, bzip2, both zstd method numbers,
+  xz and lzma. Lzma fixtures cover Python's end markers, symlink targets and
+  Go's writer without end markers. Encrypted entries, deflate64, bad
+  checksums (including a recorded checksum of zero) and malformed lzma
+  headers remain visible as errors while other entries load.
+
+  Entry tests cover default modes and omitted metadata for Windows entries,
+  replacing earlier entries while preserving directories, replacing symlinks
+  with directories when a member is beneath them, and skipping empty link
+  targets. Pipe input is copied before reading, and progress reaches the
+  archive size even when `archive/zip` reads some bytes again.
+
+  Reading rejects zero-byte, invalid and truncated input. Fuzzing checks
+  that inputs are read or rejected without a panic and exercises the entries
+  in each archive that opens.
 - **formats/tar:** Fixtures cover plain tar, gzip, bzip2, xz, lzma, zstd and
   both lz4 formats. They include unusual lzma headers and skippable zstd
   and lz4 frames, including a frame larger than the initial read. Tar

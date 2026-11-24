@@ -28,6 +28,7 @@ anything. The man page,
 - [Options](#options)
 - [Git](#git)
 - [Tar archives](#tar-archives)
+- [Zip archives](#zip-archives)
 - [Comparing](#comparing)
 - [Tree view](#tree-view)
 - [Diff view](#diff-view)
@@ -53,7 +54,7 @@ or **git diff** to compare individual files.
 appears as added or removed. Any path to the null device works, including a
 symlink. Only one side can be the null device.
 
-Use **tar:** to identify a file, FIFO or process substitution such
+Use **tar:** or **zip:** to identify a file, FIFO or process substitution such
 as **<(**_command_**)** as an archive. Other devices and sockets are refused
 without opening them.
 
@@ -65,14 +66,15 @@ besides take free ones.
 Without **-g**, an argument starting with a backend's name and a colon, as
 **git:~/src/app@main** or **tar:old.tar**, is a side read by that backend
 instead of a path. The name is a letter followed by letters, digits, **+**,
-**-** and **.**, as a URL's scheme is. The backends are **git** and **tar**.
-Any other name is an error. A path of that form, as a directory
+**-** and **.**, as a URL's scheme is. The backends are **git**, **tar** and
+**zip**, and any other name is an error. A path of that form, as a directory
 named **notes:old**, is given as **./notes:old**. A revision of the current
 repository, as **HEAD:src**, takes **-g**. With **git:**, the rest names a
 repository's directory and, after an **@**, a revision, its work tree or its
-index (see [Other repositories](#other-repositories)). With **tar:**, it names a
-file or pipe holding a [tar archive](#tar-archives). Either side can use one
-of these prefixes, a directory path or **/dev/null**.
+index (see [Other repositories](#other-repositories)). With **tar:** or
+**zip:**, it names a file or pipe holding a tar or zip archive (see [Tar
+archives](#tar-archives) and [Zip archives](#zip-archives)). Either side can
+use any of these prefixes, a directory path or **/dev/null**.
 
 ## Options
 
@@ -103,8 +105,9 @@ next arguments are *left* and *right* even if they start with a dash.
   - **owner**: the user and group, by number.
   - **mtime** is the modification time. Comparisons use nanosecond precision
     for two filesystem entries. When one side is an archive, the precision
-    depends on how the timestamp was stored. See [Tar archives](#tar-archives).
-    Two archive timestamps are compared exactly.
+    depends on how the timestamp was stored. See [Tar archives](#tar-archives)
+    and [Zip archives](#zip-archives). Two archive timestamps are compared
+    exactly.
 
 - **-U**, **--unified** *n*: Show *n* lines of context around changes in the
   collapsed diff view (default 3), as **diff -U** and **git diff -U** do. Must
@@ -585,6 +588,56 @@ timestamps less than a microsecond apart as equal. The tolerance accounts for
 tools such as Python's **tarfile**, which may round a fractional timestamp
 when writing the archive. This applies to **--compare +mtime** and **-q**.
 Two archive timestamps are compared exactly.
+
+## Zip archives
+
+Use **zip:**_file_, as in **zip:old.zip**, to compare a zip archive from a file
+or a pipe. The same input combinations are available as for [tar
+archives](#tar-archives). Entries can be stored or compressed with deflate,
+bzip2, zstd, xz or lzma. Both zip method numbers for zstd are supported. If an
+entry is encrypted, uses unsupported compression such as deflate64, or fails
+its checksum, its panel shows the error and the rest of the archive is still
+read. A recorded checksum of 0 is checked too. With **-g**, an argument
+beginning **zip:** is a git revision expression.
+
+The zip central directory is at the end of the archive. **binate** reads it
+directly from a file. For a pipe, it copies the archive into the temporary
+file first, then frees the space used by that copy where the filesystem
+supports it. The loading box shows read progress for both kinds of input.
+
+### Zip entries and metadata
+
+An entry flagged as UTF-8 keeps its name. Otherwise, **binate** uses a matching
+Info-ZIP Unicode path field if present, or the original bytes for names
+created on Unix or macOS. macOS Finder, for example, writes UTF-8 names without
+setting the flag. For other systems, **binate** decodes names using code page
+437 even if the bytes also form valid UTF-8. For DOS and Windows FAT entries
+whose names contain no slashes, backslashes act as path separators.
+
+**binate** drops a leading **/** or **./** and removes each **..** path
+component, so **a/../x** becomes **a/x**. A later entry can replace an earlier
+one at the same path unless the earlier entry is a directory. A member beneath
+a symlink replaces that link with a directory. Symlinks with empty targets
+are skipped.
+
+Unix and macOS entries can record Unix modes. Owners are recorded in extra
+fields such as those written by Info-ZIP. If any entry lacks a mode, **binate**
+omits modes for the entire archive. The same rule applies independently to
+owners. The panels show **—** for omitted attributes, and [Compare](#compare)
+reports them as unrecorded.
+
+**binate** uses the most precise extra field available for modification time.
+NTFS records it to 100 nanoseconds. The extended timestamp and Unix fields
+record whole seconds since 1970. A value with the high bit set is treated as
+unsigned if the DOS timestamp is dated 18 January 2038 or later. Otherwise
+it is treated as a pre-1970 timestamp and **binate** uses another field or
+falls back to DOS time, as **unzip** does. Info-ZIP may write 1980 in the DOS
+field for a file dated before 1970.
+
+A DOS timestamp has two-second resolution and is interpreted in local time.
+When comparing against disk, **binate** treats timestamps whose whole seconds
+differ by at most one as equal. This accounts for tools that round DOS
+timestamps up or down. Two archive timestamps are compared exactly.
 
 ## Comparing
 

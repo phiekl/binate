@@ -29,6 +29,7 @@ tree, or one of the following.
   **git:~/src/app@main**.
 - **tar:**_file_ selects a tar archive, uncompressed or compressed with gzip,
   bzip2, xz, lzma, zstd or lz4.
+- **zip:**_file_ selects a zip archive.
 
 Archives can be read from a file or a pipe, as in
 **tar:<(ssh host tar -C /etc -c .)**. Use **diff**(1) to compare individual

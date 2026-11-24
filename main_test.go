@@ -1262,6 +1262,11 @@ func TestInputsEncode(t *testing.T) {
 			t.Errorf("decoded %q as a side of an archive, with --git %v", tc.left, tc.git)
 		}
 	}
+	// So is a side of zip, as given with zip:.
+	in = gitIn("zip:"+archive, other, false)
+	if in.left.kind != inputArchive || in.left.format != "zip" || in.left.path != archive || in.encode() != "ad,-1,-1" {
+		t.Errorf("zip side: %+v, encoded %q", in.left, in.encode())
+	}
 	for _, code := range []string{"", "d", "ddd", "Dd", "ff", "xd", "gW", "dd,0,-1", "gg,1,-1", "gd,-2,-1", "dd,x,-1"} {
 		if _, err := decodeInputs("a@b", "b", code, false); err == nil {
 			t.Errorf("decodeInputs(%q) succeeded", code)
