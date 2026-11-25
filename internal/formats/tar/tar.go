@@ -51,6 +51,21 @@ func Read(r io.Reader, blob *os.File, name string, p *archive.Progress) (*archiv
 	return root, nil
 }
 
+// Detect reports whether r is a tar archive, compressed with a format
+// read or not: whether it starts with a header once decompressed. Neither
+// an archive of nothing, which a disk image's zeros would be taken for,
+// nor anything else compressed, as a text file, is told.
+func Detect(r io.Reader) bool {
+	z, _, err := decompress(bufio.NewReaderSize(r, blockSize), zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = z.Close() }()
+	start := make([]byte, blockSize)
+	_, err = io.ReadFull(z, start)
+	return err == nil && isHeader(start)
+}
+
 // magic are the starts of streams compressed by each format, as Linux
 // tells them (lib/decompress.c): those read, and those that aren't, named
 // for the error.
@@ -139,10 +154,10 @@ func bzip2Start(b []byte) bool {
 
 // decompress returns r decompressed if it starts as gzip, bzip2, xz, lzma,
 // zstd or lz4 does, after any skippable frames, and the format, or as it
-// is and "". A tar header,
-// which starts with an entry's name, as a file named BZhello.txt, or tar's
-// end is never taken for compression.
-func decompress(r *bufio.Reader) (io.ReadCloser, string, error) {
+// is and "". A tar header, which starts with an entry's name, as a file
+// named BZhello.txt, or tar's end is never taken for compression. opts
+// are zstd's, as decoding in the calling goroutine.
+func decompress(r *bufio.Reader, opts ...zstd.DOption) (io.ReadCloser, string, error) {
 	// What is peeked at may be short, of a short stream, but an error
 	// reading is given once.
 	start, err := r.Peek(blockSize)
@@ -184,7 +199,7 @@ func decompress(r *bufio.Reader) (io.ReadCloser, string, error) {
 		z, err := lzma.NewReader(r)
 		return io.NopCloser(z), format, err
 	case "zstd":
-		z, err := zstd.NewReader(r)
+		z, err := zstd.NewReader(r, opts...)
 		if err != nil {
 			return nil, "", err
 		}

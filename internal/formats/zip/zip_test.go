@@ -800,3 +800,52 @@ func FuzzRead(f *testing.F) {
 		walk("")
 	})
 }
+
+// An archive's start tells zip from what isn't, as one after a program
+// that extracts it, which zip: still reads.
+func TestDetect(t *testing.T) {
+	one := zipOf(t, []stdzip.FileHeader{{Name: "f", Method: stdzip.Store}}, map[string]string{"f": "x"})
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"zip", one, true},
+		{"of nothing", zipOf(t, nil, nil), true},
+		{"zip64 of nothing", emptyZip64, true},
+		{"split into one part", append([]byte("PK\x07\x08"), one...), true},
+		{"after a program", append([]byte("\x7fELF"), one...), false},
+		{"PK", []byte("PK"), false},
+		{"empty", nil, false},
+	} {
+		if got := Detect(bytes.NewReader(tc.data)); got != tc.want {
+			t.Errorf("%s: %v", tc.name, got)
+		}
+	}
+}
+
+// emptyZip64 is a zip64 archive of nothing: its directory's zip64 end,
+// that end's locator, and the end, its counts and offsets left to zip64's.
+var emptyZip64 = []byte("" +
+	"PK\x06\x06" + "\x2c\x00\x00\x00\x00\x00\x00\x00" + "\x2d\x00\x2d\x00" + "\x00\x00\x00\x00\x00\x00\x00\x00" +
+	"\x00\x00\x00\x00\x00\x00\x00\x00" + "\x00\x00\x00\x00\x00\x00\x00\x00" +
+	"\x00\x00\x00\x00\x00\x00\x00\x00" + "\x00\x00\x00\x00\x00\x00\x00\x00" +
+	"PK\x06\x07" + "\x00\x00\x00\x00" + "\x00\x00\x00\x00\x00\x00\x00\x00" + "\x01\x00\x00\x00" +
+	"PK\x05\x06" + "\x00\x00\x00\x00" + "\xff\xff\xff\xff" + "\xff\xff\xff\xff" + "\xff\xff\xff\xff" + "\x00\x00")
+
+// TestReadEmptyZip64 checks that a zip64 archive of nothing is read, as
+// an empty tree.
+func TestReadEmptyZip64(t *testing.T) {
+	blob, err := archive.NewBlob(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := Read(bytes.NewReader(emptyZip64), blob, "a.zip", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if names, err := root.ReadDir(""); err != nil || len(names) != 0 {
+		t.Errorf("read %v, %v", names, err)
+	}
+}

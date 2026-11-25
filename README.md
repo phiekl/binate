@@ -95,7 +95,8 @@ substitution to compare a tree from another host or a container without first
 saving the archive to a file.
 
 binate keeps the archived file contents in an unnamed temporary file in
-`TMPDIR` (default `/tmp`) and uses the metadata the archive records.
+`TMPDIR` (default `/tmp`) and uses the metadata the archive records. Run binate
+as `imaginate` to detect archive formats automatically and omit the prefixes.
 
 ### Read-only, escaped output and Landlock sandbox
 
@@ -182,6 +183,12 @@ $ binate zip:app-1.0.zip ~/src/app
 $ binate tar:<(ssh host tar -C /etc -c .) /etc
 ```
 
+Compare a tarball and a zip archive with automatic format detection.
+
+```
+$ imaginate app-1.0.tar.gz app-1.1.zip
+```
+
 Press `?` to list the current screen's key bindings, or run `binate --help` to
 list command-line options. [binate(1)](doc/binate.1.md) summarises both, and the
 [manual](doc/manual.md) describes everything in detail.
@@ -197,7 +204,7 @@ binate runs unprotected. `-v` reports the Landlock ABI in effect; see the
 ## Building and testing
 
 ```
-make            # build/binate, and build/agitate linking to it
+make            # build/binate and its build/agitate and build/imaginate links
 make test       # unit and end-to-end tests
 make vet        # go vet
 make man        # the man pages in build/man/, requires go-md2man
@@ -208,15 +215,17 @@ staticcheck ./...
 The build targets x86-64-v3 CPUs (roughly 2013 and later) by default.
 `make GOAMD64=v1` can be used for older CPUs. binate needs a 64-bit platform, as
 x86-64 or arm64, and a 32-bit build stops with an error saying so. Install
-`agitate` as a symlink to `binate`, as the build makes it. Run by that name,
-binate compares git revisions without `-g`.
+`agitate` and `imaginate` as symlinks to `binate`, as in the build directory.
+Use `agitate` to compare git revisions without `-g` and `imaginate` to compare
+archives without `tar:` or `zip:`.
 
 `make man` builds binate(1) from [doc/binate.1.md](doc/binate.1.md) and
-binate-manual(7) from [doc/manual.md](doc/manual.md), and agitate(1) and
-agitate-manual(7) as symlinks to them. Install
-[go-md2man](https://github.com/cpuguy83/go-md2man) with your package manager or
-`go install github.com/cpuguy83/go-md2man/v2@v2.0.7`, and read the results with
-`man -l build/man/binate.1` and `man -l build/man/binate-manual.7`. A page's
+binate-manual(7) from [doc/manual.md](doc/manual.md). It links the corresponding
+`agitate` and `imaginate` man pages to them.
+Install [go-md2man](https://github.com/cpuguy83/go-md2man) with your package
+manager or run `go install github.com/cpuguy83/go-md2man/v2@v2.0.7`.
+Read the results with `man -l build/man/binate.1` and
+`man -l build/man/binate-manual.7`. A page's
 footer date defaults to the last commit date of its Markdown source. Set
 `MAN_DATE=YYYY-MM-DD` when building without Git metadata.
 

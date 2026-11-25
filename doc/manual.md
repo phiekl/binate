@@ -12,12 +12,14 @@ Full reference for the binate file and directory difference viewer.
 binate [options] left right
 binate -g [-C directory] [options] [left [right]]
 agitate [-C directory] [options] [left [right]]
+imaginate [options] left right
 ```
 
-**binate** shows two directory trees side by side, and marks where they
-differ. With **-g**, or run as **agitate**, a symlink to it, they are trees of
-two git revisions, or a revision and the work tree. **binate** never changes
-files itself. **e** opens eligible files in your editor.
+**binate** shows two directory trees side by side and marks their differences.
+Use **-g** or the **agitate** symlink to compare git revisions or a revision
+with the work tree. The **imaginate** symlink detects archive formats
+automatically. **binate** never changes files itself. **e** opens eligible
+files in your editor.
 
 It is Linux-only, needs /proc mounted to open files, and needs a terminal: if
 stdin or stdout is not a terminal, it exits with an error before drawing
@@ -29,6 +31,7 @@ anything. The man page,
 - [Git](#git)
 - [Tar archives](#tar-archives)
 - [Zip archives](#zip-archives)
+- [Imaginate](#imaginate)
 - [Comparing](#comparing)
 - [Tree view](#tree-view)
 - [Diff view](#diff-view)
@@ -55,8 +58,9 @@ appears as added or removed. Any path to the null device works, including a
 symlink. Only one side can be the null device.
 
 Use **tar:** or **zip:** to identify a file, FIFO or process substitution such
-as **<(**_command_**)** as an archive. Other devices and sockets are refused
-without opening them.
+as **<(**_command_**)** as an archive. [Imaginate](#imaginate) also accepts
+these inputs without a prefix. Other devices and sockets are refused without
+opening them.
 
 An input may be named by a file descriptor **binate** inherits, as **/dev/fd/3**
 given with **3<**_directory_, and is then the directory that descriptor is open
@@ -638,6 +642,30 @@ A DOS timestamp has two-second resolution and is interpreted in local time.
 When comparing against disk, **binate** treats timestamps whose whole seconds
 differ by at most one as equal. This accounts for tools that round DOS
 timestamps up or down. Two archive timestamps are compared exactly.
+
+## Imaginate
+
+The **imaginate** symlink accepts tar and zip archives as bare files or pipes,
+as in **imaginate old.tar.gz new.zip**. It looks for a tar header after
+decompressing the start if necessary, using up to 16 MiB of input. It detects
+zip from an opening entry, a single-part split marker or the end record of an
+empty zip or zip64 archive.
+
+For a valid empty tar archive, use **tar:** explicitly because its leading
+zeros are indistinguishable from other inputs such as disk images. Use
+**zip:** explicitly for an archive preceded by other data, such as a
+self-extracting zip. If detection fails, the error suggests using a prefix.
+A zero-byte input is rejected.
+
+File detection runs in the child after applying Landlock and before the
+comparison screen opens. **Ctrl+c** exits during detection. Pipe detection
+runs on the loading screen so both sides can read concurrently. The header
+uses a generic archive label until the pipe's format is known. Errors while
+detecting a pipe appear in the same popup as archive read errors.
+
+Directories, **/dev/null** and explicit **tar:**, **zip:** and **git:** inputs
+work as they do with **binate**. **imaginate** rejects **-g**, **--cached**
+and **-C**. Use **agitate** or **binate -g** for those options.
 
 ## Comparing
 
@@ -1455,8 +1483,8 @@ The child restricts itself with Landlock before it reads any input:
   comparison also reads the user's global Git ignore configuration and rules
   before restricting access.
 - The child opens the archive and its temporary file before applying Landlock.
-  These open files need no additional rules. The child reads and decompresses
-  the archive after applying the sandbox.
+  These open files need no additional rules. The child detects the format,
+  reads the entries and decompresses data after applying the sandbox.
 - With **-g** or a **git:** side, before applying the sandbox, the child
   resolves symlinks along each repository's starting directory, possibly
   reading links outside the repository, then finds each repository's top by

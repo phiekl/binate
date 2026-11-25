@@ -51,6 +51,9 @@ type options struct {
 	compare scan.Attrs
 	quick   bool
 	git     bool
+	// archives takes a path to a file or pipe for an archive, as run as
+	// archivesName.
+	archives bool
 	// cached compares a revision with the index, as git diff --cached.
 	cached bool
 	// directory is where the repository of --git is found from.
@@ -67,22 +70,28 @@ type options struct {
 // git revisions without --git.
 const gitName = "agitate"
 
-// programName is the name binate goes by: gitName if run by it, and
-// binate by any other.
+// archivesName is the name, as of a symlink to binate, run by which it
+// takes an archive without its format, by a path to a file or pipe.
+const archivesName = "imaginate"
+
+// programName is the name binate goes by: gitName or archivesName if run
+// by it, and binate by any other.
 func programName() string {
-	if path.Base(os.Args[0]) == gitName {
-		return gitName
+	if name := path.Base(os.Args[0]); name == gitName || name == archivesName {
+		return name
 	}
 	return "binate"
 }
 
 // parseOptions parses argv of binate run as name, which with gitName
-// implies --git.
+// implies --git, and with archivesName takes archives without their
+// formats.
 func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	var o options
 	var contextLines string
 	compare := scan.DefaultAttrs.String()
 	gitOnly := name == gitName
+	o.archives = name == archivesName
 	s := args.NewSet(name)
 	s.Count(&o.verbose, "verbose", "v", "write debug messages (repeat for more)")
 	s.Bool(&o.version, "version", "V", "show version and exit")
@@ -92,6 +101,13 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	if gitOnly {
 		sides, directory = "%s [dir@]rev, . (work tree) or : (index)", "find the repository from directory, as git -C"
 		cached = "compare left, or HEAD, with the index, as git diff --cached"
+	}
+	if o.archives {
+		forms := []string{"%s archive", "dir"}
+		for _, name := range archiveBackends() {
+			forms = append(forms, name+":file")
+		}
+		sides = orList(append(forms, "git:dir@rev"))
 	}
 	s.Arg(&o.left, "left", fmt.Sprintf(sides, "left"))
 	s.Arg(&o.right, "right", fmt.Sprintf(sides, "right"))
@@ -113,6 +129,10 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 		// Implied, and refused with it.
 		s.Hide("git", "quick")
 	}
+	if o.archives {
+		// Refused, as are those of --git only.
+		s.Hide("git", "directory", "cached")
+	}
 
 	err := s.Parse(argv)
 	if err == args.ErrUsage && o.version {
@@ -120,6 +140,13 @@ func parseOptions(name string, argv []string) (*args.Set, options, error) {
 	}
 	if err != nil {
 		return s, o, err
+	}
+	if o.archives {
+		for _, name := range []string{"git", "directory", "cached"} {
+			if s.Given(name) {
+				return s, o, fmt.Errorf("--%s as %s, which compares archives, not revisions: run as %s, or binate -g", name, archivesName, gitName)
+			}
+		}
 	}
 	o.git = o.git || gitOnly
 	if o.directory != "" && !o.git {
@@ -203,7 +230,7 @@ func runParent() int {
 		return fail("%v", err)
 	}
 
-	in, err := parseInputs(o.left, o.right, o.git, o.directory)
+	in, err := parseInputs(o.left, o.right, o.git, o.archives, o.directory)
 	if err == nil && o.cached {
 		in, err = in.withCached()
 	}

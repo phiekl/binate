@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -44,7 +45,8 @@ type input struct {
 	// ":".
 	path string
 	kind inputKind
-	// format is an archive's format, its backend, as "tar".
+	// format is an archive's format, its backend, as "tar", or "" until
+	// the child tells it, of one given without it, as imaginate takes one.
 	format string
 	// repo is the directory a side of git in another repository than the
 	// current one is found from, and at where the argument's @ before
@@ -68,10 +70,10 @@ type inputs struct {
 const gitBackend = "git"
 
 // archiveFormats are the formats of archives read, by the backends that
-// name them, given as "tar:" without --git, and their readers.
-var archiveFormats = map[string]archive.Reader{
-	"tar": tar.Read,
-	"zip": zip.Read,
+// name them, given as "tar:" without --git.
+var archiveFormats = map[string]archive.Format{
+	"tar": {Read: tar.Read, Detect: tar.Detect},
+	"zip": {Read: zip.Read, Detect: zip.Detect},
 }
 
 // archiveBackends returns the backends of archives, sorted.
@@ -82,11 +84,119 @@ func archiveBackends() []string {
 // backendList returns the backends, of git and archives, as "git, tar
 // or zip".
 func backendList() string {
-	names := append([]string{gitBackend}, archiveBackends()...)
+	return orList(append([]string{gitBackend}, archiveBackends()...))
+}
+
+// orList returns names, at least one, as "a, b or c".
+func orList(names []string) string {
 	if len(names) == 1 {
 		return names[0]
 	}
 	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+}
+
+// detectFormat returns the format of the archive that each reader start
+// returns reads from its start, the first in archiveBackends's order that
+// tells it (see archive.Format.Detect), for an archive given as imaginate
+// takes one, without its format, reading no more than archive.DetectLimit
+// of it. An error reading the archive itself, as formats only tell whether
+// it is theirs, is given rather than its start told as no format's.
+func detectFormat(start func() io.Reader) (string, error) {
+	var readErr error
+	open := func() io.Reader {
+		return &errReader{r: &limitReader{r: start(), left: archive.DetectLimit}, err: &readErr}
+	}
+	if n, _ := io.ReadFull(open(), make([]byte, 1)); n == 0 {
+		if readErr != nil {
+			return "", readErr
+		}
+		return "", errors.New("empty, not an archive")
+	}
+	names := archiveBackends()
+	for _, name := range names {
+		if archiveFormats[name].Detect(open()) {
+			return name, nil
+		}
+	}
+	if readErr != nil {
+		return "", readErr
+	}
+	prefixes := make([]string, len(names))
+	for i, name := range names {
+		prefixes[i] = name + ":"
+	}
+	return "", fmt.Errorf("not a %s archive by its start: give its format, as %s before it, to read it as one", orList(names), orList(prefixes))
+}
+
+// limitReader reads r, failing with errDetectLimit past left more bytes.
+type limitReader struct {
+	r    io.Reader
+	left int
+}
+
+func (l *limitReader) Read(b []byte) (int, error) {
+	if l.left == 0 {
+		return 0, errDetectLimit
+	}
+	n, err := l.r.Read(b[:min(len(b), l.left)])
+	l.left -= n
+	return n, err
+}
+
+// errReader reads r, keeping in err the first error but its end reading it
+// gives.
+type errReader struct {
+	r   io.Reader
+	err *error
+}
+
+func (e *errReader) Read(b []byte) (int, error) {
+	n, err := e.r.Read(b)
+	if err != nil && err != io.EOF && *e.err == nil {
+		*e.err = err
+	}
+	return n, err
+}
+
+// replay reads src, keeping what it has read, for each reader from its
+// start to read again, and then on from src.
+type replay struct {
+	src io.Reader
+	buf []byte
+	// err is what reading src failed with, once it has, given again.
+	err error
+}
+
+// errDetectLimit is given past archive.DetectLimit.
+var errDetectLimit = fmt.Errorf("more than %d MiB read to tell the format", archive.DetectLimit>>20)
+
+// start returns a reader of what src holds from its start.
+func (p *replay) start() io.Reader {
+	return &replayReader{p: p}
+}
+
+type replayReader struct {
+	p   *replay
+	off int
+}
+
+func (r *replayReader) Read(b []byte) (int, error) {
+	p := r.p
+	if r.off == len(p.buf) {
+		if p.err != nil {
+			return 0, p.err
+		}
+		more := make([]byte, max(len(b), 4096))
+		n, err := p.src.Read(more)
+		p.buf = append(p.buf, more[:n]...)
+		p.err = err
+		if n == 0 {
+			return 0, err
+		}
+	}
+	n := copy(b, p.buf[r.off:])
+	r.off += n
+	return n, nil
 }
 
 // archiveUsage returns the sides of archives as the usage lists them,
@@ -188,8 +298,9 @@ func gitSide(arg string, at int, git bool) input {
 // parseInputs returns the sides left and right name. With git, they are
 // sides of git, of the current repository or, by their paths, others,
 // found from base if relative. Without, they are paths, or sides of a
-// backend: git, or an archive's (see archiveFormats).
-func parseInputs(left, right string, git bool, base string) (inputs, error) {
+// backend: git, or an archive's (see archiveFormats). With archives, a
+// path can name an archive too, of a format its start tells.
+func parseInputs(left, right string, git, archives bool, base string) (inputs, error) {
 	var sides [2]input
 	var onDisk [2]bool
 	for i, arg := range []string{left, right} {
@@ -200,7 +311,7 @@ func parseInputs(left, right string, git bool, base string) (inputs, error) {
 		case !git && !ok:
 			onDisk[i] = true
 			continue
-		case !git && archiveFormats[name] != nil:
+		case !git && archiveFormats[name].Read != nil:
 			side, err := statArchive(arg, name)
 			if err != nil {
 				return inputs{}, err
@@ -218,13 +329,13 @@ func parseInputs(left, right string, git bool, base string) (inputs, error) {
 	}
 	switch {
 	case onDisk[0] && onDisk[1]:
-		return resolveInputs(left, right)
+		return resolveInputs(left, right, archives)
 	case sides[0].kind == inputWorkTree && sides[1].kind == inputWorkTree:
 		return inputs{}, errors.New("unable to compare two work trees: only one side can show statuses")
 	}
 	for i, arg := range []string{left, right} {
 		if onDisk[i] {
-			side, err := statInput(arg)
+			side, err := statInput(arg, archives)
 			if err != nil {
 				return inputs{}, err
 			}
@@ -250,6 +361,15 @@ func (in inputs) withCached() (inputs, error) {
 	return in, nil
 }
 
+// setSide sets side i, 0 for left, 1 for right.
+func (in *inputs) setSide(i int, side input) {
+	if i == 0 {
+		in.left = side
+	} else {
+		in.right = side
+	}
+}
+
 func (in inputs) sides() [2]input {
 	return [2]input{in.left, in.right}
 }
@@ -272,12 +392,12 @@ func (in inputs) hasIndex() bool {
 	return in.left.kind == inputIndex || in.right.kind == inputIndex
 }
 
-func resolveInputs(left, right string) (inputs, error) {
-	l, err := statInput(left)
+func resolveInputs(left, right string, archives bool) (inputs, error) {
+	l, err := statInput(left, archives)
 	if err != nil {
 		return inputs{}, err
 	}
-	r, err := statInput(right)
+	r, err := statInput(right, archives)
 	if err != nil {
 		return inputs{}, err
 	}
@@ -289,8 +409,10 @@ func resolveInputs(left, right string) (inputs, error) {
 
 // statInput returns the side path names, following symlinks: a directory,
 // or /dev/null, the null device by any name, as a symlink to it, which is
-// checked without opening it. Anything else is refused, a file too.
-func statInput(path string) (input, error) {
+// checked without opening it. With archives, a file or a pipe is an
+// archive, of a format the child tells by its start. Anything else is
+// refused, a file too without archives.
+func statInput(path string, archives bool) (input, error) {
 	info, err := os.Stat(path)
 	switch {
 	case err != nil:
@@ -299,6 +421,10 @@ func statInput(path string) (input, error) {
 		return input{path: path, kind: inputDir, at: -1}, nil
 	case isNull(info):
 		return input{path: path, kind: inputNull, at: -1}, nil
+	case archives && (info.Mode().IsRegular() || info.Mode()&fs.ModeNamedPipe != 0):
+		return input{path: path, kind: inputArchive, at: -1}, nil
+	case archives:
+		return input{}, fmt.Errorf("%s: not a directory, an archive or /dev/null for an empty one", path)
 	case info.Mode().IsRegular():
 		return input{}, fmt.Errorf("%s: a file, and binate compares directories: compare two files with diff", path)
 	}
@@ -354,8 +480,8 @@ func (in inputs) encode() string {
 }
 
 // decodeInputs returns the inputs for the arguments left and right, as
-// encode gave them in code, with git as given.
-func decodeInputs(left, right, code string, git bool) (inputs, error) {
+// encode gave them in code, with git and archives as given.
+func decodeInputs(left, right, code string, git, archives bool) (inputs, error) {
 	kinds, ats, _ := strings.Cut(code, ",")
 	atL, atR, _ := strings.Cut(ats, ",")
 	if len(kinds) != 2 {
@@ -381,11 +507,15 @@ func decodeInputs(left, right, code string, git bool) (inputs, error) {
 		case at >= 0:
 			return inputs{}, fmt.Errorf("invalid input kinds %q", code)
 		case kind == inputArchive:
-			name, ok := backendOf(args[i])
-			if git || !ok || archiveFormats[name] == nil {
+			switch name, ok := backendOf(args[i]); {
+			case !ok && archives && !git:
+				// Of a format the child tells by its start.
+				sides[i] = input{path: args[i], kind: kind, at: -1}
+			case git || !ok || archiveFormats[name].Read == nil:
 				return inputs{}, fmt.Errorf("invalid input kinds %q", code)
+			default:
+				sides[i] = input{path: archivePath(args[i], name), kind: kind, format: name, at: -1}
 			}
-			sides[i] = input{path: archivePath(args[i], name), kind: kind, format: name, at: -1}
 			continue
 		}
 		sides[i] = input{path: args[i], kind: kind, at: -1}

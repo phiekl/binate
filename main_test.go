@@ -5,7 +5,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -16,12 +19,14 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"golang.org/x/sys/unix"
 
 	"pxy.se/go/binate/internal/args"
+	"pxy.se/go/binate/internal/formats/archive"
 	"pxy.se/go/binate/internal/ptytest"
 	"pxy.se/go/binate/internal/scan"
 	"pxy.se/go/binate/internal/term"
@@ -318,13 +323,139 @@ func TestGitName(t *testing.T) {
 	}
 }
 
+// Run as imaginate, binate takes archives without their formats, and
+// refuses --git.
+func TestArchivesName(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		archives bool
+	}{{"binate", false}, {archivesName, true}, {gitName, false}, {"imaginated", false}} {
+		if _, o, err := parseOptions(tc.name, []string{"a", "b"}); err != nil || o.archives != tc.archives {
+			t.Errorf("%s: %+v, %v", tc.name, o, err)
+		}
+	}
+	for _, argv := range [][]string{{"-g", "a", "b"}, {"--cached", "a", "b"}, {"-C", "dir", "a", "b"}} {
+		if _, _, err := parseOptions(archivesName, argv); err == nil || !strings.Contains(err.Error(), "as imaginate, which compares archives, not revisions: run as agitate") {
+			t.Errorf("%s %q: %v", archivesName, argv, err)
+		}
+	}
+	s, _, _ := parseOptions(archivesName, []string{"--help"})
+	help := s.Help(80)
+	for _, want := range []string{
+		"usage: imaginate [option]... left right",
+		"left            left archive, dir, tar:file, zip:file or git:dir@rev",
+		"--quick",
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("imaginate's help without %q:\n%s", want, help)
+		}
+	}
+	for _, unwanted := range []string{"--git", "--directory", "--cached"} {
+		if strings.Contains(help, unwanted) {
+			t.Errorf("imaginate's help with %q:\n%s", unwanted, help)
+		}
+	}
+}
+
+// An archive's format is told by its start, in archiveBackends's order,
+// from a file or a pipe, whose start is read once and replayed.
+func TestDetectFormat(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"f": "x\n"})
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want string
+		err  string
+	}{
+		{"tar", tarOf(t, dir, nil), "tar", ""},
+		{"gzip", gzipped(t, tarOf(t, dir, nil)), "tar", ""},
+		{"zip", zipOf(t, dir, nil), "zip", ""},
+		{"zip of nothing", zipOf(t, t.TempDir(), nil), "zip", ""},
+		{"tar of nothing", make([]byte, 10240), "", "not a tar or zip archive by its start: give its format, as tar: or zip: before it"},
+		{"gzip of text", gzipped(t, []byte("hello\n")), "", "not a tar or zip archive"},
+		{"text", []byte("hello\n"), "", "not a tar or zip archive"},
+		{"empty", nil, "", "empty, not an archive"},
+	} {
+		got, err := detectFormat(func() io.Reader { return bytes.NewReader(tc.data) })
+		if got != tc.want || tc.err == "" && err != nil || tc.err != "" && (err == nil || !strings.Contains(err.Error(), tc.err)) {
+			t.Errorf("%s: %q, %v, want %q, %q", tc.name, got, err, tc.want, tc.err)
+		}
+		// From a pipe, read as far as telling it needed, then replayed.
+		p := &replay{src: iotest.HalfReader(bytes.NewReader(tc.data))}
+		got, err = detectFormat(p.start)
+		if got != tc.want || (err == nil) != (tc.err == "") {
+			t.Errorf("%s, from a pipe: %q, %v", tc.name, got, err)
+		}
+		all, err := io.ReadAll(io.MultiReader(bytes.NewReader(p.buf), p.src))
+		if err != nil || !bytes.Equal(all, tc.data) {
+			t.Errorf("%s, from a pipe: replayed %d bytes of %d, %v", tc.name, len(all), len(tc.data), err)
+		}
+	}
+	// An error reading the archive is given, not taken for its end or for
+	// a start no format tells, at once or once part of it is read.
+	eio := errors.New("input/output error")
+	gz := gzipped(t, tarOf(t, dir, nil))
+	for _, tc := range []struct {
+		name string
+		r    func() io.Reader
+	}{
+		{"at once", func() io.Reader { return iotest.ErrReader(eio) }},
+		{"within gzip", func() io.Reader { return io.MultiReader(bytes.NewReader(gz[:20]), iotest.ErrReader(eio)) }},
+	} {
+		if got, err := detectFormat(tc.r); got != "" || err != eio {
+			t.Errorf("%s: %q, %v", tc.name, got, err)
+		}
+	}
+	// Telling a format reads no more than archive.DetectLimit, of a file or
+	// a pipe, here skipping a skippable frame larger.
+	frame := io.MultiReader(bytes.NewReader([]byte{0x50, 0x2a, 0x4d, 0x18, 0, 0, 0x40, 0x01}), io.LimitReader(zeros{}, 20<<20))
+	big, err := io.ReadAll(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := detectFormat(func() io.Reader { return bytes.NewReader(big) }); got != "" || err != errDetectLimit {
+		t.Errorf("past the limit: %q, %v", got, err)
+	}
+	p := &replay{src: bytes.NewReader(big)}
+	if got, err := detectFormat(p.start); got != "" || err != errDetectLimit || len(p.buf) > archive.DetectLimit+4096 {
+		t.Errorf("past the limit, from a pipe: %q, %v, %d bytes kept", got, err, len(p.buf))
+	}
+}
+
+// The loading box shows the entry of an archive still being read, not of
+// one read whole.
+func TestReadStatusCurrent(t *testing.T) {
+	c := &child{archives: [2]*os.File{os.Stdin, os.Stdin}, sizes: [2]int64{-1, -1}}
+	c.progress[0].Begin("a.tar:second")
+	c.progress[1].Begin("b.tar:last")
+	if got := c.readStatus().Current; got != "b.tar:last" {
+		t.Errorf("both being read: %q", got)
+	}
+	c.done[1].Store(true)
+	if got := c.readStatus().Current; got != "a.tar:second" {
+		t.Errorf("the right read: %q", got)
+	}
+	c.done[0].Store(true)
+	if got := c.readStatus().Current; got != "" {
+		t.Errorf("both read: %q", got)
+	}
+}
+
+// zeros reads as zeros, without end.
+type zeros struct{}
+
+func (zeros) Read(b []byte) (int, error) {
+	clear(b)
+	return len(b), nil
+}
+
 func TestHelpFits80Columns(t *testing.T) {
 	s, _, err := parseOptions("binate", []string{"--help"})
 	if err != args.ErrHelp {
 		t.Fatal(err)
 	}
 	help := s.Help(0)
-	for _, name := range []string{"binate", gitName} {
+	for _, name := range []string{"binate", gitName, archivesName} {
 		s, _, _ := parseOptions(name, []string{"--help"})
 		all := s.Help(0)
 		if got := s.Help(80); got != all {
@@ -1181,17 +1312,17 @@ func TestResolveInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{"fifo": "not a directory", "file": "a file"} {
-		if _, err := resolveInputs(dir, filepath.Join(dir, name)); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := resolveInputs(dir, filepath.Join(dir, name), false); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
 	for _, args := range [][2]string{{"/dev/null", dir}, {dir, filepath.Join(dir, "null")}} {
-		in, err := resolveInputs(args[0], args[1])
+		in, err := resolveInputs(args[0], args[1], false)
 		if err != nil || in.left.kind == in.right.kind {
 			t.Errorf("%q: %+v, %v", args, in, err)
 		}
 	}
-	if _, err := resolveInputs("/dev/null", filepath.Join(dir, "null")); err == nil || !strings.Contains(err.Error(), "/dev/null with itself") {
+	if _, err := resolveInputs("/dev/null", filepath.Join(dir, "null"), false); err == nil || !strings.Contains(err.Error(), "/dev/null with itself") {
 		t.Errorf("/dev/null twice: %v", err)
 	}
 }
@@ -1201,22 +1332,22 @@ func TestResolveInputs(t *testing.T) {
 func TestInputsEncode(t *testing.T) {
 	dir, other := t.TempDir(), t.TempDir()
 	for _, args := range [][2]string{{dir, other}, {dir, "/dev/null"}, {"/dev/null", dir}} {
-		in, err := parseInputs(args[0], args[1], false, "")
+		in, err := parseInputs(args[0], args[1], false, false, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := decodeInputs(args[0], args[1], in.encode(), false)
+		got, err := decodeInputs(args[0], args[1], in.encode(), false, false)
 		if err != nil || got != in {
 			t.Errorf("%q: decoded %+v, %v, want %+v", args, got, err, in)
 		}
 	}
 	gitIn := func(left, right string, git bool) inputs {
 		t.Helper()
-		in, err := parseInputs(left, right, git, "")
+		in, err := parseInputs(left, right, git, false, "")
 		if err != nil {
 			t.Fatalf("%q %q: %v", left, right, err)
 		}
-		got, err := decodeInputs(left, right, in.encode(), git)
+		got, err := decodeInputs(left, right, in.encode(), git, false)
 		if err != nil || got != in {
 			t.Errorf("%q %q: decoded %+v, %v, want %+v", left, right, got, err, in)
 		}
@@ -1258,7 +1389,7 @@ func TestInputsEncode(t *testing.T) {
 		left string
 		git  bool
 	}{{archive, false}, {"git:" + archive, false}, {"tar:" + archive, true}, {"foo:" + archive, false}} {
-		if _, err := decodeInputs(tc.left, other, "ad,-1,-1", tc.git); err == nil {
+		if _, err := decodeInputs(tc.left, other, "ad,-1,-1", tc.git, false); err == nil {
 			t.Errorf("decoded %q as a side of an archive, with --git %v", tc.left, tc.git)
 		}
 	}
@@ -1267,8 +1398,35 @@ func TestInputsEncode(t *testing.T) {
 	if in.left.kind != inputArchive || in.left.format != "zip" || in.left.path != archive || in.encode() != "ad,-1,-1" {
 		t.Errorf("zip side: %+v, encoded %q", in.left, in.encode())
 	}
+	// Run as imaginate, a file is an archive whose format the child tells,
+	// taken without a backend only so run, and a side given with one is
+	// as without.
+	in, err := parseInputs(archive, "tar:"+archive, false, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.left.kind != inputArchive || in.left.format != "" || in.left.path != archive || in.right.format != "tar" || in.encode() != "aa,-1,-1" {
+		t.Errorf("imaginate: %+v, encoded %q", in, in.encode())
+	}
+	if got, err := decodeInputs(archive, "tar:"+archive, in.encode(), false, true); err != nil || got != in {
+		t.Errorf("imaginate: decoded %+v, %v, want %+v", got, err, in)
+	}
+	for _, tc := range []struct {
+		left          string
+		git, archives bool
+	}{{archive, false, false}, {archive, true, true}, {"foo:" + archive, false, true}, {"git:" + archive, false, true}} {
+		if _, err := decodeInputs(tc.left, other, "ad,-1,-1", tc.git, tc.archives); err == nil {
+			t.Errorf("decoded %q as a side of an archive, with --git %v, as imaginate %v", tc.left, tc.git, tc.archives)
+		}
+	}
+	if in, err := parseInputs(dir, "/dev/null", false, true, ""); err != nil || in.encode() != "dn,-1,-1" {
+		t.Errorf("imaginate, a directory and /dev/null: %+v, %v", in, err)
+	}
+	if _, err := parseInputs(archive, dir, false, false, ""); err == nil || !strings.Contains(err.Error(), "a file, and binate compares directories") {
+		t.Errorf("a file without imaginate: %v", err)
+	}
 	for _, code := range []string{"", "d", "ddd", "Dd", "ff", "xd", "gW", "dd,0,-1", "gg,1,-1", "gd,-2,-1", "dd,x,-1"} {
-		if _, err := decodeInputs("a@b", "b", code, false); err == nil {
+		if _, err := decodeInputs("a@b", "b", code, false, false); err == nil {
 			t.Errorf("decodeInputs(%q) succeeded", code)
 		}
 	}
@@ -1313,19 +1471,19 @@ func TestParseInputs(t *testing.T) {
 		{"git:~/h@", false, home + "/h", "HEAD", inputGit},
 		{"git:./pkg@1.2@.", false, "./pkg@1.2", ".", inputWorkTree},
 	} {
-		in, err := parseInputs(tc.arg, "/dev/null", tc.git, "")
+		in, err := parseInputs(tc.arg, "/dev/null", tc.git, false, "")
 		if tc.git {
-			in, err = parseInputs(tc.arg, "HEAD", tc.git, "")
+			in, err = parseInputs(tc.arg, "HEAD", tc.git, false, "")
 		}
 		if err != nil || in.left.repo != tc.repo || in.left.path != tc.path || in.left.kind != tc.kind {
 			t.Errorf("%q: %+v, %v", tc.arg, in.left, err)
 		}
 	}
 	// A relative directory is found from -C.
-	if in, err := parseInputs("sub@main", "HEAD", true, filepath.Join(base, "deep")); err != nil || in.left.repo != "" || in.left.path != "sub@main" {
+	if in, err := parseInputs("sub@main", "HEAD", true, false, filepath.Join(base, "deep")); err != nil || in.left.repo != "" || in.left.path != "sub@main" {
 		t.Errorf("not path-like, a revision: %+v, %v", in.left, err)
 	}
-	if in, err := parseInputs("./sub@main", "HEAD", true, filepath.Join(base, "deep")); err != nil || in.left.repo != "./sub" {
+	if in, err := parseInputs("./sub@main", "HEAD", true, false, filepath.Join(base, "deep")); err != nil || in.left.repo != "./sub" {
 		t.Errorf("relative to -C: %+v, %v", in.left, err)
 	}
 	for _, tc := range []struct {
@@ -1341,7 +1499,7 @@ func TestParseInputs(t *testing.T) {
 		{"HEAD:README", "repo", false, "as ./HEAD:README, or a revision with --git"},
 		{"./repo@.", "~/h@.", true, "two work trees"},
 	} {
-		if _, err := parseInputs(tc.left, tc.right, tc.git, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+		if _, err := parseInputs(tc.left, tc.right, tc.git, false, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q %q: %v, want %q", tc.left, tc.right, err, tc.want)
 		}
 	}
@@ -1351,7 +1509,7 @@ func TestParseInputs(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(base, filepath.Base(name)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if in, err := parseInputs(name, "/dev/null", false, ""); err != nil || in.left.kind != inputDir {
+		if in, err := parseInputs(name, "/dev/null", false, false, ""); err != nil || in.left.kind != inputDir {
 			t.Errorf("%q: %+v, %v", name, in.left, err)
 		}
 	}
@@ -1908,14 +2066,14 @@ func TestCachedOptions(t *testing.T) {
 		if err != nil || o.left != tc.left || o.right != tc.right {
 			t.Errorf("%s %q: %q %q, %v; want %q %q", tc.name, tc.argv, o.left, o.right, err, tc.left, tc.right)
 		}
-		in, err := parseInputs(o.left, o.right, true, "")
+		in, err := parseInputs(o.left, o.right, true, false, "")
 		if err == nil && o.cached {
 			in, err = in.withCached()
 		}
 		if err != nil || !in.hasIndex() || in.right.repo != tc.repo {
 			t.Errorf("%s %q: index side %+v, %v; want of %q", tc.name, tc.argv, in.right, err, tc.repo)
 		}
-		got, err := decodeInputs(o.left, o.right, in.encode(), true)
+		got, err := decodeInputs(o.left, o.right, in.encode(), true, false)
 		if err == nil && o.cached {
 			got, err = got.withCached()
 		}
@@ -1932,7 +2090,7 @@ func TestCachedNotRevision(t *testing.T) {
 		_, o, err := parseOptions("agitate", []string{"--cached", left})
 		if err == nil {
 			var in inputs
-			if in, err = parseInputs(o.left, o.right, true, ""); err == nil {
+			if in, err = parseInputs(o.left, o.right, true, false, ""); err == nil {
 				_, err = in.withCached()
 			}
 		}
@@ -1954,7 +2112,7 @@ func TestCachedRepoAsFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in, err := parseInputs(o.left, o.right, true, base)
+	in, err := parseInputs(o.left, o.right, true, false, base)
 	if err == nil {
 		in, err = in.withCached()
 	}
@@ -1969,7 +2127,7 @@ func TestCachedRepoAsFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := decodeInputs(child.left, child.right, in.encode(), true)
+	got, err := decodeInputs(child.left, child.right, in.encode(), true, false)
 	if err == nil {
 		got, err = got.withCached()
 	}
@@ -2262,24 +2420,5 @@ func TestReadStatus(t *testing.T) {
 		if got := c.readStatus().Total; got != tc.total {
 			t.Errorf("sizes %v: total %d, want %d", tc.sizes, got, tc.total)
 		}
-	}
-}
-
-// The loading box shows the entry of an archive still being read, not of
-// one read whole.
-func TestReadStatusCurrent(t *testing.T) {
-	c := &child{archives: [2]*os.File{os.Stdin, os.Stdin}, sizes: [2]int64{-1, -1}}
-	c.progress[0].Begin("a.tar:second")
-	c.progress[1].Begin("b.tar:last")
-	if got := c.readStatus().Current; got != "b.tar:last" {
-		t.Errorf("both being read: %q", got)
-	}
-	c.done[1].Store(true)
-	if got := c.readStatus().Current; got != "a.tar:second" {
-		t.Errorf("the right read: %q", got)
-	}
-	c.done[0].Store(true)
-	if got := c.readStatus().Current; got != "" {
-		t.Errorf("both read: %q", got)
 	}
 }

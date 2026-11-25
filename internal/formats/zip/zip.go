@@ -71,6 +71,22 @@ func Read(r io.Reader, blob *os.File, name string, p *archive.Progress) (*archiv
 	return root, nil
 }
 
+// Detect reports whether r is a zip archive by its start: an entry, the
+// marker of an archive split into one part, or, of nothing, the end of its
+// directory, or that of zip64. An archive after something else, as a
+// program extracting it, isn't told.
+func Detect(r io.Reader) bool {
+	start := make([]byte, 4)
+	if _, err := io.ReadFull(r, start); err != nil {
+		return false
+	}
+	switch string(start) {
+	case "PK\x03\x04", "PK\x07\x08", "PK\x05\x06", "PK\x06\x06":
+		return true
+	}
+	return false
+}
+
 // withoutDotDot returns name without its ".." parts, as unzip drops
 // them.
 func withoutDotDot(name string) string {

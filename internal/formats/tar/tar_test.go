@@ -19,6 +19,7 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sys/unix"
 
 	"pxy.se/go/binate/internal/files"
@@ -728,6 +729,9 @@ func TestReadRefuses(t *testing.T) {
 	}
 }
 
+// bzip2Stream is tar -c x | bzip2 -9, of x/f holding "hello\n".
+const bzip2Stream = "425a68393141592653598a7551e2000095fb80c99000104000df80000363449e400808200074129353d40d001a034f50494434da86800680fb66b2f714a403412422ec26631b418941e44421c29bd7a68c0941010b0801bc980a08185f190aa58488ab0c53536f696d628a84cf24fecc98e38e3d770881f8bb9229c2848453aa8f10"
+
 // toolStreams are tar -c x, of x/f holding "hello\n", compressed by each
 // tool.
 var toolStreams = map[string]string{
@@ -758,8 +762,7 @@ func TestReadCompressed(t *testing.T) {
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// tar -c x | bzip2 -9, of x/f holding "hello\n".
-	bz, err := hex.DecodeString("425a68393141592653598a7551e2000095fb80c99000104000df80000363449e400808200074129353d40d001a034f50494434da86800680fb66b2f714a403412422ec26631b418941e44421c29bd7a68c0941010b0801bc980a08185f190aa58488ab0c53536f696d628a84cf24fecc98e38e3d770881f8bb9229c2848453aa8f10")
+	bz, err := hex.DecodeString(bzip2Stream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1091,5 +1094,70 @@ func TestReadHardLinkAsRoot(t *testing.T) {
 	}
 	if e, err := r.Entry("", false); err != nil || e.Mode&unix.S_IFMT != unix.S_IFDIR {
 		t.Errorf("root: %+v, %v", e, err)
+	}
+}
+
+// An archive's start tells tar, compressed or not, by its first header
+// once decompressed, as it starts each tool's stream, and a block of zstd
+// longer than the header, but not an archive of nothing, which a disk
+// image's zeros would be taken for, nor anything else, compressed or not.
+func TestDetect(t *testing.T) {
+	plain := tarOf(t, []stdtar.Header{{Name: "f", Typeflag: stdtar.TypeReg, Size: 1, Mode: 0o644}}, map[string]string{"f": "x"})
+	bz, err := hex.DecodeString(bzip2Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noise := make([]byte, 1<<20)
+	_, _ = rand.NewChaCha8([32]byte{}).Read(noise)
+	big := tarOf(t, []stdtar.Header{{Name: "noise", Typeflag: stdtar.TypeReg, Size: int64(len(noise)), Mode: 0o644}}, map[string]string{"noise": string(noise)})
+	var zst bytes.Buffer
+	zw, err := zstd.NewWriter(&zst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = zw.Write(big)
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	iso := append(make([]byte, 32<<10), "\x01CD001\x01"...)
+	cases := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"tar", plain, true},
+		{"gzip", gzipOf(t, plain), true},
+		{"bzip2", bz, true},
+		{"zstd, a block of noise", zst.Bytes(), true},
+		{"skippable frame, then zstd", append(skippableFrame(0x50, 4), zst.Bytes()...), true},
+		{"end", make([]byte, 2*blockSize), false},
+		{"disk image", iso, false},
+		{"13 zeros, as lzma", append(make([]byte, 13), bytes.Repeat([]byte("binary "), 100)...), false},
+		{"gzip of text", gzipOf(t, []byte(strings.Repeat("not a tar ", 100))), false},
+		{"gzip of nothing", gzipOf(t, nil), false},
+		{"lzop", []byte("\x89LZO\x00\r\n\x1a\n"), false},
+		{"skippable frame", skippableFrame(0x50, 4), false},
+		{"zip", []byte("PK\x03\x04\x14\x00\x00\x00\x08\x00"), false},
+		{"text", []byte(strings.Repeat("not a tar ", 60)), false},
+		{"empty", nil, false},
+	}
+	for name, h := range toolStreams {
+		data, err := hex.DecodeString(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cases = append(cases, struct {
+			name string
+			data []byte
+			want bool
+		}{name, data, true})
+	}
+	for _, tc := range cases {
+		if got := Detect(bytes.NewReader(tc.data)); got != tc.want {
+			t.Errorf("%s: %v", tc.name, got)
+		}
+	}
+	if len(zst.Bytes()) <= 64<<10 {
+		t.Errorf("zstd's block of %d bytes, less than it's meant to be", len(zst.Bytes()))
 	}
 }

@@ -86,6 +86,15 @@ waits for it.
   an empty tree opposite a directory or revision. It is refused on both
   sides. The combined archive size is known for regular files, including
   zero-length files. A pipe makes the total unknown.
+
+  As `imaginate`, the child detects bare archive files. Directories,
+  `/dev/null` and explicit prefixes work as in `binate`. Detection recognises
+  plain and gzipped tar and both populated and empty zip archives. An empty
+  tar archive, gzipped text, plain text and a zero-byte input are rejected
+  with a hint to use a prefix. The format probe is capped at 16 MiB, and
+  pipe reads replay the buffered prefix. Read errors, including ones during gzip
+  detection, are propagated. The options `-g`, `--cached` and `-C` are
+  refused with a hint to use `agitate`.
 - **Descriptors:** directories named by inherited descriptors as `/dev/fd/3`
   and `/dev/fd/4`, which keep their numbers in the child beside the socket.
 - **Colours:** warnings about `BINATE_COLORS` before the screen opens, escaped
@@ -101,12 +110,13 @@ waits for it.
   without reaching the tree.
 - **Arguments:** usage errors, a missing terminal, `--help`, `-V` and
   `--version`, `-c` and `--compare` accepting the same attribute lists, help
-  fitting 80 columns without wrapping as either name, and VISUAL or EDITOR
+  fitting 80 columns without wrapping as any name, and VISUAL or EDITOR
   checked only where it is the one used. Sides in other repositories are told
   from revisions by their paths, split at the last `@` with a directory before
   it, as with `@` in the directory or the revision, from `-C` if relative, and
   `~` expanded after `git:`. Without `-g`, other names before a colon are
-  unknown backends, and names that aren't backends' are paths.
+  unknown backends, and names that aren't backends' are paths. As imaginate,
+  `-g`, `--cached` and `-C` are refused and left out of help.
 - **Other repositories:** another repository's revision opposite the work
   tree, also with `GIT_DIR` set, which is ignored, two other repositories run
   from a directory in none, relative to `-C`, and of different object formats,
@@ -151,6 +161,16 @@ waits for it.
   `+mtime`. Its panel omits mode and owner. Tests reject directories,
   devices, an empty `zip:` argument, invalid zip data, zero-byte input and
   unknown prefixes. Read errors use the same popup as tar.
+- **Imaginate:** The tests compare a gzipped tar and a zip using paths with
+  arbitrary extensions and using pipes. They also compare an archive
+  against a directory or an explicit `tar:` side. A zip file or pipe
+  opposite a revision is labelled zip. With Landlock available, `-vv`
+  confirms that file detection runs after the sandbox is applied. A sparse
+  16 GiB file of zstd skippable frames hits the 16 MiB detection limit.
+  Two FIFOs are read concurrently even if the writer sends a 2 MiB tar
+  archive before opening the second FIFO. Garbage, zero-byte files,
+  `/dev/zero` and `-g` are rejected before the screen opens. Garbage from
+  a pipe produces an error popup.
 
 ## Package tests
 
@@ -285,14 +305,21 @@ waits for it.
   targets. Pipe input is copied before reading, and progress reaches the
   archive size even when `archive/zip` reads some bytes again.
 
-  Reading rejects zero-byte, invalid and truncated input. Fuzzing checks
+  Detection covers populated and empty zip archives, empty zip64 archives
+  and a single-part split marker. A bare `PK` or an archive preceded by a
+  program fails detection. Reading rejects zero-byte, invalid and truncated
+  input, and an empty zip64 archive reads as an empty tree. Fuzzing checks
   that inputs are read or rejected without a panic and exercises the entries
   in each archive that opens.
 - **formats/tar:** Fixtures cover plain tar, gzip, bzip2, xz, lzma, zstd and
   both lz4 formats. They include unusual lzma headers and skippable zstd
   and lz4 frames, including a frame larger than the initial read. Tar
   headers whose file names resemble a compression signature are read as
-  plain tar.
+  plain tar. Detection tests cover compressed and uncompressed headers,
+  including a zstd block of noise after a skippable frame. Detection rejects
+  empty archives, a disk image's zeros, a short run of zeros resembling
+  lzma, gzipped text or empty input, lzop, a lone skippable frame, zip,
+  plain text and zero-byte input.
 
   Stream tests cover concatenated gzip members, trailing gzip zero padding
   and trailing bytes that do not start another bzip2 stream. They reject

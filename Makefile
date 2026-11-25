@@ -6,9 +6,13 @@ BUILD_DIR := build
 BINARY := $(BUILD_DIR)/binate
 # agitate is binate implying --git, as a symlink to it.
 GIT_LINK := $(BUILD_DIR)/agitate
+# imaginate is binate taking archives without their formats, as a symlink
+# to it.
+ARCHIVES_LINK := $(BUILD_DIR)/imaginate
 MANPAGES := $(BUILD_DIR)/man/binate.1 $(BUILD_DIR)/man/binate-manual.7
-# agitate's pages are binate's, as symlinks to them.
+# agitate's and imaginate's pages are binate's, as symlinks to them.
 GIT_MANPAGES := $(BUILD_DIR)/man/agitate.1 $(BUILD_DIR)/man/agitate-manual.7
+ARCHIVES_MANPAGES := $(BUILD_DIR)/man/imaginate.1 $(BUILD_DIR)/man/imaginate-manual.7
 # A man page's date: MAN_DATE if set, or its source's last commit date.
 man_date = $(or $(MAN_DATE),$(shell git log -1 --format=%cs -- $(1) 2>/dev/null))
 GOAMD64 ?= v3
@@ -27,8 +31,9 @@ build:
 	mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 GOAMD64=$(GOAMD64) go build $(GOTAGS) -trimpath -ldflags="-s -w -X main.version=$$BINATE_VERSION" -o $(BINARY) .
 	ln -sfn $(notdir $(BINARY)) $(GIT_LINK)
+	ln -sfn $(notdir $(BINARY)) $(ARCHIVES_LINK)
 
-man: $(MANPAGES) $(GIT_MANPAGES)
+man: $(MANPAGES) $(GIT_MANPAGES) $(ARCHIVES_MANPAGES)
 
 MAN_SCRIPTS := doc/scripts/md2man.sed doc/scripts/man.sed Makefile
 
@@ -52,6 +57,9 @@ $(BUILD_DIR)/man/binate.1: doc/binate.1.md doc/scripts/keys.sed $(MAN_SCRIPTS)
 	$(call man_page,$<,binate,1,User Commands,doc/scripts/keys.sed)
 
 $(GIT_MANPAGES): $(BUILD_DIR)/man/agitate%: $(BUILD_DIR)/man/binate%
+	ln -sfn $(<F) $@
+
+$(ARCHIVES_MANPAGES): $(BUILD_DIR)/man/imaginate%: $(BUILD_DIR)/man/binate%
 	ln -sfn $(<F) $@
 
 $(BUILD_DIR)/man/binate-manual.7: doc/manual.md $(MAN_SCRIPTS)

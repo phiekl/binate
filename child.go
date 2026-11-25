@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 	"fmt"
@@ -69,10 +70,12 @@ type child struct {
 	// blobs the temporary files their files are copied to, opened before
 	// the process is restricted; sizes are the archives' sizes, or -1 for a
 	// pipe, and progress how far reading each has got. read are the
-	// archives once read.
+	// archives once read. heads are the starts of pipes read to tell their
+	// formats, which reading them starts with.
 	archives, blobs [2]*os.File
 	// done is whether reading each archive has ended, once it has.
 	done     [2]atomic.Bool
+	heads    [2][]byte
 	sizes    [2]int64
 	progress [2]archive.Progress
 	read     [2]*archive.Root
@@ -95,7 +98,7 @@ func runChild(specText string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	in, err := decodeInputs(o.left, o.right, spec.kinds, o.git)
+	in, err := decodeInputs(o.left, o.right, spec.kinds, o.git, o.archives)
 	if err == nil && o.cached {
 		in, err = in.withCached()
 	}
@@ -191,6 +194,9 @@ func (c *child) run() (code int) {
 	if err := c.restrict(); err != nil {
 		return fail("restricting the process: %v", err)
 	}
+	if err := c.detectFiles(); err != nil {
+		return fail("%v", err)
+	}
 	// The sides of archives are nil until they are read.
 	var roots [2]source.Root
 	if c.in.hasGit() {
@@ -219,6 +225,10 @@ func (c *child) run() (code int) {
 	a.Styles = styles
 	home := os.Getenv("HOME")
 	tree := func() app.Screen {
+		if c.in.hasGit() {
+			// With the formats of pipes, told as they were read.
+			a.Header = c.header()
+		}
 		for i, root := range c.read {
 			if root != nil {
 				if c.in.hasGit() {
@@ -471,6 +481,27 @@ func (c *child) otherRoot(i int, side input) source.Root {
 	return source.Disk(side.path)
 }
 
+// exitOnInterrupt makes Ctrl+c end the process, with the status of
+// SIGINT, as the shell reports it, until the function it returns is
+// called: while the child waits before the screen is there to take Ctrl+c
+// as a key.
+func exitOnInterrupt() (stop func()) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sig:
+			os.Exit(128 + int(syscall.SIGINT))
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(sig)
+		close(done)
+	}
+}
+
 // openArchives opens the files of the sides that are archives, and a temporary
 // file in TMPDIR, or /tmp, for each to copy its files to, which the
 // restricted process can't create. A FIFO is opened without waiting for a
@@ -500,6 +531,60 @@ func (c *child) openArchives() error {
 	return nil
 }
 
+// detectFiles tells the formats of the archives given without them that
+// are files, restricted, as telling one decompresses its start, and
+// before the screen is taken, as reading a file's start never waits for a
+// writer. It may still take long, and Ctrl+c ends the process meanwhile. A
+// pipe's is told as it is read: a writer of both may write all of one
+// before the other.
+func (c *child) detectFiles() error {
+	var stop func()
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
+	for i, side := range c.in.sides() {
+		if side.isArchive() && side.format == "" && c.sizes[i] >= 0 {
+			if stop == nil {
+				stop = exitOnInterrupt()
+			}
+			side, err := c.detect(i, side, c.archives[i])
+			if err != nil {
+				return fmt.Errorf("%s: %w", side.path, err)
+			}
+			c.in.setSide(i, side)
+		}
+	}
+	return nil
+}
+
+// detect returns side i, an archive given without its format, read from
+// src, with the format its start tells, keeping a pipe's start to read it
+// from.
+func (c *child) detect(i int, side input, src io.Reader) (input, error) {
+	var err error
+	if side.format, c.heads[i], err = detectArchive(c.archives[i], src, c.sizes[i]); err != nil {
+		return side, err
+	}
+	cli.Debug(c.log, cli.LevelDebug1, "told the archive's format", "path", side.path, "format", side.format)
+	return side, nil
+}
+
+// detectArchive returns the format of the archive f, of size, or -1 for a
+// pipe, read from src, by its start (see detectFormat), and of a pipe,
+// what was read of it, which reading it must start with. A file is read
+// without moving its offset.
+func detectArchive(f *os.File, src io.Reader, size int64) (string, []byte, error) {
+	if size >= 0 {
+		format, err := detectFormat(func() io.Reader { return io.NewSectionReader(f, 0, size) })
+		return format, nil, err
+	}
+	p := &replay{src: src}
+	format, err := detectFormat(p.start)
+	return format, p.buf, err
+}
+
 // readArchives reads the archives opened, and closes them: both at once
 // if one is a pipe, as one program may write all of either before the
 // other, and else one after the other, as a disk reads one file at a time
@@ -513,10 +598,10 @@ func (c *child) readArchives() error {
 		errs   [2]error
 	)
 	read := func(i int) {
-		err := c.readArchive(i, sides[i])
+		side, err := c.readArchive(i, sides[i])
 		mu.Lock()
 		defer mu.Unlock()
-		errs[i] = err
+		sides[i], errs[i] = side, err
 		if err != nil && failed < 0 {
 			failed = i
 			// Unblocks reading a pipe, which then fails too.
@@ -540,14 +625,18 @@ func (c *child) readArchives() error {
 			}
 		}
 	}
+	for i, side := range sides {
+		c.in.setSide(i, side)
+	}
 	if failed >= 0 {
 		return errs[failed]
 	}
 	return nil
 }
 
-// readArchive reads archive i, of side, and closes it.
-func (c *child) readArchive(i int, side input) error {
+// readArchive reads archive i, of side, and closes it, returning the side
+// with its format, told first if it was given without.
+func (c *child) readArchive(i int, side input) (input, error) {
 	f := c.archives[i]
 	defer func() {
 		_ = f.Close()
@@ -557,13 +646,24 @@ func (c *child) readArchive(i int, side input) error {
 	if c.sizes[i] < 0 {
 		src = files.PipeReader(f)
 	}
+	if side.format == "" {
+		// A pipe's, told only as it is read.
+		var err error
+		if side, err = c.detect(i, side, src); err != nil {
+			return side, &app.ReadError{Side: i, Path: side.path, Err: err}
+		}
+	}
 	cli.Debug(c.log, cli.LevelDebug1, "reading the archive", "path", side.path, "temp", c.blobs[i].Name())
-	root, err := archiveFormats[side.format](src, c.blobs[i], side.path, &c.progress[i])
+	r := src
+	if c.heads[i] != nil {
+		r = io.MultiReader(bytes.NewReader(c.heads[i]), src)
+	}
+	root, err := archiveFormats[side.format].Read(r, c.blobs[i], side.path, &c.progress[i])
 	if err != nil {
-		return &app.ReadError{Side: i, Path: side.path, Err: err}
+		return side, &app.ReadError{Side: i, Path: side.path, Err: err}
 	}
 	c.read[i] = root
-	return nil
+	return side, nil
 }
 
 // readStatus returns how far readArchives has got, from any goroutine:
@@ -609,7 +709,8 @@ func (c *child) header() view.Header {
 		case inputNull:
 			s.Label = "(nothing)"
 		case inputArchive:
-			s.Label = "(" + side.format + ")"
+			// Of a pipe given without its format, until it is read.
+			s.Label = "(" + cmp.Or(side.format, "archive") + ")"
 		default:
 			s.Label = "(dir)"
 		}

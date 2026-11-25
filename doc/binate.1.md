@@ -12,13 +12,14 @@ Inspect directory differences in a read-only terminal view.
 binate [options] left right
 binate -g [-C directory] [options] [left [right]]
 agitate [-C directory] [options] [left [right]]
+imaginate [options] left right
 ```
 
 **binate** shows two directory trees side by side and marks their differences.
 Use **-g** or the **agitate** symlink to compare git revisions or a revision
-with the work tree. **binate** never changes files itself. **e** opens
-eligible files in your editor. Scanning, comparing and drawing run in a child
-process.
+with the work tree. The **imaginate** symlink detects archive formats
+automatically. **binate** never changes files itself. **e** opens eligible
+files in your editor. Scanning, comparing and drawing run in a child process.
 Where available, Landlock restricts it from writing and running programs,
 within the kernel's limits.
 
@@ -31,9 +32,10 @@ tree, or one of the following.
   bzip2, xz, lzma, zstd or lz4.
 - **zip:**_file_ selects a zip archive.
 
-Archives can be read from a file or a pipe, as in
-**tar:<(ssh host tar -C /etc -c .)**. Use **diff**(1) to compare individual
-files.
+Either archive format accepts a file or a pipe, as in
+**tar:<(ssh host tar -C /etc -c .)**. Use **imaginate old.tar.gz new.zip** to
+compare tar and zip archives without prefixes. **imaginate** rejects **-g**,
+**--cached** and **-C**. Use **diff**(1) to compare individual files.
 
 See [**binate-manual**(7)](manual.md) for the full reference.
 

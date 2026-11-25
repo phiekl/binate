@@ -35,6 +35,20 @@ import (
 // read from r as a stream, or through ReaderAt.
 type Reader func(r io.Reader, blob *os.File, name string, p *Progress) (*Root, error)
 
+// Format is a format of archives: how one is read, and how its start tells
+// it from others, for an archive given without its format.
+type Format struct {
+	Read Reader
+	// Detect reports whether the archive r reads from its start is of the
+	// format, reading as little of it as it needs to tell, which may be
+	// all of a compressed block.
+	Detect func(r io.Reader) bool
+}
+
+// DetectLimit is the most of a pipe's start Format.Detect is given, kept
+// to read the pipe from its start again.
+const DetectLimit = 16 << 20
+
 // Root is an archive as a side of the comparison, built as its entries
 // are read, by Put, HardLink or Link and Store, then Finish. Its methods are safe
 // for concurrent use once it is finished: it is not changed after.
